@@ -6,7 +6,7 @@ import tempfile
 from typing import Any, Dict, Optional
 
 from aiogram import Router
-from aiogram.exceptions import TelegramBadRequest
+from aiogram.exceptions import TelegramBadRequest, TelegramNetworkError
 from aiogram.fsm.context import FSMContext
 from aiogram.types import CallbackQuery, FSInputFile, Message, ReplyKeyboardRemove
 import httpx
@@ -50,6 +50,10 @@ router = Router()
 ACTIVE_GENERATIONS: Dict[int, Dict[str, Any]] = {}
 POLL_TIMEOUT_SECONDS = 600
 GENERATION_COST = 1
+DOCUMENT_SEND_REQUEST_TIMEOUT_SECONDS = 180
+DOCUMENT_SEND_RETRY_COUNT = 2
+DOCUMENT_SEND_RETRY_DELAY_SECONDS = 5
+MAX_TELEGRAM_DOCUMENT_SIZE_BYTES = 50 * 1024 * 1024
 
 MODEL_PREFIX = "gen:model:"
 SETTINGS_OPEN_PREFIX = "gen:setting:"
@@ -148,11 +152,15 @@ def get_user_friendly_error_message(error: Exception, result: Optional[Wavespeed
     if isinstance(error, WavespeedTimeoutError):
         return "⏱ Генерация заняла слишком много времени и была остановлена. Кредит возвращён."
 
-    if result is not None and result.status == "failed":
-        normalized_error = (result.error or "").strip().lower()
-        if "nsfw" in normalized_error:
-            return "🚫 Генерация отклонена системой безопасности (NSFW контент). Попробуйте изменить запрос."
-        return "❌ Генерация не удалась. Попробуйте изменить описание или настройки."
+    if isinstance(error, WavespeedFailedError) or (result is not None and result.status == "failed"):
+        safe_error_message = None
+        if result is not None:
+            safe_error_message = sanitize_external_error_message(result.error)
+        if not safe_error_message and isinstance(error, WavespeedFailedError):
+            safe_error_message = sanitize_external_error_message(error.user_message)
+        if safe_error_message:
+            return f"❌ Генерация не удалась. Кредит возвращён.\n\nПричина: {safe_error_message}"
+        return "❌ Генерация не удалась. Кредит возвращён. Попробуйте изменить изображение, описание или настройки."
 
     if isinstance(error, TelegramBadRequest):
         return "⚠️ Генерация выполнена, но Telegram не смог доставить результат. Попробуйте позже."
@@ -161,6 +169,10 @@ def get_user_friendly_error_message(error: Exception, result: Optional[Wavespeed
         return "🌐 Ошибка сети при получении результата. Попробуйте позже."
 
     return "⚠️ Произошла неизвестная ошибка. Попробуйте ещё раз."
+
+
+class OutputDeliveryTooLargeError(Exception):
+    """Файл результата слишком большой для отправки в Telegram."""
 
 
 def get_model_state_settings(state_data: dict[str, Any], model_key: str) -> dict[str, Any]:
@@ -366,6 +378,31 @@ async def mark_generation_completed(
     await log_generation_event(generation_request_id, user_id, model_key, "completed", output_count)
 
 
+async def safe_send_bot_message(bot, chat_id: int, text: str, reply_markup=None) -> None:
+    """Безопасно отправить сообщение пользователю, не роняя background task."""
+    try:
+        await bot.send_message(chat_id, text, reply_markup=reply_markup)
+    except Exception as exc:
+        logger.exception("Failed to send Telegram message to user: %s", type(exc).__name__)
+
+
+async def send_document_with_retry(*, bot, chat_id: int, file_path: str, caption: Optional[str]) -> None:
+    """Отправить документ в Telegram c retry при сетевых ошибках."""
+    for attempt in range(DOCUMENT_SEND_RETRY_COUNT + 1):
+        try:
+            await bot.send_document(
+                chat_id,
+                FSInputFile(file_path),
+                caption=caption,
+                request_timeout=DOCUMENT_SEND_REQUEST_TIMEOUT_SECONDS,
+            )
+            return
+        except TelegramNetworkError:
+            if attempt >= DOCUMENT_SEND_RETRY_COUNT:
+                raise
+            await asyncio.sleep(DOCUMENT_SEND_RETRY_DELAY_SECONDS)
+
+
 async def send_generation_outputs(bot, chat_id: int, output_urls: list[str]) -> bool:
     """Отправить пользователю результаты генерации только как document через временный локальный файл."""
     delivered_successfully = True
@@ -374,9 +411,10 @@ async def send_generation_outputs(bot, chat_id: int, output_urls: list[str]) -> 
         temp_output_path: Optional[str] = None
         try:
             temp_output_path, content_type, file_size_bytes = await download_output_file_to_temp(output_url)
-            await bot.send_document(
-                chat_id,
-                FSInputFile(temp_output_path),
+            await send_document_with_retry(
+                bot=bot,
+                chat_id=chat_id,
+                file_path=temp_output_path,
                 caption=caption,
             )
             log_generation_output_delivery(
@@ -385,6 +423,14 @@ async def send_generation_outputs(bot, chat_id: int, output_urls: list[str]) -> 
                 content_type=content_type,
                 file_size_bytes=file_size_bytes,
             )
+        except OutputDeliveryTooLargeError:
+            delivered_successfully = False
+            log_generation_output_delivery(len(output_urls), "delivery_failed")
+            await safe_send_bot_message(
+                bot,
+                chat_id,
+                "⚠️ Файл получился слишком большим для отправки в Telegram.",
+            )
         except Exception as exc:
             delivered_successfully = False
             logger.exception(
@@ -392,9 +438,10 @@ async def send_generation_outputs(bot, chat_id: int, output_urls: list[str]) -> 
                 type(exc).__name__,
             )
             log_generation_output_delivery(len(output_urls), "delivery_failed")
-            await bot.send_message(
+            await safe_send_bot_message(
+                bot,
                 chat_id,
-                "⚠️ Генерация завершена, но файл не удалось отправить. Попробуйте позже.",
+                "⚠️ Генерация завершена, но Telegram не смог доставить файл. Попробуйте позже.",
             )
         finally:
             if temp_output_path is not None:
@@ -437,24 +484,49 @@ def get_output_suffix_and_type(content_type: Optional[str]) -> str:
 
 async def download_output_file_to_temp(output_url: str) -> tuple[str, Optional[str], Optional[int]]:
     """Скачать output-файл во временный файл для последующей отправки в Telegram."""
-    response: Optional[httpx.Response] = None
     temp_path: Optional[str] = None
+    bytes_written = 0
     try:
-        async with httpx.AsyncClient(timeout=60.0, follow_redirects=True) as client:
-            response = await client.get(output_url)
-            response.raise_for_status()
+        async with httpx.AsyncClient(timeout=120.0, follow_redirects=True) as client:
+            async with client.stream("GET", output_url) as response:
+                response.raise_for_status()
+                content_type = response.headers.get("content-type")
+                content_length_header = response.headers.get("content-length")
+                if content_length_header is not None:
+                    try:
+                        content_length = int(content_length_header)
+                    except ValueError:
+                        content_length = None
+                    else:
+                        if content_length > MAX_TELEGRAM_DOCUMENT_SIZE_BYTES:
+                            raise OutputDeliveryTooLargeError()
 
-        content_type = response.headers.get("content-type")
-        suffix = get_output_suffix_and_type(content_type)
-        temp_file = tempfile.NamedTemporaryFile(prefix="wavespeed-output-", suffix=suffix, delete=False)
-        temp_path = temp_file.name
-        temp_file.close()
-        Path(temp_path).write_bytes(response.content)
-        return temp_path, content_type, len(response.content)
+                suffix = get_output_suffix_and_type(content_type)
+                temp_file = tempfile.NamedTemporaryFile(prefix="wavespeed-output-", suffix=suffix, delete=False)
+                temp_path = temp_file.name
+                try:
+                    async for chunk in response.aiter_bytes():
+                        bytes_written += len(chunk)
+                        if bytes_written > MAX_TELEGRAM_DOCUMENT_SIZE_BYTES:
+                            raise OutputDeliveryTooLargeError()
+                        temp_file.write(chunk)
+                finally:
+                    temp_file.close()
+        return temp_path, content_type, bytes_written
     except Exception:
         if temp_path is not None:
             Path(temp_path).unlink(missing_ok=True)
         raise
+
+
+def log_background_task_exception(task: asyncio.Task) -> None:
+    """Забрать исключение фоновой задачи, чтобы не было unhandled task exception."""
+    try:
+        task.result()
+    except asyncio.CancelledError:
+        logger.info("Background generation task was cancelled")
+    except Exception as exc:
+        logger.exception("Background generation task failed: %s", exc)
 
 
 async def cleanup_generation_file(temp_input_path: Optional[str]) -> None:
@@ -514,8 +586,8 @@ async def poll_generation_result(
         )
         delivery_success = await send_generation_outputs(bot, chat_id, result.outputs)
         if delivery_success:
-            await bot.send_message(chat_id, "Готово ✅")
-        await bot.send_message(chat_id, "🏠 Главное меню", reply_markup=get_main_menu_keyboard())
+            await safe_send_bot_message(bot, chat_id, "Готово ✅")
+        await safe_send_bot_message(bot, chat_id, "🏠 Главное меню", reply_markup=get_main_menu_keyboard())
     except WavespeedTimeoutError as exc:
         logger.exception("Wavespeed timeout while polling generation result: %s", exc)
         await mark_generation_failed(
@@ -523,11 +595,12 @@ async def poll_generation_result(
             user_id=user_id,
             model_key=model_key,
             cost=cost,
-            error_message="Wavespeed polling timed out",
+            error_message=sanitize_external_error_message(exc.user_message) or "Wavespeed polling timed out",
             refund_credit=True,
             status="timeout",
         )
-        await bot.send_message(
+        await safe_send_bot_message(
+            bot,
             chat_id,
             get_user_friendly_error_message(exc, result),
             reply_markup=get_main_menu_keyboard(),
@@ -535,15 +608,21 @@ async def poll_generation_result(
     except WavespeedFailedError as exc:
         logger.exception("Wavespeed failed while polling generation result: %s", exc)
         result = getattr(exc, "result", result)
+        safe_error_message = None
+        if result is not None:
+            safe_error_message = sanitize_external_error_message(result.error)
+        if not safe_error_message:
+            safe_error_message = sanitize_external_error_message(exc.user_message)
         await mark_generation_failed(
             generation_request_id=generation_request_id,
             user_id=user_id,
             model_key=model_key,
             cost=cost,
-            error_message=exc.user_message,
+            error_message=safe_error_message or "Генерация завершилась с ошибкой.",
             refund_credit=True,
         )
-        await bot.send_message(
+        await safe_send_bot_message(
+            bot,
             chat_id,
             get_user_friendly_error_message(exc, result),
             reply_markup=get_main_menu_keyboard(),
@@ -558,7 +637,8 @@ async def poll_generation_result(
             error_message=exc.user_message,
             refund_credit=True,
         )
-        await bot.send_message(
+        await safe_send_bot_message(
+            bot,
             chat_id,
             get_user_friendly_error_message(exc, result),
             reply_markup=get_main_menu_keyboard(),
@@ -573,7 +653,8 @@ async def poll_generation_result(
             error_message="Не удалось завершить генерацию. Попробуйте позже.",
             refund_credit=True,
         )
-        await bot.send_message(
+        await safe_send_bot_message(
+            bot,
             chat_id,
             get_user_friendly_error_message(exc, result),
             reply_markup=get_main_menu_keyboard(),
@@ -897,6 +978,7 @@ async def confirm_generation(callback: CallbackQuery, state: FSMContext, session
                 temp_input_path=temp_input_path,
             )
         )
+        task.add_done_callback(log_background_task_exception)
         task_started = True
         ACTIVE_GENERATIONS[user_id] = {
             "task": task,

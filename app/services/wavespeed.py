@@ -98,8 +98,23 @@ def extract_output_urls(raw_response: Dict[str, Any]) -> list[str]:
 
 def extract_error_message(raw_response: Dict[str, Any]) -> Optional[str]:
     """Извлечь безопасное сообщение об ошибке из ответа Wavespeed."""
-    message = raw_response.get("error") or raw_response.get("error_message") or raw_response.get("message")
-    return sanitize_external_error_message(str(message)) if message is not None else None
+    message_candidates = (
+        raw_response.get("error"),
+        raw_response.get("message"),
+        raw_response.get("error_message"),
+        raw_response.get("data", {}).get("error"),
+        raw_response.get("data", {}).get("message"),
+        raw_response.get("data", {}).get("error_message"),
+        raw_response.get("result", {}).get("error"),
+        raw_response.get("result", {}).get("message"),
+    )
+    for candidate in message_candidates:
+        if candidate is None:
+            continue
+        sanitized = sanitize_external_error_message(str(candidate))
+        if sanitized:
+            return sanitized
+    return None
 
 
 def has_nsfw_contents(raw_response: Dict[str, Any]) -> bool:

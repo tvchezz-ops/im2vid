@@ -10,7 +10,7 @@ os.environ.setdefault("WAVESPEED_API_KEY", "test-api-key")
 os.environ.setdefault("PUBLIC_BASE_URL", "https://example.com")
 
 
-from app.services.wavespeed import extract_output_urls, normalize_status
+from app.services.wavespeed import extract_error_message, extract_output_urls, normalize_status
 
 
 def test_normalize_status_reads_nested_status_fields() -> None:
@@ -36,3 +36,8 @@ def test_normalize_status_handles_failed_and_processing_variants() -> None:
     assert normalize_status({"status": "error"}) == "failed"
     assert normalize_status({"status": "pending"}) == "processing"
     assert normalize_status({"state": "processing"}) == "processing"
+
+
+def test_extract_error_message_reads_nested_error_fields() -> None:
+    assert extract_error_message({"data": {"error_message": "seedream moderation failed"}}) == "seedream moderation failed"
+    assert extract_error_message({"result": {"message": "model input rejected"}}) == "model input rejected"

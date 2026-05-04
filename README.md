@@ -146,6 +146,22 @@ STORE_OUTPUT_URLS=false
 - Временный файл нужен только для того, чтобы Wavespeed смог забрать входное изображение по публичному URL.
 - После завершения генерации временный входной файл удаляется независимо от результата: `completed`, `failed`, `timeout` или `cancel`.
 
+## TelegramConflictError
+
+Если появляется `TelegramConflictError`, это означает, что один и тот же `BOT_TOKEN` используется сразу в двух местах.
+
+Что делать:
+
+- Остановить локально запущенный бот, если он уже работает.
+- Проверить Railway и убедиться, что с этим токеном работает только один service или один active deployment.
+- Если раньше использовался webhook, удалить его и сбросить очередь обновлений:
+
+```bash
+curl -X POST "https://api.telegram.org/bot${BOT_TOKEN}/deleteWebhook?drop_pending_updates=true"
+```
+
+- Для одного `BOT_TOKEN` должен оставаться только один активный polling/webhook consumer.
+
 ## Лицензия
 
 MIT
