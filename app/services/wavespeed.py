@@ -54,27 +54,45 @@ def extract_prediction_id(raw_response: Dict[str, Any]) -> Optional[str]:
 
 def normalize_status(raw_response: Dict[str, Any]) -> str:
     """Нормализовать статус ответа Wavespeed."""
-    status = str(raw_response.get("status") or raw_response.get("state") or "").strip().lower()
-    if status == "created":
-        return "created"
-    if status in {"processing", "running", "in_progress", "queued", "starting"}:
-        return "processing"
-    if status in {"completed", "succeeded", "success"}:
+    status_candidates = (
+        raw_response.get("status"),
+        raw_response.get("data", {}).get("status"),
+        raw_response.get("result", {}).get("status"),
+        raw_response.get("state"),
+        raw_response.get("data", {}).get("state"),
+    )
+    for candidate in status_candidates:
+        status = str(candidate or "").strip().lower()
+        if status == "created":
+            return "created"
+        if status in {"completed", "succeeded", "success"}:
+            return "completed"
+        if status in {"failed", "error", "cancelled", "canceled", "timeout"}:
+            return "failed"
+        if status in {"processing", "pending", "running", "in_progress", "queued", "starting"}:
+            return "processing"
+    if extract_output_urls(raw_response):
         return "completed"
-    if status in {"failed", "error", "cancelled", "canceled", "timeout"}:
-        return "failed"
     return "processing"
 
 
 def extract_output_urls(raw_response: Dict[str, Any]) -> list[str]:
     """Извлечь output URLs из ответа Wavespeed."""
-    value = raw_response.get("outputs") or raw_response.get("output_urls") or raw_response.get("urls") or raw_response.get("output") or []
-    if isinstance(value, str):
-        return [value] if value.strip() else []
-    if isinstance(value, list):
-        return [item for item in value if isinstance(item, str) and item.strip()]
-    if isinstance(value, dict):
-        return [item for item in value.values() if isinstance(item, str) and item.strip()]
+    value_candidates = (
+        raw_response.get("outputs"),
+        raw_response.get("data", {}).get("outputs"),
+        raw_response.get("result", {}).get("outputs"),
+        raw_response.get("output_urls"),
+        raw_response.get("urls"),
+        raw_response.get("output"),
+    )
+    for value in value_candidates:
+        if isinstance(value, str):
+            return [value] if value.strip() else []
+        if isinstance(value, list):
+            return [item for item in value if isinstance(item, str) and item.strip()]
+        if isinstance(value, dict):
+            return [item for item in value.values() if isinstance(item, str) and item.strip()]
     return []
 
 
@@ -137,6 +155,16 @@ class WavespeedService:
                 "status": status,
                 "model_key": model_key,
                 "outputs_count": outputs_count,
+            }
+        )
+
+    @staticmethod
+    def _log_raw_response_debug(raw_response: Dict[str, Any]) -> None:
+        """Логировать сырой ответ Wavespeed для диагностики статуса."""
+        logger.info(
+            {
+                "action": "wavespeed_raw_response",
+                "raw": raw_response,
             }
         )
 
@@ -240,6 +268,7 @@ class WavespeedService:
             ) from exc
 
         raw_response = self._safe_json(response)
+        self._log_raw_response_debug(raw_response)
         status = normalize_status(raw_response)
         outputs = extract_output_urls(raw_response)
         error_message = extract_error_message(raw_response)
@@ -251,12 +280,6 @@ class WavespeedService:
             model_key=None,
             outputs_count=len(outputs),
         )
-
-        if status == "completed" and not outputs:
-            raise WavespeedFailedError(
-                "Сервис генерации вернул пустой результат. Попробуйте позже.",
-                log_message="Wavespeed completed response has empty outputs",
-            )
         return WavespeedResult(
             prediction_id=resolved_prediction_id,
             status=status,
@@ -271,9 +294,10 @@ class WavespeedService:
         prediction_id: str,
         cancel_event: Optional[asyncio.Event] = None,
         timeout_seconds: int = 300,
-        interval: int = 4,
+        interval: int = 60,
     ) -> WavespeedResult:
-        """Опросить Wavespeed до terminal status, отмены или таймаута."""
+        """Опросить Wavespeed до terminal status, отмены или таймаута с интервалом 60 секунд для снижения нагрузки."""
+        logger.info("Polling Wavespeed every %s seconds", interval)
         started = asyncio.get_running_loop().time()
         while asyncio.get_running_loop().time() - started < timeout_seconds:
             if cancel_event is not None and cancel_event.is_set():
@@ -299,6 +323,9 @@ class WavespeedService:
                 )
 
             if result.status == "completed":
+                if not result.outputs:
+                    await asyncio.sleep(interval)
+                    continue
                 return result
             if result.status == "failed":
                 raise WavespeedFailedError(

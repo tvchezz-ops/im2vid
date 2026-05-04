@@ -394,7 +394,7 @@ async def poll_generation_result(
             prediction_id,
             cancel_event=cancel_event,
             timeout_seconds=POLL_TIMEOUT_SECONDS,
-            interval=4,
+            interval=60,
         )
         await mark_generation_completed(
             generation_request_id=generation_request_id,
