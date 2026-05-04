@@ -49,7 +49,7 @@ from app.utils import (
 router = Router()
 
 ACTIVE_GENERATIONS: Dict[int, Dict[str, Any]] = {}
-POLL_TIMEOUT_SECONDS = 300
+POLL_TIMEOUT_SECONDS = 600
 GENERATION_COST = 1
 
 MODEL_PREFIX = "gen:model:"
@@ -508,7 +508,7 @@ async def poll_generation_result(
         )
         await bot.send_message(
             chat_id,
-            exc.user_message,
+            "Генерация заняла слишком много времени. Кредит возвращён.",
             reply_markup=get_main_menu_keyboard(),
         )
     except WavespeedFailedError as exc:
