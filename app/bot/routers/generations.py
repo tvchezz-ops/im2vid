@@ -34,7 +34,7 @@ from app.services.generation_service import (
     validate_model_settings,
 )
 from app.services.telegram_files import TelegramFilesService
-from app.services.wavespeed import WavespeedService
+from app.services.wavespeed import WavespeedResult, WavespeedService
 from app.utils import (
     ImageUploadError,
     WavespeedCancelledError,
@@ -143,6 +143,26 @@ def build_confirmation_text(
         f"Стоимость: 1 кредит\n"
         f"Баланс после запуска: <code>{balance_after_launch}</code>"
     )
+
+
+def get_user_friendly_error_message(error: Exception, result: Optional[WavespeedResult] = None) -> str:
+    """Вернуть безопасное и понятное сообщение об ошибке для пользователя."""
+    if isinstance(error, WavespeedTimeoutError):
+        return "⏱ Генерация заняла слишком много времени и была остановлена. Кредит возвращён."
+
+    if result is not None and result.status == "failed":
+        normalized_error = (result.error or "").strip().lower()
+        if "nsfw" in normalized_error:
+            return "🚫 Генерация отклонена системой безопасности (NSFW контент). Попробуйте изменить запрос."
+        return "❌ Генерация не удалась. Попробуйте изменить описание или настройки."
+
+    if isinstance(error, TelegramBadRequest):
+        return "⚠️ Генерация выполнена, но Telegram не смог доставить результат. Попробуйте позже."
+
+    if isinstance(error, (WavespeedNetworkError, httpx.HTTPError, httpx.TimeoutException, TimeoutError)):
+        return "🌐 Ошибка сети при получении результата. Попробуйте позже."
+
+    return "⚠️ Произошла неизвестная ошибка. Попробуйте ещё раз."
 
 
 def get_model_state_settings(state_data: dict[str, Any], model_key: str) -> dict[str, Any]:
@@ -257,6 +277,17 @@ async def log_generation_event(
     )
 
 
+def log_balance_event(action: str, user_id: int, amount: int) -> None:
+    """Логировать безопасные события изменения баланса без персональных данных."""
+    logger.info(
+        {
+            "action": action,
+            "user_id": user_id,
+            "amount": amount,
+        }
+    )
+
+
 async def mark_generation_failed(
     *,
     generation_request_id,
@@ -277,7 +308,9 @@ async def mark_generation_failed(
             error_message=error_message,
         )
         if refund_credit:
-            await user_repo.increase_balance(user_id, cost)
+            refunded = await user_repo.increase_balance(user_id, cost)
+            if refunded:
+                log_balance_event("balance_refunded", user_id, cost)
         await user_repo.increment_user_generation_stats(user_id, success=False)
     await log_generation_event(generation_request_id, user_id, model_key, status)
 
@@ -298,7 +331,9 @@ async def mark_generation_cancelled(
             "cancelled",
             error_message="Cancelled by user",
         )
-        await user_repo.increase_balance(user_id, cost)
+        refunded = await user_repo.increase_balance(user_id, cost)
+        if refunded:
+            log_balance_event("balance_refunded", user_id, cost)
         await user_repo.increment_user_generation_stats(user_id, success=False)
     await log_generation_event(generation_request_id, user_id, model_key, "cancelled")
 
@@ -324,8 +359,9 @@ async def mark_generation_completed(
     await log_generation_event(generation_request_id, user_id, model_key, "completed", output_count)
 
 
-async def send_generation_outputs(bot, chat_id: int, output_urls: list[str]) -> None:
+async def send_generation_outputs(bot, chat_id: int, output_urls: list[str]) -> bool:
     """Отправить пользователю результаты генерации, при необходимости через временный локальный файл."""
+    delivered_successfully = True
     for index, output_url in enumerate(output_urls, start=1):
         caption = "Готово ✅" if index == 1 else None
         try:
@@ -355,6 +391,7 @@ async def send_generation_outputs(bot, chat_id: int, output_urls: list[str]) -> 
                 )
                 log_generation_output_delivery(len(output_urls), "downloaded_document")
             except Exception as delivery_exc:
+                delivered_successfully = False
                 log_generation_output_delivery(len(output_urls), "delivery_failed")
                 logger.warning(
                     "Failed to deliver completed Wavespeed output via Telegram fallback: %s",
@@ -362,11 +399,12 @@ async def send_generation_outputs(bot, chat_id: int, output_urls: list[str]) -> 
                 )
                 await bot.send_message(
                     chat_id,
-                    "Генерация готова, но Telegram не смог получить файл. Попробуйте позже.",
+                    "⚠️ Генерация завершена, но файл не удалось отправить. Попробуйте позже.",
                 )
             finally:
                 if temp_output_path is not None:
                     Path(temp_output_path).unlink(missing_ok=True)
+    return delivered_successfully
 
 
 def log_generation_output_delivery(outputs_count: int, delivery_method: str) -> None:
@@ -380,7 +418,7 @@ def log_generation_output_delivery(outputs_count: int, delivery_method: str) -> 
     )
 
 
-def get_output_suffix_and_type(content_type: str | None) -> tuple[str, bool]:
+def get_output_suffix_and_type(content_type: Optional[str]) -> tuple[str, bool]:
     """Определить расширение временного output-файла и является ли он изображением."""
     normalized_content_type = (content_type or "").split(";", 1)[0].strip().lower()
     if normalized_content_type.startswith("image/"):
@@ -412,7 +450,7 @@ async def download_output_file_to_temp(output_url: str) -> tuple[str, bool]:
         raise
 
 
-async def cleanup_generation_file(temp_input_path: str | None) -> None:
+async def cleanup_generation_file(temp_input_path: Optional[str]) -> None:
     """Удалить временный входной файл после завершения сценария."""
     if temp_input_path:
         Path(temp_input_path).unlink(missing_ok=True)
@@ -445,6 +483,7 @@ async def poll_generation_result(
 ) -> None:
     """Выполнить submit и дождаться terminal результата, затем удалить временный файл."""
     wavespeed = WavespeedService()
+    result: Optional[WavespeedResult] = None
     try:
         if cancel_event.is_set():
             await mark_generation_cancelled(
@@ -484,8 +523,9 @@ async def poll_generation_result(
             nsfw_flags=result.raw_response.get("nsfw_flags"),
             output_count=len(result.outputs),
         )
-        await send_generation_outputs(bot, chat_id, result.outputs)
-        await bot.send_message(chat_id, "Готово ✅")
+        delivery_success = await send_generation_outputs(bot, chat_id, result.outputs)
+        if delivery_success:
+            await bot.send_message(chat_id, "Готово ✅")
         await bot.send_message(chat_id, "🏠 Главное меню", reply_markup=get_main_menu_keyboard())
     except WavespeedCancelledError:
         await mark_generation_cancelled(
@@ -508,11 +548,12 @@ async def poll_generation_result(
         )
         await bot.send_message(
             chat_id,
-            "Генерация заняла слишком много времени. Кредит возвращён.",
+            get_user_friendly_error_message(exc, result),
             reply_markup=get_main_menu_keyboard(),
         )
     except WavespeedFailedError as exc:
         logger.exception("Wavespeed failed while polling generation result: %s", exc)
+        result = getattr(exc, "result", result)
         await mark_generation_failed(
             generation_request_id=generation_request_id,
             user_id=user_id,
@@ -521,7 +562,11 @@ async def poll_generation_result(
             error_message=exc.user_message,
             refund_credit=True,
         )
-        await bot.send_message(chat_id, "Генерация не удалась. Кредит возвращён.", reply_markup=get_main_menu_keyboard())
+        await bot.send_message(
+            chat_id,
+            get_user_friendly_error_message(exc, result),
+            reply_markup=get_main_menu_keyboard(),
+        )
     except WavespeedNetworkError as exc:
         logger.exception("Wavespeed network error while polling generation result: %s", exc)
         await mark_generation_failed(
@@ -534,7 +579,7 @@ async def poll_generation_result(
         )
         await bot.send_message(
             chat_id,
-            "Генерация не удалась. Кредит возвращён.",
+            get_user_friendly_error_message(exc, result),
             reply_markup=get_main_menu_keyboard(),
         )
     except Exception as exc:
@@ -547,7 +592,11 @@ async def poll_generation_result(
             error_message="Не удалось завершить генерацию. Попробуйте позже.",
             refund_credit=True,
         )
-        await bot.send_message(chat_id, "Генерация не удалась. Кредит возвращён.", reply_markup=get_main_menu_keyboard())
+        await bot.send_message(
+            chat_id,
+            get_user_friendly_error_message(exc, result),
+            reply_markup=get_main_menu_keyboard(),
+        )
     finally:
         ACTIVE_GENERATIONS.pop(user_id, None)
         await cleanup_generation_file(temp_input_path)
@@ -817,6 +866,18 @@ async def confirm_generation(callback: CallbackQuery, state: FSMContext, session
         user = await user_repo.get_or_create_user_from_telegram(callback.from_user)
         debited_user_id = user.id
 
+        if not await user_repo.decrease_balance(user.id, GENERATION_COST):
+            log_balance_event("insufficient_balance", user.id, GENERATION_COST)
+            await callback.message.answer(
+                "Недостаточно кредитов. Пополните баланс в магазине.",
+                reply_markup=get_main_menu_keyboard(),
+            )
+            await reset_generation_state(state)
+            await callback.answer()
+            return
+        debited_balance = True
+        log_balance_event("balance_debited", user.id, GENERATION_COST)
+
         generation_request = await generation_repo.create_generation_request(
             user_id=user.id,
             model_key=model_key,
@@ -833,21 +894,6 @@ async def confirm_generation(callback: CallbackQuery, state: FSMContext, session
             cost=GENERATION_COST,
         )
         generation_request_id = generation_request.id
-
-        if not await user_repo.decrease_balance(user.id, GENERATION_COST):
-            await generation_repo.update_generation_status(
-                generation_request_id,
-                "failed",
-                error_message="Недостаточно средств для запуска генерации.",
-            )
-            await callback.message.answer(
-                "❌ Недостаточно средств. Пополни баланс и попробуй снова.",
-                reply_markup=get_main_menu_keyboard(),
-            )
-            await reset_generation_state(state)
-            await callback.answer()
-            return
-        debited_balance = True
 
         telegram_files = TelegramFilesService(callback.bot)
         temp_media = await telegram_files.download_temp_file_and_get_public_url(input_image_file_id)
@@ -903,7 +949,10 @@ async def confirm_generation(callback: CallbackQuery, state: FSMContext, session
                 logger.exception("Error while refunding balance after image upload failure: %s", refund_exc)
         await state.update_data(input_image_file_id=None)
         await state.set_state(GenerationStates.waiting_for_image)
-        await callback.message.answer(exc.user_message, reply_markup=get_cancel_keyboard())
+        await callback.message.answer(
+            "❌ Не удалось запустить генерацию. Проверьте параметры и попробуйте снова.",
+            reply_markup=get_cancel_keyboard(),
+        )
         await callback.answer()
     except Exception as exc:
         logger.exception("Error while launching generation: %s", exc)
@@ -921,7 +970,7 @@ async def confirm_generation(callback: CallbackQuery, state: FSMContext, session
                 logger.exception("Error while refunding balance after launch failure: %s", refund_exc)
         await state.clear()
         await callback.message.answer(
-            "Генерация не удалась. Кредит возвращён.",
+            "❌ Не удалось запустить генерацию. Проверьте параметры и попробуйте снова.",
             reply_markup=get_main_menu_keyboard(),
         )
         await callback.answer()

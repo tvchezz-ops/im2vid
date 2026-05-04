@@ -131,23 +131,17 @@ class UserRepository:
         balance = result.scalar_one_or_none()
         return balance is not None and balance >= amount
 
-    def _transaction_context(self):
-        """Получить подходящий транзакционный контекст для текущей сессии."""
-        if self.session.in_transaction():
-            return self.session.begin_nested()
-        return self.session.begin()
-
     async def decrease_balance(self, user_id: int, amount: int) -> bool:
         """Атомарно списать средства с баланса пользователя."""
         if amount <= 0:
             raise ValueError("Decrease amount must be positive")
 
-        async with self._transaction_context():
-            result = await self.session.execute(
-                update(User)
-                .where(User.id == user_id, User.balance >= amount)
-                .values(balance=User.balance - amount)
-            )
+        result = await self.session.execute(
+            update(User)
+            .where(User.id == user_id, User.balance >= amount)
+            .values(balance=User.balance - amount)
+        )
+        await self.session.commit()
         success = result.rowcount > 0
         if success:
             logger.debug("Decreased balance for user %s by %s", user_id, amount)
@@ -158,12 +152,12 @@ class UserRepository:
         if amount <= 0:
             raise ValueError("Increase amount must be positive")
 
-        async with self._transaction_context():
-            result = await self.session.execute(
-                update(User)
-                .where(User.id == user_id)
-                .values(balance=User.balance + amount)
-            )
+        result = await self.session.execute(
+            update(User)
+            .where(User.id == user_id)
+            .values(balance=User.balance + amount)
+        )
+        await self.session.commit()
         success = result.rowcount > 0
         if success:
             logger.debug("Increased balance for user %s by %s", user_id, amount)

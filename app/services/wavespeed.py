@@ -342,10 +342,12 @@ class WavespeedService:
                     continue
                 return result
             if result.status == "failed":
-                raise WavespeedFailedError(
+                error = WavespeedFailedError(
                     result.error or "Генерация завершилась с ошибкой. Попробуйте позже.",
                     log_message="Wavespeed returned failed status",
                 )
+                error.result = result
+                raise error
 
             await asyncio.sleep(interval)
 
