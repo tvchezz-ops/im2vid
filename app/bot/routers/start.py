@@ -3,6 +3,7 @@ from typing import Optional
 
 from aiogram import Router
 from aiogram.filters import Command
+from aiogram.fsm.context import FSMContext
 from aiogram.types import Message
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -25,9 +26,14 @@ def build_welcome_text(first_name: Optional[str]) -> str:
 
 
 @router.message(Command("start"))
-async def start_command(message: Message, session: AsyncSession):
+async def start_command(message: Message, state: FSMContext, session: AsyncSession):
     """Обработчик команды /start."""
     try:
+        current_state = await state.get_state()
+        if current_state is not None:
+            await state.clear()
+            logger.info({"action": "generation_flow_reset", "user_id": message.from_user.id})
+
         user_repo = UserRepository(session)
         
         # Создаем или обновляем пользователя из Telegram объекта
@@ -46,9 +52,14 @@ async def start_command(message: Message, session: AsyncSession):
 
 @router.message(Command("menu"))
 @router.message(lambda msg: msg.text == "⬅️ Назад в меню")
-async def menu_command(message: Message, session: AsyncSession):
+async def menu_command(message: Message, state: FSMContext, session: AsyncSession):
     """Вернуть пользователя в главное меню."""
     try:
+        current_state = await state.get_state()
+        if current_state is not None:
+            await state.clear()
+            logger.info({"action": "generation_flow_reset", "user_id": message.from_user.id})
+
         user_repo = UserRepository(session)
         await user_repo.update_user_seen(message.from_user.id)
         await message.answer(

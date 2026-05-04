@@ -69,17 +69,6 @@ def get_back_to_menu_keyboard() -> ReplyKeyboardMarkup:
     )
 
 
-def get_cancel_keyboard() -> ReplyKeyboardMarkup:
-    """Клавиатура отмены активного сценария."""
-    return ReplyKeyboardMarkup(
-        keyboard=[
-            [KeyboardButton(text="❌ Отмена")],
-            [KeyboardButton(text="⬅️ Назад в меню")],
-        ],
-        resize_keyboard=True,
-    )
-
-
 def build_model_selection_keyboard(models: Iterable[Any]) -> InlineKeyboardMarkup:
     """Построить клавиатуру выбора модели из реестра."""
     rows = [
@@ -91,7 +80,6 @@ def build_model_selection_keyboard(models: Iterable[Any]) -> InlineKeyboardMarku
         ]
         for model in models
     ]
-    rows.append([InlineKeyboardButton(text="❌ Отмена", callback_data="gen:cancel")])
     rows.append([InlineKeyboardButton(text="⬅️ Назад", callback_data="back_to_menu")])
     return InlineKeyboardMarkup(inline_keyboard=rows)
 
@@ -111,7 +99,6 @@ def build_model_settings_keyboard(model: Any, current_settings: dict[str, Any]) 
         )
     rows.append([InlineKeyboardButton(text="✅ Продолжить", callback_data="gen:continue")])
     rows.append([InlineKeyboardButton(text="⬅️ Назад к моделям", callback_data="gen:back_models")])
-    rows.append([InlineKeyboardButton(text="❌ Отмена", callback_data="gen:cancel")])
     return InlineKeyboardMarkup(inline_keyboard=rows)
 
 
@@ -133,7 +120,6 @@ def build_setting_options_keyboard(
             ]
         )
     rows.append([InlineKeyboardButton(text="⬅️ Назад к настройкам", callback_data="gen:back_settings")])
-    rows.append([InlineKeyboardButton(text="❌ Отмена", callback_data="gen:cancel")])
     return InlineKeyboardMarkup(inline_keyboard=rows)
 
 
@@ -143,7 +129,6 @@ def build_generation_confirm_keyboard() -> InlineKeyboardMarkup:
         inline_keyboard=[
             [InlineKeyboardButton(text="🚀 Запустить", callback_data="gen:confirm")],
             [InlineKeyboardButton(text="⚙️ Изменить настройки", callback_data="gen:edit")],
-            [InlineKeyboardButton(text="❌ Отмена", callback_data="gen:cancel")],
         ]
     )
 

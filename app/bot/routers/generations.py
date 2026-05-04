@@ -19,7 +19,6 @@ from app.bot.keyboards import (
     build_setting_options_keyboard,
     get_option_value_by_index,
     get_setting_key_by_index,
-    get_cancel_keyboard,
     get_main_menu_keyboard,
 )
 from app.bot.states import GenerationStates
@@ -37,7 +36,6 @@ from app.services.telegram_files import TelegramFilesService
 from app.services.wavespeed import WavespeedResult, WavespeedService
 from app.utils import (
     ImageUploadError,
-    WavespeedCancelledError,
     WavespeedFailedError,
     WavespeedNetworkError,
     WavespeedTimeoutError,
@@ -60,7 +58,6 @@ SETTINGS_BACK_MODELS = "gen:back_models"
 SETTINGS_CONTINUE = "gen:continue"
 SETTINGS_EDIT = "gen:edit"
 GENERATION_CONFIRM = "gen:confirm"
-GENERATION_CANCEL = "gen:cancel"
 
 
 def extract_prediction_id(payload: Dict[str, Any]) -> Optional[str]:
@@ -315,29 +312,6 @@ async def mark_generation_failed(
     await log_generation_event(generation_request_id, user_id, model_key, status)
 
 
-async def mark_generation_cancelled(
-    *,
-    generation_request_id,
-    user_id: int,
-    model_key: str,
-    cost: int,
-) -> None:
-    """Обновить статус генерации как cancelled и вернуть кредит пользователю."""
-    async with db_manager.session_factory() as session:
-        generation_repo = GenerationRepository(session)
-        user_repo = UserRepository(session)
-        await generation_repo.update_generation_status(
-            generation_request_id,
-            "cancelled",
-            error_message="Cancelled by user",
-        )
-        refunded = await user_repo.increase_balance(user_id, cost)
-        if refunded:
-            log_balance_event("balance_refunded", user_id, cost)
-        await user_repo.increment_user_generation_stats(user_id, success=False)
-    await log_generation_event(generation_request_id, user_id, model_key, "cancelled")
-
-
 async def mark_generation_completed(
     *,
     generation_request_id,
@@ -360,90 +334,90 @@ async def mark_generation_completed(
 
 
 async def send_generation_outputs(bot, chat_id: int, output_urls: list[str]) -> bool:
-    """Отправить пользователю результаты генерации, при необходимости через временный локальный файл."""
+    """Отправить пользователю результаты генерации только как document через временный локальный файл."""
     delivered_successfully = True
     for index, output_url in enumerate(output_urls, start=1):
         caption = "Готово ✅" if index == 1 else None
+        temp_output_path: Optional[str] = None
         try:
-            await bot.send_photo(chat_id, output_url, caption=caption)
-            log_generation_output_delivery(len(output_urls), "url_photo")
-        except TelegramBadRequest as exc:
-            logger.warning(
-                "Telegram rejected Wavespeed URL delivery; switching to temporary download fallback: %s",
+            temp_output_path, content_type, file_size_bytes = await download_output_file_to_temp(output_url)
+            await bot.send_document(
+                chat_id,
+                FSInputFile(temp_output_path),
+                caption=caption,
+            )
+            log_generation_output_delivery(
+                len(output_urls),
+                "downloaded_document",
+                content_type=content_type,
+                file_size_bytes=file_size_bytes,
+            )
+        except Exception as exc:
+            delivered_successfully = False
+            logger.exception(
+                "Failed to deliver completed Wavespeed output as document: %s",
                 type(exc).__name__,
             )
-            temp_output_path: Optional[str] = None
-            try:
-                temp_output_path, is_image = await download_output_file_to_temp(output_url)
-                input_file = FSInputFile(temp_output_path)
-                if is_image:
-                    try:
-                        await bot.send_photo(chat_id, input_file, caption=caption)
-                        log_generation_output_delivery(len(output_urls), "downloaded_photo")
-                        continue
-                    except Exception:
-                        input_file = FSInputFile(temp_output_path)
-
-                await bot.send_document(
-                    chat_id,
-                    input_file,
-                    caption=caption,
-                )
-                log_generation_output_delivery(len(output_urls), "downloaded_document")
-            except Exception as delivery_exc:
-                delivered_successfully = False
-                log_generation_output_delivery(len(output_urls), "delivery_failed")
-                logger.warning(
-                    "Failed to deliver completed Wavespeed output via Telegram fallback: %s",
-                    type(delivery_exc).__name__,
-                )
-                await bot.send_message(
-                    chat_id,
-                    "⚠️ Генерация завершена, но файл не удалось отправить. Попробуйте позже.",
-                )
-            finally:
-                if temp_output_path is not None:
-                    Path(temp_output_path).unlink(missing_ok=True)
+            log_generation_output_delivery(len(output_urls), "delivery_failed")
+            await bot.send_message(
+                chat_id,
+                "⚠️ Генерация завершена, но файл не удалось отправить. Попробуйте позже.",
+            )
+        finally:
+            if temp_output_path is not None:
+                Path(temp_output_path).unlink(missing_ok=True)
     return delivered_successfully
 
 
-def log_generation_output_delivery(outputs_count: int, delivery_method: str) -> None:
+def log_generation_output_delivery(
+    outputs_count: int,
+    delivery_method: str,
+    *,
+    content_type: Optional[str] = None,
+    file_size_bytes: Optional[int] = None,
+) -> None:
     """Логировать только безопасные метаданные доставки результатов генерации."""
     logger.info(
         {
             "action": "generation_output_delivery",
             "outputs_count": outputs_count,
             "delivery_method": delivery_method,
+            "content_type": content_type,
+            "file_size_bytes": file_size_bytes,
         }
     )
 
 
-def get_output_suffix_and_type(content_type: Optional[str]) -> tuple[str, bool]:
-    """Определить расширение временного output-файла и является ли он изображением."""
+def get_output_suffix_and_type(content_type: Optional[str]) -> str:
+    """Определить расширение временного output-файла по Content-Type."""
     normalized_content_type = (content_type or "").split(";", 1)[0].strip().lower()
-    if normalized_content_type.startswith("image/"):
-        if normalized_content_type == "image/png":
-            return ".png", True
-        return ".jpg", True
-    return ".bin", False
+    if normalized_content_type == "image/png":
+        return ".png"
+    if normalized_content_type == "image/jpeg":
+        return ".jpg"
+    if normalized_content_type == "image/webp":
+        return ".webp"
+    if normalized_content_type == "video/mp4":
+        return ".mp4"
+    return ".bin"
 
 
-async def download_output_file_to_temp(output_url: str) -> tuple[str, bool]:
+async def download_output_file_to_temp(output_url: str) -> tuple[str, Optional[str], Optional[int]]:
     """Скачать output-файл во временный файл для последующей отправки в Telegram."""
     response: Optional[httpx.Response] = None
     temp_path: Optional[str] = None
-    is_image = False
     try:
         async with httpx.AsyncClient(timeout=60.0, follow_redirects=True) as client:
             response = await client.get(output_url)
             response.raise_for_status()
 
-        suffix, is_image = get_output_suffix_and_type(response.headers.get("content-type"))
+        content_type = response.headers.get("content-type")
+        suffix = get_output_suffix_and_type(content_type)
         temp_file = tempfile.NamedTemporaryFile(prefix="wavespeed-output-", suffix=suffix, delete=False)
         temp_path = temp_file.name
         temp_file.close()
         Path(temp_path).write_bytes(response.content)
-        return temp_path, is_image
+        return temp_path, content_type, len(response.content)
     except Exception:
         if temp_path is not None:
             Path(temp_path).unlink(missing_ok=True)
@@ -461,13 +435,6 @@ async def reset_generation_state(state: FSMContext) -> None:
     await state.clear()
 
 
-async def cancel_active_generation(user_id: int) -> None:
-    """Поставить флаг отмены для активной генерации."""
-    active = ACTIVE_GENERATIONS.get(user_id)
-    if active:
-        active["cancel_event"].set()
-
-
 async def poll_generation_result(
     *,
     bot,
@@ -477,7 +444,6 @@ async def poll_generation_result(
     generation_request_id,
     model_key: str,
     cost: int,
-    cancel_event: asyncio.Event,
     payload: dict[str, Any],
     temp_input_path: str,
 ) -> None:
@@ -485,15 +451,6 @@ async def poll_generation_result(
     wavespeed = WavespeedService()
     result: Optional[WavespeedResult] = None
     try:
-        if cancel_event.is_set():
-            await mark_generation_cancelled(
-                generation_request_id=generation_request_id,
-                user_id=user_id,
-                model_key=model_key,
-                cost=cost,
-            )
-            return
-
         submit_result = await wavespeed.submit_generation(
             model_key=model_key,
             payload=payload,
@@ -512,7 +469,6 @@ async def poll_generation_result(
 
         result = await wavespeed.poll_until_complete(
             prediction_id,
-            cancel_event=cancel_event,
             timeout_seconds=POLL_TIMEOUT_SECONDS,
             interval=60,
         )
@@ -527,14 +483,6 @@ async def poll_generation_result(
         if delivery_success:
             await bot.send_message(chat_id, "Готово ✅")
         await bot.send_message(chat_id, "🏠 Главное меню", reply_markup=get_main_menu_keyboard())
-    except WavespeedCancelledError:
-        await mark_generation_cancelled(
-            generation_request_id=generation_request_id,
-            user_id=user_id,
-            model_key=model_key,
-            cost=cost,
-        )
-        return
     except WavespeedTimeoutError as exc:
         logger.exception("Wavespeed timeout while polling generation result: %s", exc)
         await mark_generation_failed(
@@ -611,8 +559,8 @@ async def show_generation_menu(message: Message, state: FSMContext):
         current_state = await state.get_state()
         if current_state is not None or message.from_user.id in ACTIVE_GENERATIONS:
             await message.answer(
-                "⚠️ У вас уже есть активный сценарий генерации. Завершите его или нажмите ❌ Отмена.",
-                reply_markup=get_cancel_keyboard(),
+                "⚠️ У вас уже есть активный сценарий генерации. Дождитесь завершения или вернитесь в главное меню через /start.",
+                reply_markup=get_main_menu_keyboard(),
             )
             return
 
@@ -739,8 +687,8 @@ async def continue_after_settings(callback: CallbackQuery, state: FSMContext):
         reply_markup=None,
     )
     await callback.message.answer(
-        "На любом этапе можно отменить сценарий.",
-        reply_markup=get_cancel_keyboard(),
+        "После загрузки изображения отправьте текстовое описание изменений.",
+        reply_markup=get_main_menu_keyboard(),
     )
     await callback.answer()
 
@@ -754,7 +702,7 @@ async def process_generation_image(message: Message, state: FSMContext):
     if document and not ((document.mime_type or "").startswith("image/")):
         await message.answer(
             "❌ Нужен файл изображения. Отправь фото Telegram или document с форматом image/*.",
-            reply_markup=get_cancel_keyboard(),
+            reply_markup=get_main_menu_keyboard(),
         )
         return
 
@@ -763,7 +711,7 @@ async def process_generation_image(message: Message, state: FSMContext):
     await state.set_state(GenerationStates.waiting_for_prompt)
     await message.answer(
         "Опишите, что нужно изменить на изображении.",
-        reply_markup=get_cancel_keyboard(),
+        reply_markup=get_main_menu_keyboard(),
     )
 
 
@@ -772,7 +720,7 @@ async def invalid_generation_image(message: Message):
     """Сообщить, что ожидается изображение."""
     await message.answer(
         "❌ Я жду изображение. Отправь фото Telegram или document с форматом image/*.",
-        reply_markup=get_cancel_keyboard(),
+        reply_markup=get_main_menu_keyboard(),
     )
 
 
@@ -790,13 +738,13 @@ async def process_prompt(
         input_image_file_id = state_data.get("input_image_file_id")
         
         if not prompt:
-            await message.answer("❌ Отправь текстовый prompt.", reply_markup=get_cancel_keyboard())
+            await message.answer("❌ Отправь текстовый prompt.", reply_markup=get_main_menu_keyboard())
             return
         if len(prompt) < 10:
             await message.answer("❌ Описание слишком короткое (минимум 10 символов)")
             return
         if not input_image_file_id:
-            await message.answer("❌ Сначала отправь изображение.", reply_markup=get_cancel_keyboard())
+            await message.answer("❌ Сначала отправь изображение.", reply_markup=get_main_menu_keyboard())
             await state.set_state(GenerationStates.waiting_for_image)
             return
         
@@ -902,7 +850,6 @@ async def confirm_generation(callback: CallbackQuery, state: FSMContext, session
         payload = build_payload(model_key, [image_url], prompt, user_settings)
 
         await state.set_state(GenerationStates.generating)
-        cancel_event = asyncio.Event()
         task = asyncio.create_task(
             poll_generation_result(
                 bot=callback.bot,
@@ -912,7 +859,6 @@ async def confirm_generation(callback: CallbackQuery, state: FSMContext, session
                 generation_request_id=generation_request_id,
                 model_key=model_key,
                 cost=generation_request.cost,
-                cancel_event=cancel_event,
                 payload=payload,
                 temp_input_path=temp_input_path,
             )
@@ -920,7 +866,6 @@ async def confirm_generation(callback: CallbackQuery, state: FSMContext, session
         task_started = True
         ACTIVE_GENERATIONS[user_id] = {
             "task": task,
-            "cancel_event": cancel_event,
             "generation_request_id": generation_request_id,
         }
 
@@ -931,7 +876,7 @@ async def confirm_generation(callback: CallbackQuery, state: FSMContext, session
             ),
             parse_mode="HTML",
         )
-        await callback.message.answer("Для остановки используй ❌ Отмена.", reply_markup=get_cancel_keyboard())
+        await callback.message.answer("Генерация выполняется в фоне. Результат придёт сюда автоматически.", reply_markup=get_main_menu_keyboard())
         await callback.answer()
     except ImageUploadError as exc:
         logger.exception("Image upload failed before generation start: %s", exc)
@@ -951,7 +896,7 @@ async def confirm_generation(callback: CallbackQuery, state: FSMContext, session
         await state.set_state(GenerationStates.waiting_for_image)
         await callback.message.answer(
             "❌ Не удалось запустить генерацию. Проверьте параметры и попробуйте снова.",
-            reply_markup=get_cancel_keyboard(),
+            reply_markup=get_main_menu_keyboard(),
         )
         await callback.answer()
     except Exception as exc:
@@ -977,37 +922,3 @@ async def confirm_generation(callback: CallbackQuery, state: FSMContext, session
     finally:
         if not task_started:
             await cleanup_generation_file(temp_input_path)
-
-
-@router.callback_query(lambda cb: cb.data == GENERATION_CANCEL)
-async def cancel_generation_callback(callback: CallbackQuery, state: FSMContext):
-    """Отменить генерацию через inline-кнопку."""
-    await cancel_active_generation(callback.from_user.id)
-    await reset_generation_state(state)
-    await callback.message.edit_reply_markup(reply_markup=None)
-    await callback.message.answer("❌ Генерация отменена.", reply_markup=get_main_menu_keyboard())
-    await callback.answer()
-
-
-@router.message(lambda msg: msg.text == "❌ Отмена")
-async def cancel_generation_message(message: Message, state: FSMContext):
-    """Отменить активный сценарий генерации по кнопке."""
-    current_state = await state.get_state()
-    if current_state not in {
-        GenerationStates.choosing_settings.state,
-        GenerationStates.choosing_setting_value.state,
-        GenerationStates.waiting_for_image.state,
-        GenerationStates.waiting_for_prompt.state,
-        GenerationStates.waiting_for_confirmation.state,
-        GenerationStates.generating.state,
-    }:
-        await message.answer("Нет активного сценария для отмены.", reply_markup=get_main_menu_keyboard())
-        return
-
-    is_active = message.from_user.id in ACTIVE_GENERATIONS
-    await cancel_active_generation(message.from_user.id)
-    await reset_generation_state(state)
-    if is_active:
-        await message.answer("❌ Генерация отменена.", reply_markup=get_main_menu_keyboard())
-    else:
-        await message.answer("❌ Генерация отменена.", reply_markup=get_main_menu_keyboard())

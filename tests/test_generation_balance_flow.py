@@ -198,7 +198,6 @@ async def test_failed_generation_refunds_credit(session_factory, monkeypatch, tm
         generation_request_id=generation.id,
         model_key="nano_banana",
         cost=1,
-        cancel_event=generations.asyncio.Event(),
         payload={"prompt": "Prompt"},
         temp_input_path=str(temp_input_path),
     )
@@ -251,7 +250,6 @@ async def test_timeout_generation_refunds_credit(session_factory, monkeypatch, t
         generation_request_id=generation.id,
         model_key="nano_banana",
         cost=1,
-        cancel_event=generations.asyncio.Event(),
         payload={"prompt": "Prompt"},
         temp_input_path=str(temp_input_path),
     )
