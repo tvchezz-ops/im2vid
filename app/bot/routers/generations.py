@@ -10,20 +10,31 @@ from aiogram.types import CallbackQuery, Message
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.bot.keyboards import (
-    get_back_to_menu_keyboard,
+    build_generation_confirm_keyboard,
+    build_model_selection_keyboard,
+    build_model_settings_keyboard,
+    build_setting_options_keyboard,
+    get_option_value_by_index,
+    get_setting_key_by_index,
     get_cancel_keyboard,
-    get_generation_confirm_keyboard,
-    get_generation_models_keyboard,
     get_main_menu_keyboard,
 )
 from app.bot.states import GenerationStates
 from app.db import GenerationRepository, UserRepository
 from app.db.session import db_manager
-from app.services.generation_service import get_generation_model
+from app.services.generation_service import (
+    GenerationModel,
+    build_payload,
+    get_default_settings,
+    get_generation_model,
+    list_generation_models,
+    validate_model_settings,
+)
 from app.services.telegram_files import TelegramFilesService
 from app.services.wavespeed import WavespeedService
 from app.utils import (
     ImageUploadError,
+    WavespeedCancelledError,
     WavespeedFailedError,
     WavespeedNetworkError,
     WavespeedTimeoutError,
@@ -35,22 +46,18 @@ from app.utils import (
 router = Router()
 
 ACTIVE_GENERATIONS: Dict[int, Dict[str, Any]] = {}
-POLL_INTERVAL_SECONDS = 4
 POLL_TIMEOUT_SECONDS = 120
 GENERATION_COST = 1
 
-
-def get_model_config(model_key: str) -> Dict[str, str]:
-    """Получить конфиг модели по ключу."""
-    try:
-        model = get_generation_model(model_key)
-    except ValueError:
-        model = get_generation_model("nano_banana")
-    return {
-        "title": model.title,
-        "endpoint": model.endpoint,
-        "type": model.model_type,
-    }
+MODEL_PREFIX = "gen:model:"
+SETTINGS_OPEN_PREFIX = "gen:setting:"
+SETTINGS_VALUE_PREFIX = "gen:set:"
+SETTINGS_BACK_PREFIX = "gen:back_settings"
+SETTINGS_BACK_MODELS = "gen:back_models"
+SETTINGS_CONTINUE = "gen:continue"
+SETTINGS_EDIT = "gen:edit"
+GENERATION_CONFIRM = "gen:confirm"
+GENERATION_CANCEL = "gen:cancel"
 
 
 def extract_prediction_id(payload: Dict[str, Any]) -> Optional[str]:
@@ -82,6 +89,151 @@ def extract_output_urls(payload: Dict[str, Any]) -> list[str]:
     if isinstance(value, dict):
         return [item for item in value.values() if isinstance(item, str)]
     return []
+
+
+def format_generation_settings(model: GenerationModel, user_settings: dict[str, Any]) -> str:
+    """Форматировать список текущих настроек модели."""
+    if not model.user_settings:
+        return "—"
+    return "\n".join(
+        f"- <b>{escape(setting.title)}</b>: <code>{escape(str(user_settings.get(setting.key, setting.default)))}</code>"
+        for setting in model.user_settings.values()
+    )
+
+
+def build_settings_text(model: GenerationModel, user_settings: dict[str, Any]) -> str:
+    """Собрать экран настроек модели."""
+    return (
+        f"Настройки модели: <b>{escape(model.title)}</b>\n\n"
+        f"Выберите параметры или нажмите Продолжить.\n\n"
+        f"Текущие значения:\n{format_generation_settings(model, user_settings)}"
+    )
+
+
+def build_setting_value_text(model: GenerationModel, setting_key: str, current_value: str) -> str:
+    """Собрать экран выбора конкретной настройки."""
+    setting = model.user_settings[setting_key]
+    options = "\n".join(f"• <code>{escape(option.value)}</code>" for option in setting.options)
+    return (
+        f"Настройки модели: <b>{escape(model.title)}</b>\n\n"
+        f"Выберите значение параметра.\n\n"
+        f"Модель: <b>{escape(model.title)}</b>\n"
+        f"Параметр: <b>{escape(setting.title)}</b>\n"
+        f"Текущее значение: <code>{escape(current_value)}</code>\n\n"
+        f"Доступные варианты:\n{options}"
+    )
+
+
+def build_confirmation_text(
+    model: GenerationModel,
+    user_settings: dict[str, Any],
+    prompt: str,
+    balance: int,
+) -> str:
+    """Собрать экран подтверждения генерации."""
+    balance_after_launch = max(balance - GENERATION_COST, 0)
+    return (
+        f"Проверьте генерацию:\n\n"
+        f"Модель: <b>{escape(model.title)}</b>\n"
+        f"Настройки:\n{format_generation_settings(model, user_settings)}\n\n"
+        f"Prompt: <i>{escape(prompt)}</i>\n\n"
+        f"Стоимость: 1 кредит\n"
+        f"Баланс после запуска: <code>{balance_after_launch}</code>"
+    )
+
+
+def get_model_state_settings(state_data: dict[str, Any], model_key: str) -> dict[str, Any]:
+    """Получить провалидированные настройки модели из FSM."""
+    return validate_model_settings(model_key, state_data.get("user_settings"))
+
+
+async def render_models_screen(message: Message) -> None:
+    """Показать список моделей генерации."""
+    generation_text = "Выберите модель для генерации/редактирования изображения:"
+    await message.answer(
+        generation_text,
+        reply_markup=build_model_selection_keyboard(list_generation_models()),
+        parse_mode="HTML",
+    )
+
+
+async def render_settings_screen(message: Message, state: FSMContext) -> None:
+    """Показать экран настроек выбранной модели."""
+    state_data = await state.get_data()
+    model_key = state_data.get("model_key")
+    if not model_key:
+        await message.edit_text("❌ Модель не выбрана. Начни заново.", reply_markup=None)
+        await message.answer("🏠 Главное меню", reply_markup=get_main_menu_keyboard())
+        return
+
+    model = get_generation_model(model_key)
+    user_settings = get_model_state_settings(state_data, model_key)
+    await message.edit_text(
+        build_settings_text(model, user_settings),
+        reply_markup=build_model_settings_keyboard(model, user_settings),
+        parse_mode="HTML",
+    )
+
+
+async def show_setting_options(message: Message, state: FSMContext, setting_key: str) -> None:
+    """Показать варианты значения конкретной настройки."""
+    state_data = await state.get_data()
+    model_key = state_data.get("model_key")
+    if not model_key:
+        await message.edit_text("❌ Модель не выбрана. Начни заново.", reply_markup=None)
+        return
+    model = get_generation_model(model_key)
+    if setting_key not in model.user_settings:
+        await message.edit_text("❌ Настройка не найдена.", reply_markup=None)
+        return
+    user_settings = get_model_state_settings(state_data, model_key)
+    current_value = str(user_settings.get(setting_key, model.user_settings[setting_key].default))
+    setting_entries = list(model.user_settings)
+    setting_index = setting_entries.index(setting_key)
+    await message.edit_text(
+        build_setting_value_text(model, setting_key, current_value),
+        reply_markup=build_setting_options_keyboard(
+            setting_index,
+            model.user_settings[setting_key].options,
+            current_value,
+        ),
+        parse_mode="HTML",
+    )
+
+
+async def send_confirmation_screen(
+    *,
+    message: Message,
+    state: FSMContext,
+    session: AsyncSession,
+    telegram_user,
+    edit: bool,
+) -> None:
+    """Показать экран подтверждения генерации."""
+    state_data = await state.get_data()
+    model_key = state_data.get("model_key")
+    prompt = (state_data.get("prompt") or "").strip()
+    input_image_file_id = state_data.get("input_image_file_id")
+
+    if not model_key or not prompt or not input_image_file_id:
+        if edit:
+            await message.edit_text("❌ Данные генерации неполные. Начни заново.", reply_markup=None)
+        else:
+            await message.answer("❌ Данные генерации неполные. Начни заново.", reply_markup=get_main_menu_keyboard())
+        await reset_generation_state(state)
+        return
+
+    model = get_generation_model(model_key)
+    user_settings = get_model_state_settings(state_data, model_key)
+    user_repo = UserRepository(session)
+    user = await user_repo.get_or_create_user_from_telegram(telegram_user)
+    text = build_confirmation_text(model, user_settings, prompt, user.balance)
+
+    await state.set_state(GenerationStates.waiting_for_confirmation)
+    if edit:
+        await message.edit_text(text, reply_markup=build_generation_confirm_keyboard(), parse_mode="HTML")
+    else:
+        await message.answer(text, reply_markup=build_generation_confirm_keyboard(), parse_mode="HTML")
 
 
 async def log_generation_event(
@@ -126,6 +278,27 @@ async def mark_generation_failed(
     await log_generation_event(generation_request_id, user_id, model_key, "failed")
 
 
+async def mark_generation_cancelled(
+    *,
+    generation_request_id,
+    user_id: int,
+    model_key: str,
+    cost: int,
+) -> None:
+    """Обновить статус генерации как cancelled и вернуть кредит пользователю."""
+    async with db_manager.session_factory() as session:
+        generation_repo = GenerationRepository(session)
+        user_repo = UserRepository(session)
+        await generation_repo.update_generation_status(
+            generation_request_id,
+            "cancelled",
+            error_message="Cancelled by user",
+        )
+        await user_repo.increase_balance(user_id, cost)
+        await user_repo.increment_user_generation_stats(user_id, success=False)
+    await log_generation_event(generation_request_id, user_id, model_key, "cancelled")
+
+
 async def mark_generation_completed(
     *,
     generation_request_id,
@@ -141,7 +314,6 @@ async def mark_generation_completed(
         await generation_repo.update_generation_status(
             generation_request_id,
             "completed",
-            output_urls=[],
             nsfw_flags=nsfw_flags,
         )
         await user_repo.increment_user_generation_stats(user_id, success=True)
@@ -184,87 +356,63 @@ async def poll_generation_result(
     chat_id: int,
     generation_request_id,
     model_key: str,
-    prediction_id: str,
     cost: int,
     cancel_event: asyncio.Event,
+    payload: dict[str, Any],
     temp_input_path: str,
 ) -> None:
-    """Опросить Wavespeed до завершения генерации."""
+    """Выполнить submit и дождаться terminal результата, затем удалить временный файл."""
     wavespeed = WavespeedService()
     try:
-        started = asyncio.get_running_loop().time()
-        while asyncio.get_running_loop().time() - started < POLL_TIMEOUT_SECONDS:
-            if cancel_event.is_set():
-                await mark_generation_failed(
-                    generation_request_id=generation_request_id,
-                    user_id=user_id,
-                    model_key=model_key,
-                    cost=cost,
-                    error_message="Cancelled by user",
-                    refund_credit=True,
-                )
-                return
+        if cancel_event.is_set():
+            await mark_generation_cancelled(
+                generation_request_id=generation_request_id,
+                user_id=user_id,
+                model_key=model_key,
+                cost=cost,
+            )
+            return
 
-            status_payload = await wavespeed.get_result(prediction_id)
-            status = normalize_status(status_payload)
+        submit_result = await wavespeed.submit_generation(
+            model_key=model_key,
+            payload=payload,
+        )
+        prediction_id = submit_result.prediction_id
 
-            if status == "completed":
-                output_urls = extract_output_urls(status_payload)
-                if not output_urls:
-                    await mark_generation_failed(
-                        generation_request_id=generation_request_id,
-                        user_id=user_id,
-                        model_key=model_key,
-                        cost=cost,
-                        error_message="Сервис генерации вернул пустой результат. Попробуйте позже.",
-                        refund_credit=True,
-                    )
-                    await bot.send_message(chat_id, "❌ Сервис генерации вернул пустой результат. Попробуйте позже.")
-                    await bot.send_message(chat_id, "🏠 Главное меню", reply_markup=get_main_menu_keyboard())
-                    return
+        async with db_manager.session_factory() as session:
+            generation_repo = GenerationRepository(session)
+            await generation_repo.update_generation_status(
+                generation_request_id,
+                status="processing",
+                wavespeed_prediction_id=prediction_id,
+            )
 
-                await mark_generation_completed(
-                    generation_request_id=generation_request_id,
-                    user_id=user_id,
-                    model_key=model_key,
-                    nsfw_flags=status_payload.get("nsfw_flags"),
-                    output_count=len(output_urls),
-                )
-                await send_generation_outputs(bot, chat_id, output_urls)
-                await bot.send_message(chat_id, "🏠 Главное меню", reply_markup=get_main_menu_keyboard())
-                return
+        await log_generation_event(generation_request_id, user_id, model_key, "processing")
 
-            if status == "failed":
-                error_message = sanitize_external_error_message(
-                    status_payload.get("error") or status_payload.get("error_message") or status_payload.get("message")
-                ) or "Генерация завершилась с ошибкой. Попробуйте позже."
-                await mark_generation_failed(
-                    generation_request_id=generation_request_id,
-                    user_id=user_id,
-                    model_key=model_key,
-                    cost=cost,
-                    error_message=error_message,
-                    refund_credit=True,
-                )
-                await bot.send_message(chat_id, f"❌ Генерация завершилась с ошибкой:\n{error_message}")
-                await bot.send_message(chat_id, "🏠 Главное меню", reply_markup=get_main_menu_keyboard())
-                return
-
-            await asyncio.sleep(POLL_INTERVAL_SECONDS)
-
-        await mark_generation_failed(
+        result = await wavespeed.poll_until_complete(
+            prediction_id,
+            cancel_event=cancel_event,
+            timeout_seconds=POLL_TIMEOUT_SECONDS,
+            interval=4,
+        )
+        await mark_generation_completed(
+            generation_request_id=generation_request_id,
+            user_id=user_id,
+            model_key=model_key,
+            nsfw_flags=result.raw_response.get("nsfw_flags"),
+            output_count=len(result.outputs),
+        )
+        await send_generation_outputs(bot, chat_id, result.outputs)
+        await bot.send_message(chat_id, "Готово ✅")
+        await bot.send_message(chat_id, "🏠 Главное меню", reply_markup=get_main_menu_keyboard())
+    except WavespeedCancelledError:
+        await mark_generation_cancelled(
             generation_request_id=generation_request_id,
             user_id=user_id,
             model_key=model_key,
             cost=cost,
-            error_message="Timeout while waiting for generation result",
-            refund_credit=True,
         )
-        await bot.send_message(
-            chat_id,
-            "❌ Генерация заняла слишком много времени. Попробуйте позже.",
-            reply_markup=get_main_menu_keyboard(),
-        )
+        return
     except WavespeedTimeoutError as exc:
         logger.exception("Wavespeed timeout while polling generation result: %s", exc)
         await mark_generation_failed(
@@ -277,7 +425,7 @@ async def poll_generation_result(
         )
         await bot.send_message(
             chat_id,
-            "❌ Генерация заняла слишком много времени. Попробуйте позже.",
+            "Генерация не удалась. Кредит возвращён.",
             reply_markup=get_main_menu_keyboard(),
         )
     except WavespeedFailedError as exc:
@@ -290,7 +438,7 @@ async def poll_generation_result(
             error_message=exc.user_message,
             refund_credit=True,
         )
-        await bot.send_message(chat_id, f"❌ {exc.user_message}", reply_markup=get_main_menu_keyboard())
+        await bot.send_message(chat_id, "Генерация не удалась. Кредит возвращён.", reply_markup=get_main_menu_keyboard())
     except WavespeedNetworkError as exc:
         logger.exception("Wavespeed network error while polling generation result: %s", exc)
         await mark_generation_failed(
@@ -303,7 +451,7 @@ async def poll_generation_result(
         )
         await bot.send_message(
             chat_id,
-            "❌ Не удалось получить статус генерации. Попробуйте позже.",
+            "Генерация не удалась. Кредит возвращён.",
             reply_markup=get_main_menu_keyboard(),
         )
     except Exception as exc:
@@ -316,7 +464,7 @@ async def poll_generation_result(
             error_message="Не удалось завершить генерацию. Попробуйте позже.",
             refund_credit=True,
         )
-        await bot.send_message(chat_id, "❌ Ошибка при получении результата генерации.", reply_markup=get_main_menu_keyboard())
+        await bot.send_message(chat_id, "Генерация не удалась. Кредит возвращён.", reply_markup=get_main_menu_keyboard())
     finally:
         ACTIVE_GENERATIONS.pop(user_id, None)
         await cleanup_generation_file(temp_input_path)
@@ -336,17 +484,8 @@ async def show_generation_menu(message: Message, state: FSMContext):
             )
             return
 
-        generation_text = (
-            "🎨 <b>Генерации</b>\n\n"
-            "Выбери модель для редактирования или генерации изображения.\n"
-            "Nano Banana подходит для аккуратного редактирования, Seedream — для более креативных результатов."
-        )
-        
-        await message.answer(
-            generation_text,
-            reply_markup=get_generation_models_keyboard(),
-            parse_mode="HTML",
-        )
+        await reset_generation_state(state)
+        await render_models_screen(message)
         
         logger.debug(f"Generation menu shown for user {message.from_user.id}")
     except Exception as e:
@@ -354,28 +493,118 @@ async def show_generation_menu(message: Message, state: FSMContext):
         await message.answer("❌ Произошла ошибка при открытии меню генерации")
 
 
-@router.callback_query(lambda cb: cb.data.startswith("generation:model:"))
+@router.callback_query(lambda cb: cb.data.startswith(MODEL_PREFIX))
 async def choose_generation_model(callback: CallbackQuery, state: FSMContext):
     """Выбрать модель для генерации."""
-    model_key = callback.data.split(":")[-1]
-    model_config = get_model_config(model_key)
+    model_key = callback.data.removeprefix(MODEL_PREFIX)
     if callback.from_user.id in ACTIVE_GENERATIONS:
         await callback.answer("У вас уже запущена генерация", show_alert=True)
         return
 
-    await state.set_state(GenerationStates.waiting_for_image)
+    model = get_generation_model(model_key)
+    await state.set_state(GenerationStates.choosing_settings)
     await state.update_data(
-        model_key=model_key,
-        model_title=model_config["title"],
-        model_endpoint=model_config["endpoint"],
+        model_key=model.key,
+        model_title=model.title,
+        model_endpoint=model.endpoint,
+        user_settings=get_default_settings(model.key),
+        current_setting_key=None,
+        input_image_file_id=None,
+        prompt=None,
     )
+    await render_settings_screen(callback.message, state)
+    await callback.answer()
+
+
+@router.callback_query(lambda cb: cb.data == SETTINGS_BACK_MODELS)
+async def back_to_generation_models(callback: CallbackQuery, state: FSMContext):
+    """Вернуться к выбору модели."""
+    await reset_generation_state(state)
     await callback.message.edit_text(
-        (
-            f"🖼 Выбрана модель: <b>{model_config['title']}</b>\n\n"
-            "Теперь отправь изображение как photo или document."
-        ),
-        reply_markup=None,
+        "Выберите модель для генерации/редактирования изображения:",
+        reply_markup=build_model_selection_keyboard(list_generation_models()),
         parse_mode="HTML",
+    )
+    await callback.answer()
+
+
+@router.callback_query(lambda cb: cb.data.startswith(SETTINGS_OPEN_PREFIX))
+async def open_setting_selector(callback: CallbackQuery, state: FSMContext):
+    """Открыть выбор значения настройки модели."""
+    setting_index_raw = callback.data.removeprefix(SETTINGS_OPEN_PREFIX)
+    if not setting_index_raw.isdigit():
+        await callback.answer("Настройка не найдена", show_alert=True)
+        return
+    setting_index = int(setting_index_raw)
+    state_data = await state.get_data()
+    model_key = state_data.get("model_key")
+    if not model_key:
+        await callback.message.edit_text("❌ Модель не выбрана. Начни заново.", reply_markup=None)
+        await callback.answer()
+        return
+    model = get_generation_model(model_key)
+    setting_key = get_setting_key_by_index(model, setting_index)
+    if setting_key is None:
+        await callback.answer("Настройка не найдена", show_alert=True)
+        return
+    await state.update_data(current_setting_key=setting_key)
+    await state.set_state(GenerationStates.choosing_setting_value)
+    await show_setting_options(callback.message, state, setting_key)
+    await callback.answer()
+
+
+@router.callback_query(lambda cb: cb.data == SETTINGS_BACK_PREFIX)
+async def back_to_settings(callback: CallbackQuery, state: FSMContext):
+    """Вернуться на экран настроек модели."""
+    await state.set_state(GenerationStates.choosing_settings)
+    await state.update_data(current_setting_key=None)
+    await render_settings_screen(callback.message, state)
+    await callback.answer()
+
+
+@router.callback_query(lambda cb: cb.data.startswith(SETTINGS_VALUE_PREFIX))
+async def choose_setting_value(callback: CallbackQuery, state: FSMContext):
+    """Сохранить выбранное значение настройки и вернуться к экрану настроек."""
+    parts = callback.data.split(":", 3)
+    if len(parts) != 4:
+        await callback.answer("Некорректное значение", show_alert=True)
+        return
+    _, _, setting_index_raw, option_index_raw = parts
+    if not setting_index_raw.isdigit() or not option_index_raw.isdigit():
+        await callback.answer("Некорректное значение", show_alert=True)
+        return
+    state_data = await state.get_data()
+    model_key = state_data.get("model_key")
+    if not model_key:
+        await callback.message.edit_text("❌ Модель не выбрана. Начни заново.", reply_markup=None)
+        await callback.answer()
+        return
+
+    model = get_generation_model(model_key)
+    setting_key = get_setting_key_by_index(model, int(setting_index_raw))
+    if setting_key is None:
+        await callback.answer("Настройка не найдена", show_alert=True)
+        return
+
+    user_settings = get_model_state_settings(state_data, model_key)
+    selected_value = get_option_value_by_index(model, setting_key, int(option_index_raw))
+    if selected_value is None:
+        await callback.answer("Некорректное значение", show_alert=True)
+        return
+    user_settings[setting_key] = selected_value
+    await state.update_data(user_settings=user_settings, current_setting_key=None)
+    await state.set_state(GenerationStates.choosing_settings)
+    await render_settings_screen(callback.message, state)
+    await callback.answer()
+
+
+@router.callback_query(lambda cb: cb.data == SETTINGS_CONTINUE)
+async def continue_after_settings(callback: CallbackQuery, state: FSMContext):
+    """Перейти от настроек к загрузке изображения."""
+    await state.set_state(GenerationStates.waiting_for_image)
+    await callback.message.edit_text(
+        "Отправьте изображение как фото или файлом.",
+        reply_markup=None,
     )
     await callback.message.answer(
         "На любом этапе можно отменить сценарий.",
@@ -401,7 +630,7 @@ async def process_generation_image(message: Message, state: FSMContext):
     await state.update_data(input_image_file_id=file_id)
     await state.set_state(GenerationStates.waiting_for_prompt)
     await message.answer(
-        "✍️ Изображение получено. Теперь отправь текстовый prompt.",
+        "Опишите, что нужно изменить на изображении.",
         reply_markup=get_cancel_keyboard(),
     )
 
@@ -426,7 +655,6 @@ async def process_prompt(
         prompt = (message.text or "").strip()
         state_data = await state.get_data()
         model_key = state_data.get("model_key", "nano_banana")
-        model_title = state_data.get("model_title", get_model_config(model_key)["title"])
         input_image_file_id = state_data.get("input_image_file_id")
         
         if not prompt:
@@ -452,23 +680,27 @@ async def process_prompt(
             return
 
         await state.update_data(prompt=prompt)
-        await state.set_state(GenerationStates.waiting_for_confirmation)
-
-        await message.answer(
-            (
-                "📋 <b>Подтверждение генерации</b>\n\n"
-                f"Модель: <b>{escape(model_title)}</b>\n"
-                f"Prompt: <i>{escape(prompt)}</i>"
-            ),
-            reply_markup=get_generation_confirm_keyboard(),
-            parse_mode="HTML",
+        await send_confirmation_screen(
+            message=message,
+            state=state,
+            session=session,
+            telegram_user=message.from_user,
+            edit=False,
         )
     except Exception as e:
         logger.exception("Error in process_prompt: %s", e)
         await message.answer("❌ Произошла ошибка при обработке запроса")
 
 
-@router.callback_query(lambda cb: cb.data == "generation:confirm")
+@router.callback_query(lambda cb: cb.data == SETTINGS_EDIT)
+async def edit_generation_settings(callback: CallbackQuery, state: FSMContext):
+    """Вернуться из подтверждения к настройкам модели."""
+    await state.set_state(GenerationStates.choosing_settings)
+    await render_settings_screen(callback.message, state)
+    await callback.answer()
+
+
+@router.callback_query(lambda cb: cb.data == GENERATION_CONFIRM)
 async def confirm_generation(callback: CallbackQuery, state: FSMContext, session: AsyncSession):
     """Запустить генерацию после подтверждения."""
     user_id = callback.from_user.id
@@ -482,6 +714,7 @@ async def confirm_generation(callback: CallbackQuery, state: FSMContext, session
     model_endpoint = state_data.get("model_endpoint")
     prompt = state_data.get("prompt")
     input_image_file_id = state_data.get("input_image_file_id")
+    user_settings = validate_model_settings(model_key, state_data.get("user_settings")) if model_key else {}
 
     if not all([model_key, model_title, model_endpoint, prompt, input_image_file_id]):
         await callback.message.answer("❌ Данные генерации неполные. Начни заново.", reply_markup=get_main_menu_keyboard())
@@ -496,17 +729,34 @@ async def confirm_generation(callback: CallbackQuery, state: FSMContext, session
     task_started = False
 
     try:
-        telegram_files = TelegramFilesService(callback.bot)
-        temp_media = await telegram_files.download_temp_file_and_get_public_url(input_image_file_id)
-        image_url = temp_media.public_url
-        temp_input_path = str(temp_media.local_path)
-
         user_repo = UserRepository(session)
         generation_repo = GenerationRepository(session)
         user = await user_repo.get_or_create_user_from_telegram(callback.from_user)
         debited_user_id = user.id
 
+        generation_request = await generation_repo.create_generation_request(
+            user_id=user.id,
+            model_key=model_key,
+            model_endpoint=model_endpoint,
+            prompt=prompt,
+            settings=user_settings,
+            input_image_file_ids=[],
+            input_image_urls=[],
+            aspect_ratio=user_settings.get("aspect_ratio"),
+            resolution=user_settings.get("resolution"),
+            size=user_settings.get("size"),
+            output_format=user_settings.get("output_format"),
+            status="created",
+            cost=GENERATION_COST,
+        )
+        generation_request_id = generation_request.id
+
         if not await user_repo.decrease_balance(user.id, GENERATION_COST):
+            await generation_repo.update_generation_status(
+                generation_request_id,
+                "failed",
+                error_message="Недостаточно средств для запуска генерации.",
+            )
             await callback.message.answer(
                 "❌ Недостаточно средств. Пополни баланс и попробуй снова.",
                 reply_markup=get_main_menu_keyboard(),
@@ -516,38 +766,11 @@ async def confirm_generation(callback: CallbackQuery, state: FSMContext, session
             return
         debited_balance = True
 
-        generation_request = await generation_repo.create_generation_request(
-            user_id=user.id,
-            model_key=model_key,
-            model_endpoint=model_endpoint,
-            prompt=prompt,
-            input_image_file_ids=[],
-            input_image_urls=[],
-            cost=GENERATION_COST,
-        )
-        generation_request_id = generation_request.id
-
-        wavespeed = WavespeedService()
-        try:
-            prediction_id, _prediction_payload = await wavespeed.submit_generation(
-                model_key=model_key,
-                images=[image_url],
-                prompt=prompt,
-                options={
-                    "aspect_ratio": state_data.get("aspect_ratio"),
-                    "resolution": state_data.get("resolution"),
-                    "size": state_data.get("size"),
-                    "output_format": state_data.get("output_format"),
-                },
-            )
-        finally:
-            await wavespeed.close()
-
-        await generation_repo.update_generation_status(
-            generation_request.id,
-            "processing",
-            wavespeed_prediction_id=prediction_id,
-        )
+        telegram_files = TelegramFilesService(callback.bot)
+        temp_media = await telegram_files.download_temp_file_and_get_public_url(input_image_file_id)
+        image_url = temp_media.public_url
+        temp_input_path = str(temp_media.local_path)
+        payload = build_payload(model_key, [image_url], prompt, user_settings)
 
         await state.set_state(GenerationStates.generating)
         cancel_event = asyncio.Event()
@@ -557,11 +780,11 @@ async def confirm_generation(callback: CallbackQuery, state: FSMContext, session
                 state=state,
                 user_id=user_id,
                 chat_id=callback.message.chat.id,
-                generation_request_id=generation_request.id,
+                generation_request_id=generation_request_id,
                 model_key=model_key,
-                prediction_id=prediction_id,
                 cost=generation_request.cost,
                 cancel_event=cancel_event,
+                payload=payload,
                 temp_input_path=temp_input_path,
             )
         )
@@ -569,15 +792,13 @@ async def confirm_generation(callback: CallbackQuery, state: FSMContext, session
         ACTIVE_GENERATIONS[user_id] = {
             "task": task,
             "cancel_event": cancel_event,
-            "generation_request_id": generation_request.id,
+            "generation_request_id": generation_request_id,
         }
-        await log_generation_event(generation_request.id, user.id, model_key, "processing")
 
         await callback.message.edit_text(
             (
-                "🚀 Генерация запущена\n\n"
-                f"Модель: <b>{escape(model_title)}</b>\n"
-                "Я буду проверять статус каждые несколько секунд."
+                "Генерация запущена. Обычно это занимает до 1–2 минут.\n\n"
+                f"Модель: <b>{escape(model_title)}</b>"
             ),
             parse_mode="HTML",
         )
@@ -585,46 +806,21 @@ async def confirm_generation(callback: CallbackQuery, state: FSMContext, session
         await callback.answer()
     except ImageUploadError as exc:
         logger.exception("Image upload failed before generation start: %s", exc)
+        if generation_request_id is not None:
+            await GenerationRepository(session).update_generation_status(
+                generation_request_id,
+                "failed",
+                error_message=exc.user_message,
+            )
+        if debited_balance and debited_user_id is not None:
+            try:
+                user_repo = UserRepository(session)
+                await user_repo.increase_balance(debited_user_id, GENERATION_COST)
+            except Exception as refund_exc:
+                logger.exception("Error while refunding balance after image upload failure: %s", refund_exc)
         await state.update_data(input_image_file_id=None)
         await state.set_state(GenerationStates.waiting_for_image)
         await callback.message.answer(exc.user_message, reply_markup=get_cancel_keyboard())
-        await callback.answer()
-    except WavespeedFailedError as exc:
-        logger.exception("Wavespeed failed while launching generation: %s", exc)
-        if generation_request_id is not None:
-            await GenerationRepository(session).update_generation_status(
-                generation_request_id,
-                "failed",
-                error_message=exc.user_message,
-            )
-        if debited_balance and debited_user_id is not None:
-            try:
-                user_repo = UserRepository(session)
-                await user_repo.increase_balance(debited_user_id, GENERATION_COST)
-            except Exception as refund_exc:
-                logger.exception("Error while refunding balance after launch failure: %s", refund_exc)
-        await state.clear()
-        await callback.message.answer(f"❌ {exc.user_message}", reply_markup=get_main_menu_keyboard())
-        await callback.answer()
-    except WavespeedTimeoutError as exc:
-        logger.exception("Wavespeed timeout while launching generation: %s", exc)
-        if generation_request_id is not None:
-            await GenerationRepository(session).update_generation_status(
-                generation_request_id,
-                "failed",
-                error_message=exc.user_message,
-            )
-        if debited_balance and debited_user_id is not None:
-            try:
-                user_repo = UserRepository(session)
-                await user_repo.increase_balance(debited_user_id, GENERATION_COST)
-            except Exception as refund_exc:
-                logger.exception("Error while refunding balance after launch failure: %s", refund_exc)
-        await state.clear()
-        await callback.message.answer(
-            "❌ Генерация заняла слишком много времени. Попробуйте позже.",
-            reply_markup=get_main_menu_keyboard(),
-        )
         await callback.answer()
     except Exception as exc:
         logger.exception("Error while launching generation: %s", exc)
@@ -642,7 +838,7 @@ async def confirm_generation(callback: CallbackQuery, state: FSMContext, session
                 logger.exception("Error while refunding balance after launch failure: %s", refund_exc)
         await state.clear()
         await callback.message.answer(
-            "❌ Не удалось запустить генерацию. Попробуйте позже.",
+            "Генерация не удалась. Кредит возвращён.",
             reply_markup=get_main_menu_keyboard(),
         )
         await callback.answer()
@@ -651,17 +847,13 @@ async def confirm_generation(callback: CallbackQuery, state: FSMContext, session
             await cleanup_generation_file(temp_input_path)
 
 
-@router.callback_query(lambda cb: cb.data == "generation:cancel")
+@router.callback_query(lambda cb: cb.data == GENERATION_CANCEL)
 async def cancel_generation_callback(callback: CallbackQuery, state: FSMContext):
     """Отменить генерацию через inline-кнопку."""
-    is_active = callback.from_user.id in ACTIVE_GENERATIONS
     await cancel_active_generation(callback.from_user.id)
     await reset_generation_state(state)
-    await callback.message.edit_text("❌ Генерация отменена.")
-    if is_active:
-        await callback.message.answer("⏹ Останавливаю активную генерацию.", reply_markup=get_main_menu_keyboard())
-    else:
-        await callback.message.answer("🏠 Главное меню", reply_markup=get_main_menu_keyboard())
+    await callback.message.edit_reply_markup(reply_markup=None)
+    await callback.message.answer("❌ Генерация отменена.", reply_markup=get_main_menu_keyboard())
     await callback.answer()
 
 
@@ -670,6 +862,8 @@ async def cancel_generation_message(message: Message, state: FSMContext):
     """Отменить активный сценарий генерации по кнопке."""
     current_state = await state.get_state()
     if current_state not in {
+        GenerationStates.choosing_settings.state,
+        GenerationStates.choosing_setting_value.state,
         GenerationStates.waiting_for_image.state,
         GenerationStates.waiting_for_prompt.state,
         GenerationStates.waiting_for_confirmation.state,
@@ -682,6 +876,6 @@ async def cancel_generation_message(message: Message, state: FSMContext):
     await cancel_active_generation(message.from_user.id)
     await reset_generation_state(state)
     if is_active:
-        await message.answer("⏹ Останавливаю активную генерацию.", reply_markup=get_main_menu_keyboard())
+        await message.answer("❌ Генерация отменена.", reply_markup=get_main_menu_keyboard())
     else:
-        await message.answer("❌ Сценарий генерации отменен.", reply_markup=get_main_menu_keyboard())
+        await message.answer("❌ Генерация отменена.", reply_markup=get_main_menu_keyboard())

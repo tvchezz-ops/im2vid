@@ -2,6 +2,7 @@
 from app.utils.errors import (
 	AppUserFacingError,
 	ImageUploadError,
+	WavespeedCancelledError,
 	WavespeedError,
 	WavespeedFailedError,
 	WavespeedNetworkError,
@@ -16,6 +17,7 @@ __all__ = [
 	"setup_logging",
 	"AppUserFacingError",
 	"ImageUploadError",
+	"WavespeedCancelledError",
 	"WavespeedError",
 	"WavespeedFailedError",
 	"WavespeedNetworkError",

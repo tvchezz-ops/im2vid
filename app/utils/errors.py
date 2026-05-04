@@ -33,6 +33,10 @@ class WavespeedFailedError(WavespeedError):
     """Wavespeed вернул ошибку выполнения генерации."""
 
 
+class WavespeedCancelledError(WavespeedError):
+    """Генерация была отменена пользователем во время polling."""
+
+
 FORBIDDEN_ERROR_MARKERS = (
     "traceback",
     "authorization",

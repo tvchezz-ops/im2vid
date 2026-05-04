@@ -183,12 +183,15 @@ class GenerationRepository:
         model_key: str,
         model_endpoint: str,
         prompt: str,
+        settings: dict[str, Any] | None = None,
         input_image_file_ids: Optional[list[str]] = None,
         input_image_urls: Optional[list[str]] = None,
         aspect_ratio: Optional[str] = None,
         resolution: Optional[str] = None,
         size: Optional[str] = None,
         output_format: Optional[str] = None,
+        status: str = GenerationRequestStatus.CREATED.value,
+        wavespeed_prediction_id: Optional[str] = None,
         cost: int = 1,
     ) -> GenerationRequest:
         """Создать запрос на генерацию."""
@@ -197,12 +200,15 @@ class GenerationRepository:
             model_key=model_key,
             model_endpoint=model_endpoint,
             prompt=prompt,
+            settings=settings or {},
             input_image_file_ids=[],
             input_image_urls=[],
             aspect_ratio=aspect_ratio,
             resolution=resolution,
             size=size,
             output_format=output_format,
+            status=GenerationRequestStatus(status),
+            wavespeed_prediction_id=wavespeed_prediction_id,
             output_urls=[],
             cost=cost,
         )
@@ -224,6 +230,7 @@ class GenerationRepository:
             model_key="unknown",
             model_endpoint="unknown",
             prompt=prompt,
+            settings={},
             cost=int(cost),
         )
 
@@ -239,7 +246,6 @@ class GenerationRepository:
         generation_id: Any,
         status: str,
         *,
-        output_urls: Optional[list[str]] = None,
         nsfw_flags: Optional[dict[str, Any]] = None,
         error_message: Optional[str] = None,
         wavespeed_prediction_id: Optional[str] = None,
@@ -271,11 +277,9 @@ class GenerationRepository:
         result_url: Optional[str] = None,
     ) -> Optional[GenerationRequest]:
         """Совместимость со старым интерфейсом."""
-        output_urls = [result_url] if result_url else None
         return await self.update_generation_status(
             generation_id,
             status,
-            output_urls=output_urls,
         )
 
 

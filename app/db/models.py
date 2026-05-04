@@ -18,6 +18,7 @@ class GenerationRequestStatus(str, enum.Enum):
     CREATED = "created"
     PROCESSING = "processing"
     COMPLETED = "completed"
+    CANCELLED = "cancelled"
     FAILED = "failed"
 
 
@@ -55,6 +56,7 @@ class GenerationRequest(BaseModel):
     model_key: Mapped[str] = mapped_column(String(100), index=True)
     model_endpoint: Mapped[str] = mapped_column(String(255))
     prompt: Mapped[str] = mapped_column(Text)
+    settings: Mapped[dict[str, Any]] = mapped_column(JSON, nullable=False, default=dict, server_default="{}")
     input_image_file_ids: Mapped[list[str]] = mapped_column(JSON, default=list)
     input_image_urls: Mapped[list[str]] = mapped_column(JSON, default=list)
     aspect_ratio: Mapped[Optional[str]] = mapped_column(String(50), nullable=True)
