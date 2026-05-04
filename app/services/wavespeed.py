@@ -99,14 +99,11 @@ def extract_output_urls(raw_response: Dict[str, Any]) -> list[str]:
 def extract_error_message(raw_response: Dict[str, Any]) -> Optional[str]:
     """Извлечь безопасное сообщение об ошибке из ответа Wavespeed."""
     message_candidates = (
-        raw_response.get("error"),
-        raw_response.get("message"),
-        raw_response.get("error_message"),
         raw_response.get("data", {}).get("error"),
         raw_response.get("data", {}).get("message"),
-        raw_response.get("data", {}).get("error_message"),
-        raw_response.get("result", {}).get("error"),
-        raw_response.get("result", {}).get("message"),
+        raw_response.get("data", {}).get("code"),
+        raw_response.get("error"),
+        raw_response.get("message"),
     )
     for candidate in message_candidates:
         if candidate is None:
@@ -115,6 +112,13 @@ def extract_error_message(raw_response: Dict[str, Any]) -> Optional[str]:
         if sanitized:
             return sanitized
     return None
+
+
+def _sanitize_debug_value(value: Any) -> Optional[str]:
+    """Подготовить безопасное значение для временного debug-лога Wavespeed."""
+    if value is None:
+        return None
+    return sanitize_external_error_message(str(value))
 
 
 def has_nsfw_contents(raw_response: Dict[str, Any]) -> bool:
@@ -194,6 +198,24 @@ class WavespeedService:
                 "status": normalize_status(raw_response),
                 "outputs_count": len(extract_output_urls(raw_response)),
                 "executionTime": extract_execution_time(raw_response),
+            }
+        )
+
+    @staticmethod
+    def _log_failed_response_debug(raw_response: Dict[str, Any]) -> None:
+        """Логировать только безопасные поля failed response для временной диагностики."""
+        data = raw_response.get("data", {}) if isinstance(raw_response.get("data"), dict) else {}
+        logger.info(
+            {
+                "action": "wavespeed_failed_response_debug",
+                "prediction_id": extract_prediction_id(raw_response),
+                "status": normalize_status(raw_response),
+                "data.error": _sanitize_debug_value(data.get("error")),
+                "data.message": _sanitize_debug_value(data.get("message")),
+                "data.code": _sanitize_debug_value(data.get("code")),
+                "error": _sanitize_debug_value(raw_response.get("error")),
+                "message": _sanitize_debug_value(raw_response.get("message")),
+                "model": _sanitize_debug_value(raw_response.get("model") or data.get("model")),
             }
         )
 
@@ -299,6 +321,8 @@ class WavespeedService:
         raw_response = self._safe_json(response)
         self._log_raw_response_debug(raw_response)
         status = normalize_status(raw_response)
+        if status == "failed":
+            self._log_failed_response_debug(raw_response)
         outputs = extract_output_urls(raw_response)
         error_message = extract_error_message(raw_response)
         resolved_prediction_id = extract_prediction_id(raw_response) or prediction_id

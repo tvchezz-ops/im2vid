@@ -39,5 +39,7 @@ def test_normalize_status_handles_failed_and_processing_variants() -> None:
 
 
 def test_extract_error_message_reads_nested_error_fields() -> None:
-    assert extract_error_message({"data": {"error_message": "seedream moderation failed"}}) == "seedream moderation failed"
-    assert extract_error_message({"result": {"message": "model input rejected"}}) == "model input rejected"
+    assert extract_error_message({"data": {"error": "seedream moderation failed"}}) == "seedream moderation failed"
+    assert extract_error_message({"data": {"message": "model input rejected"}}) == "model input rejected"
+    assert extract_error_message({"data": {"code": "seedream_policy_violation"}}) == "seedream_policy_violation"
+    assert extract_error_message({"error": "top-level failure"}) == "top-level failure"

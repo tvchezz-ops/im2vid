@@ -160,7 +160,7 @@ def get_user_friendly_error_message(error: Exception, result: Optional[Wavespeed
             safe_error_message = sanitize_external_error_message(error.user_message)
         if safe_error_message:
             return f"❌ Генерация не удалась. Кредит возвращён.\n\nПричина: {safe_error_message}"
-        return "❌ Генерация не удалась. Кредит возвращён. Попробуйте изменить изображение, описание или настройки."
+        return "❌ Генерация не удалась. Кредит возвращён. Попробуйте другое изображение, описание или размер."
 
     if isinstance(error, TelegramBadRequest):
         return "⚠️ Генерация выполнена, но Telegram не смог доставить результат. Попробуйте позже."
