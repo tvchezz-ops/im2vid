@@ -113,6 +113,18 @@ def has_nsfw_contents(raw_response: Dict[str, Any]) -> bool:
     return False
 
 
+def extract_execution_time(raw_response: Dict[str, Any]) -> Optional[Any]:
+    """Извлечь executionTime из ответа Wavespeed без логирования остальных полей."""
+    return (
+        raw_response.get("executionTime")
+        or raw_response.get("execution_time")
+        or raw_response.get("data", {}).get("executionTime")
+        or raw_response.get("data", {}).get("execution_time")
+        or raw_response.get("result", {}).get("executionTime")
+        or raw_response.get("result", {}).get("execution_time")
+    )
+
+
 class WavespeedService:
     """Сервис для интеграции с Wavespeed API."""
 
@@ -160,11 +172,13 @@ class WavespeedService:
 
     @staticmethod
     def _log_raw_response_debug(raw_response: Dict[str, Any]) -> None:
-        """Логировать сырой ответ Wavespeed для диагностики статуса."""
+        """Логировать только безопасную сводку raw response без URL и payload."""
         logger.info(
             {
-                "action": "wavespeed_raw_response",
-                "raw": raw_response,
+                "prediction_id": extract_prediction_id(raw_response),
+                "status": normalize_status(raw_response),
+                "outputs_count": len(extract_output_urls(raw_response)),
+                "executionTime": extract_execution_time(raw_response),
             }
         )
 

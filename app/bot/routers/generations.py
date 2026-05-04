@@ -2,11 +2,15 @@
 import asyncio
 from html import escape
 from pathlib import Path
+import tempfile
 from typing import Any, Dict, Optional
+from urllib.parse import urlparse
 
 from aiogram import Router
+from aiogram.exceptions import TelegramBadRequest
 from aiogram.fsm.context import FSMContext
-from aiogram.types import CallbackQuery, Message
+from aiogram.types import CallbackQuery, FSInputFile, Message
+import httpx
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.bot.keyboards import (
@@ -322,13 +326,54 @@ async def mark_generation_completed(
 
 
 async def send_generation_outputs(bot, chat_id: int, output_urls: list[str]) -> None:
-    """Отправить пользователю результаты генерации напрямую по URL."""
+    """Отправить пользователю результаты генерации, при необходимости через временный локальный файл."""
     for index, output_url in enumerate(output_urls, start=1):
-        caption = "✅ Генерация завершена" if index == 1 else None
+        caption = "Готово ✅" if index == 1 else None
         try:
             await bot.send_photo(chat_id, output_url, caption=caption)
-        except Exception:
-            await bot.send_document(chat_id, output_url, caption=caption)
+            logger.info(
+                {
+                    "action": "generation_output_delivery",
+                    "outputs_count": len(output_urls),
+                    "delivery_method": "url_photo",
+                }
+            )
+        except TelegramBadRequest as exc:
+            if "wrong type of the web page content" not in str(exc).lower():
+                raise
+            temp_output_path = await download_output_file_to_temp(output_url)
+            try:
+                await bot.send_document(
+                    chat_id,
+                    FSInputFile(temp_output_path),
+                    caption=caption,
+                )
+                logger.info(
+                    {
+                        "action": "generation_output_delivery",
+                        "outputs_count": len(output_urls),
+                        "delivery_method": "downloaded_document",
+                    }
+                )
+            finally:
+                Path(temp_output_path).unlink(missing_ok=True)
+
+
+async def download_output_file_to_temp(output_url: str) -> str:
+    """Скачать output-файл во временный файл для последующей отправки в Telegram."""
+    suffix = Path(urlparse(output_url).path).suffix or ".bin"
+    temp_file = tempfile.NamedTemporaryFile(prefix="wavespeed-output-", suffix=suffix, delete=False)
+    temp_path = temp_file.name
+    temp_file.close()
+    try:
+        async with httpx.AsyncClient(timeout=60.0, follow_redirects=True) as client:
+            response = await client.get(output_url)
+            response.raise_for_status()
+        Path(temp_path).write_bytes(response.content)
+        return temp_path
+    except Exception:
+        Path(temp_path).unlink(missing_ok=True)
+        raise
 
 
 async def cleanup_generation_file(temp_input_path: str | None) -> None:
