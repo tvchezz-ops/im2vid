@@ -4,7 +4,6 @@ from html import escape
 from pathlib import Path
 import tempfile
 from typing import Any, Dict, Optional
-from urllib.parse import urlparse
 
 from aiogram import Router
 from aiogram.exceptions import TelegramBadRequest
@@ -331,48 +330,85 @@ async def send_generation_outputs(bot, chat_id: int, output_urls: list[str]) -> 
         caption = "Готово ✅" if index == 1 else None
         try:
             await bot.send_photo(chat_id, output_url, caption=caption)
-            logger.info(
-                {
-                    "action": "generation_output_delivery",
-                    "outputs_count": len(output_urls),
-                    "delivery_method": "url_photo",
-                }
-            )
+            log_generation_output_delivery(len(output_urls), "url_photo")
         except TelegramBadRequest as exc:
-            if "wrong type of the web page content" not in str(exc).lower():
-                raise
-            temp_output_path = await download_output_file_to_temp(output_url)
+            logger.warning(
+                "Telegram rejected Wavespeed URL delivery; switching to temporary download fallback: %s",
+                type(exc).__name__,
+            )
+            temp_output_path: Optional[str] = None
             try:
+                temp_output_path, is_image = await download_output_file_to_temp(output_url)
+                input_file = FSInputFile(temp_output_path)
+                if is_image:
+                    try:
+                        await bot.send_photo(chat_id, input_file, caption=caption)
+                        log_generation_output_delivery(len(output_urls), "downloaded_photo")
+                        continue
+                    except Exception:
+                        input_file = FSInputFile(temp_output_path)
+
                 await bot.send_document(
                     chat_id,
-                    FSInputFile(temp_output_path),
+                    input_file,
                     caption=caption,
                 )
-                logger.info(
-                    {
-                        "action": "generation_output_delivery",
-                        "outputs_count": len(output_urls),
-                        "delivery_method": "downloaded_document",
-                    }
+                log_generation_output_delivery(len(output_urls), "downloaded_document")
+            except Exception as delivery_exc:
+                log_generation_output_delivery(len(output_urls), "delivery_failed")
+                logger.warning(
+                    "Failed to deliver completed Wavespeed output via Telegram fallback: %s",
+                    type(delivery_exc).__name__,
+                )
+                await bot.send_message(
+                    chat_id,
+                    "Генерация готова, но Telegram не смог получить файл. Попробуйте позже.",
                 )
             finally:
-                Path(temp_output_path).unlink(missing_ok=True)
+                if temp_output_path is not None:
+                    Path(temp_output_path).unlink(missing_ok=True)
 
 
-async def download_output_file_to_temp(output_url: str) -> str:
+def log_generation_output_delivery(outputs_count: int, delivery_method: str) -> None:
+    """Логировать только безопасные метаданные доставки результатов генерации."""
+    logger.info(
+        {
+            "action": "generation_output_delivery",
+            "outputs_count": outputs_count,
+            "delivery_method": delivery_method,
+        }
+    )
+
+
+def get_output_suffix_and_type(content_type: str | None) -> tuple[str, bool]:
+    """Определить расширение временного output-файла и является ли он изображением."""
+    normalized_content_type = (content_type or "").split(";", 1)[0].strip().lower()
+    if normalized_content_type.startswith("image/"):
+        if normalized_content_type == "image/png":
+            return ".png", True
+        return ".jpg", True
+    return ".bin", False
+
+
+async def download_output_file_to_temp(output_url: str) -> tuple[str, bool]:
     """Скачать output-файл во временный файл для последующей отправки в Telegram."""
-    suffix = Path(urlparse(output_url).path).suffix or ".bin"
-    temp_file = tempfile.NamedTemporaryFile(prefix="wavespeed-output-", suffix=suffix, delete=False)
-    temp_path = temp_file.name
-    temp_file.close()
+    response: Optional[httpx.Response] = None
+    temp_path: Optional[str] = None
+    is_image = False
     try:
         async with httpx.AsyncClient(timeout=60.0, follow_redirects=True) as client:
             response = await client.get(output_url)
             response.raise_for_status()
+
+        suffix, is_image = get_output_suffix_and_type(response.headers.get("content-type"))
+        temp_file = tempfile.NamedTemporaryFile(prefix="wavespeed-output-", suffix=suffix, delete=False)
+        temp_path = temp_file.name
+        temp_file.close()
         Path(temp_path).write_bytes(response.content)
-        return temp_path
+        return temp_path, is_image
     except Exception:
-        Path(temp_path).unlink(missing_ok=True)
+        if temp_path is not None:
+            Path(temp_path).unlink(missing_ok=True)
         raise
 
 
