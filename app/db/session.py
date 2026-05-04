@@ -11,13 +11,34 @@ from app.config import settings
 from app.utils import logger
 
 
+def normalize_database_url(database_url: str) -> str:
+    """Нормализовать DATABASE_URL для async SQLAlchemy engine."""
+    normalized_url = database_url.strip()
+    if normalized_url.startswith("postgres://"):
+        return normalized_url.replace("postgres://", "postgresql+asyncpg://", 1)
+    if normalized_url.startswith("postgresql://"):
+        return normalized_url.replace("postgresql://", "postgresql+asyncpg://", 1)
+    return normalized_url
+
+
+def detect_database_backend(database_url: str) -> str:
+    """Определить тип БД без вывода полного URL."""
+    if database_url.startswith("sqlite"):
+        return "sqlite"
+    if database_url.startswith("postgresql+asyncpg"):
+        return "postgresql"
+    return database_url.split(":", 1)[0]
+
+
 class DatabaseManager:
     """Менеджер для управления БД."""
 
     def __init__(self, database_url: str):
         """Инициализация."""
+        normalized_database_url = normalize_database_url(database_url)
+        logger.info("Using database backend: %s", detect_database_backend(normalized_database_url))
         self.engine = create_async_engine(
-            database_url,
+            normalized_database_url,
             echo=False,  # Отключаем echo в production
             future=True,
         )
