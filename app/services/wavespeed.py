@@ -91,8 +91,12 @@ class WavespeedService:
         )
 
     def _log_raw_response(self, action: str, payload: Dict[str, Any]) -> None:
-        """Логировать raw response без утечки API ключа."""
-        logger.info("Wavespeed %s raw response: %s", action, payload)
+        """Логировать только безопасную сводку ответа Wavespeed."""
+        logger.info(
+            "status=%s output_files=%s",
+            self._normalize_status(payload),
+            len(self._extract_outputs(payload)),
+        )
 
     @staticmethod
     def get_safe_api_error_message(payload: Dict[str, Any]) -> Optional[str]:
@@ -144,27 +148,25 @@ class WavespeedService:
                     if isinstance(exc, httpx.TimeoutException):
                         raise WavespeedTimeoutError(
                             "Генерация заняла слишком много времени. Попробуйте позже.",
-                            log_message=f"Wavespeed request timeout for {prediction_id}: {exc}",
+                            log_message="Wavespeed request timeout",
                         ) from exc
                     raise WavespeedNetworkError(
                         "Не удалось получить статус генерации. Попробуйте позже.",
-                        log_message=f"Wavespeed network error for {prediction_id}: {exc}",
+                        log_message="Wavespeed network error",
                     ) from exc
                 backoff_seconds = self.BASE_BACKOFF_SECONDS * (2 ** attempt)
                 logger.warning(
-                    "Wavespeed get_result network error for %s, retry %s/%s in %ss: %s",
-                    prediction_id,
+                    "status=processing output_files=0 retry=%s/%s backoff_seconds=%s",
                     attempt + 1,
                     self.MAX_RESULT_RETRIES,
                     backoff_seconds,
-                    exc,
                 )
                 await asyncio.sleep(backoff_seconds)
 
         if response is None:
             raise WavespeedNetworkError(
                 "Не удалось получить статус генерации. Попробуйте позже.",
-                log_message=f"Wavespeed response is missing for {prediction_id}: {last_request_error}",
+                log_message="Wavespeed response is missing",
             )
         try:
             response.raise_for_status()
@@ -184,7 +186,7 @@ class WavespeedService:
         if status == "completed" and not outputs:
             raise WavespeedFailedError(
                 "Сервис генерации вернул пустой результат. Попробуйте позже.",
-                log_message=f"Wavespeed completed response has empty outputs for {prediction_id}",
+                log_message="Wavespeed completed response has empty outputs",
             )
         return raw_response
 
@@ -205,12 +207,12 @@ class WavespeedService:
                 safe_message = self.get_safe_api_error_message(raw_response)
                 raise WavespeedFailedError(
                     safe_message or "Генерация завершилась с ошибкой. Попробуйте позже.",
-                    log_message=f"Wavespeed returned failed status for {prediction_id}: {raw_response}",
+                    log_message="Wavespeed returned failed status",
                 )
             await asyncio.sleep(interval)
         raise WavespeedTimeoutError(
             "Генерация заняла слишком много времени. Попробуйте позже.",
-            log_message=f"Wavespeed polling timed out after {timeout_seconds} seconds for {prediction_id}",
+            log_message="Wavespeed polling timed out",
         )
 
     @staticmethod

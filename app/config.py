@@ -62,7 +62,23 @@ class Settings(BaseSettings):
     wavespeed_api_key: str = Field(..., description="API ключ для Wavespeed")
     public_base_url: str = Field(
         ...,
-        description="Публичный базовый URL для доступа к локально сохраненным media-файлам",
+        description="Публичный базовый URL для доступа к временным media-файлам",
+    )
+    temp_media_dir: str = Field(
+        default="tmp/media",
+        description="Директория для временных входных media-файлов",
+    )
+    temp_media_ttl_minutes: int = Field(
+        default=30,
+        description="TTL временных media-файлов в минутах",
+    )
+    store_input_media: bool = Field(
+        default=False,
+        description="Флаг совместимости: не сохранять входные media в БД",
+    )
+    store_output_urls: bool = Field(
+        default=False,
+        description="Флаг совместимости: не сохранять output URL в БД",
     )
     
     # Database
@@ -105,6 +121,10 @@ except Exception as e:
         f"- BOT_TOKEN\n"
         f"- WAVESPEED_API_KEY\n"
         f"- PUBLIC_BASE_URL\n"
+        f"- TEMP_MEDIA_DIR (опционально, по умолчанию tmp/media)\n"
+        f"- TEMP_MEDIA_TTL_MINUTES (опционально, по умолчанию 30)\n"
+        f"- STORE_INPUT_MEDIA (опционально, по умолчанию false)\n"
+        f"- STORE_OUTPUT_URLS (опционально, по умолчанию false)\n"
         f"- DATABASE_URL (опционально, есть значение по умолчанию)\n"
         f"- ADMIN_IDS (опционально, список чисел через запятую)"
     ) from e

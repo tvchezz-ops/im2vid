@@ -1,5 +1,6 @@
 """Главное приложение."""
 import asyncio
+import os
 import signal
 from typing import Optional, Set
 
@@ -20,8 +21,7 @@ from app.config import settings
 from app.db import Base, db_manager
 from app.services.telegram_files import (
     MEDIA_BIND_HOST,
-    MEDIA_BIND_PORT,
-    cleanup_old_media_files,
+    cleanup_old_temp_media_files,
     create_media_app,
     ensure_public_base_url,
 )
@@ -70,20 +70,16 @@ class TelegramBot:
             raise
 
     async def start_media_server(self):
-        """Поднять локальный static endpoint для media-файлов."""
-        public_base_url = ensure_public_base_url()
-        cleanup_old_media_files()
+        """Поднять локальный static endpoint для временных media-файлов."""
+        port = int(os.getenv("PORT", 8080))
+        ensure_public_base_url()
+        cleanup_old_temp_media_files()
         app = create_media_app()
         self.media_runner = web.AppRunner(app)
         await self.media_runner.setup()
-        site = web.TCPSite(self.media_runner, host=MEDIA_BIND_HOST, port=MEDIA_BIND_PORT)
+        site = web.TCPSite(self.media_runner, host=MEDIA_BIND_HOST, port=port)
         await site.start()
-        logger.info(
-            "Media server started on %s:%s with public base %s",
-            MEDIA_BIND_HOST,
-            MEDIA_BIND_PORT,
-            public_base_url,
-        )
+        logger.info("Media server started on 0.0.0.0:%s", port)
 
     async def start(self):
         """Запустить бота."""

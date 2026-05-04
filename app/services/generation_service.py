@@ -118,7 +118,7 @@ class GenerationService:
                 model_endpoint=model.endpoint,
                 prompt=prompt,
                 cost=cost,
-                input_image_urls=image_urls,
+                input_image_urls=[],
                 aspect_ratio=(options or {}).get("aspect_ratio"),
                 resolution=(options or {}).get("resolution"),
                 size=(options or {}).get("size"),

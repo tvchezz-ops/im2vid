@@ -125,8 +125,26 @@ from .myrouter import router as my_router
 
 See `.env.example` для полного списка доступных переменных.
 
-Для сценария генерации `PUBLIC_BASE_URL` обязателен: бот сохраняет изображения из Telegram в локальную папку `media/` и публикует их через встроенный static endpoint `aiohttp` на `http://127.0.0.1:8080/media/...`.
+Для сценария генерации `PUBLIC_BASE_URL` обязателен: бот временно скачивает входное изображение в `TEMP_MEDIA_DIR` и публикует его через встроенный static endpoint `aiohttp` на `http://127.0.0.1:${PORT:-8080}/media/...`.
 Если Wavespeed должен забрать файл извне, `PUBLIC_BASE_URL` должен указывать не на localhost, а на публичный URL туннеля или reverse proxy, который ведет на этот локальный endpoint.
+На Railway media server слушает порт из переменной окружения `PORT`; локально без `PORT` используется fallback `8080`.
+
+Дополнительные переменные:
+
+```env
+TEMP_MEDIA_DIR=tmp/media
+TEMP_MEDIA_TTL_MINUTES=30
+STORE_INPUT_MEDIA=false
+STORE_OUTPUT_URLS=false
+```
+
+## No Media Storage Policy
+
+- Бот не хранит входные изображения пользователей на постоянной основе.
+- Бот не хранит результаты генерации на сервере.
+- Бот не сохраняет URL результатов Wavespeed в базе данных.
+- Временный файл нужен только для того, чтобы Wavespeed смог забрать входное изображение по публичному URL.
+- После завершения генерации временный входной файл удаляется независимо от результата: `completed`, `failed`, `timeout` или `cancel`.
 
 ## Лицензия
 

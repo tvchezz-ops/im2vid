@@ -197,12 +197,13 @@ class GenerationRepository:
             model_key=model_key,
             model_endpoint=model_endpoint,
             prompt=prompt,
-            input_image_file_ids=input_image_file_ids or [],
-            input_image_urls=input_image_urls or [],
+            input_image_file_ids=[],
+            input_image_urls=[],
             aspect_ratio=aspect_ratio,
             resolution=resolution,
             size=size,
             output_format=output_format,
+            output_urls=[],
             cost=cost,
         )
         self.session.add(generation)
@@ -247,8 +248,9 @@ class GenerationRepository:
         generation = await self.get_by_id(generation_id)
         if generation:
             generation.status = GenerationRequestStatus(status)
-            if output_urls is not None:
-                generation.output_urls = output_urls
+            generation.input_image_file_ids = []
+            generation.input_image_urls = []
+            generation.output_urls = []
             if nsfw_flags is not None:
                 generation.nsfw_flags = nsfw_flags
             if error_message is not None:

@@ -1,6 +1,7 @@
 """Роутер генерации контента."""
 import asyncio
 from html import escape
+from pathlib import Path
 from typing import Any, Dict, Optional
 
 from aiogram import Router
@@ -83,6 +84,86 @@ def extract_output_urls(payload: Dict[str, Any]) -> list[str]:
     return []
 
 
+async def log_generation_event(
+    generation_id,
+    user_id: int,
+    model_key: str,
+    status: str,
+    output_count: int = 0,
+) -> None:
+    """Логировать только безопасные метаданные генерации."""
+    logger.info(
+        "generation_id=%s user_id=%s model_key=%s status=%s output_files=%s",
+        generation_id,
+        user_id,
+        model_key,
+        status,
+        output_count,
+    )
+
+
+async def mark_generation_failed(
+    *,
+    generation_request_id,
+    user_id: int,
+    model_key: str,
+    cost: int,
+    error_message: str,
+    refund_credit: bool,
+) -> None:
+    """Обновить статус генерации как failed и при необходимости вернуть кредит."""
+    async with db_manager.session_factory() as session:
+        generation_repo = GenerationRepository(session)
+        user_repo = UserRepository(session)
+        await generation_repo.update_generation_status(
+            generation_request_id,
+            "failed",
+            error_message=error_message,
+        )
+        if refund_credit:
+            await user_repo.increase_balance(user_id, cost)
+        await user_repo.increment_user_generation_stats(user_id, success=False)
+    await log_generation_event(generation_request_id, user_id, model_key, "failed")
+
+
+async def mark_generation_completed(
+    *,
+    generation_request_id,
+    user_id: int,
+    model_key: str,
+    nsfw_flags: Optional[dict[str, Any]],
+    output_count: int,
+) -> None:
+    """Обновить статус генерации как completed без сохранения output URLs."""
+    async with db_manager.session_factory() as session:
+        generation_repo = GenerationRepository(session)
+        user_repo = UserRepository(session)
+        await generation_repo.update_generation_status(
+            generation_request_id,
+            "completed",
+            output_urls=[],
+            nsfw_flags=nsfw_flags,
+        )
+        await user_repo.increment_user_generation_stats(user_id, success=True)
+    await log_generation_event(generation_request_id, user_id, model_key, "completed", output_count)
+
+
+async def send_generation_outputs(bot, chat_id: int, output_urls: list[str]) -> None:
+    """Отправить пользователю результаты генерации напрямую по URL."""
+    for index, output_url in enumerate(output_urls, start=1):
+        caption = "✅ Генерация завершена" if index == 1 else None
+        try:
+            await bot.send_photo(chat_id, output_url, caption=caption)
+        except Exception:
+            await bot.send_document(chat_id, output_url, caption=caption)
+
+
+async def cleanup_generation_file(temp_input_path: str | None) -> None:
+    """Удалить временный входной файл после завершения сценария."""
+    if temp_input_path:
+        Path(temp_input_path).unlink(missing_ok=True)
+
+
 async def reset_generation_state(state: FSMContext) -> None:
     """Сбросить FSM генерации и промежуточные данные."""
     await state.clear()
@@ -102,9 +183,11 @@ async def poll_generation_result(
     user_id: int,
     chat_id: int,
     generation_request_id,
+    model_key: str,
     prediction_id: str,
     cost: int,
     cancel_event: asyncio.Event,
+    temp_input_path: str,
 ) -> None:
     """Опросить Wavespeed до завершения генерации."""
     wavespeed = WavespeedService()
@@ -112,15 +195,14 @@ async def poll_generation_result(
         started = asyncio.get_running_loop().time()
         while asyncio.get_running_loop().time() - started < POLL_TIMEOUT_SECONDS:
             if cancel_event.is_set():
-                async with db_manager.session_factory() as session:
-                    generation_repo = GenerationRepository(session)
-                    user_repo = UserRepository(session)
-                    await generation_repo.update_generation_status(
-                        generation_request_id,
-                        "failed",
-                        error_message="Cancelled by user",
-                    )
-                    await user_repo.increment_user_generation_stats(user_id, success=False)
+                await mark_generation_failed(
+                    generation_request_id=generation_request_id,
+                    user_id=user_id,
+                    model_key=model_key,
+                    cost=cost,
+                    error_message="Cancelled by user",
+                    refund_credit=True,
+                )
                 return
 
             status_payload = await wavespeed.get_result(prediction_id)
@@ -128,28 +210,27 @@ async def poll_generation_result(
 
             if status == "completed":
                 output_urls = extract_output_urls(status_payload)
-                async with db_manager.session_factory() as session:
-                    generation_repo = GenerationRepository(session)
-                    user_repo = UserRepository(session)
-                    await generation_repo.update_generation_status(
-                        generation_request_id,
-                        "completed",
-                        output_urls=output_urls,
-                        nsfw_flags=status_payload.get("nsfw_flags"),
+                if not output_urls:
+                    await mark_generation_failed(
+                        generation_request_id=generation_request_id,
+                        user_id=user_id,
+                        model_key=model_key,
+                        cost=cost,
+                        error_message="Сервис генерации вернул пустой результат. Попробуйте позже.",
+                        refund_credit=True,
                     )
-                    await user_repo.increment_user_generation_stats(user_id, success=True)
+                    await bot.send_message(chat_id, "❌ Сервис генерации вернул пустой результат. Попробуйте позже.")
+                    await bot.send_message(chat_id, "🏠 Главное меню", reply_markup=get_main_menu_keyboard())
+                    return
 
-                await reset_generation_state(state)
-                if output_urls:
-                    try:
-                        await bot.send_photo(chat_id, output_urls[0], caption="✅ Генерация завершена")
-                    except Exception:
-                        await bot.send_message(
-                            chat_id,
-                            "✅ Генерация завершена. Результат:\n" + "\n".join(output_urls),
-                        )
-                else:
-                    await bot.send_message(chat_id, "✅ Генерация завершена, но Wavespeed не вернул output URL.")
+                await mark_generation_completed(
+                    generation_request_id=generation_request_id,
+                    user_id=user_id,
+                    model_key=model_key,
+                    nsfw_flags=status_payload.get("nsfw_flags"),
+                    output_count=len(output_urls),
+                )
+                await send_generation_outputs(bot, chat_id, output_urls)
                 await bot.send_message(chat_id, "🏠 Главное меню", reply_markup=get_main_menu_keyboard())
                 return
 
@@ -157,35 +238,28 @@ async def poll_generation_result(
                 error_message = sanitize_external_error_message(
                     status_payload.get("error") or status_payload.get("error_message") or status_payload.get("message")
                 ) or "Генерация завершилась с ошибкой. Попробуйте позже."
-                async with db_manager.session_factory() as session:
-                    generation_repo = GenerationRepository(session)
-                    user_repo = UserRepository(session)
-                    await generation_repo.update_generation_status(
-                        generation_request_id,
-                        "failed",
-                        error_message=error_message,
-                    )
-                    await user_repo.increase_balance(user_id, cost)
-                    await user_repo.increment_user_generation_stats(user_id, success=False)
-
-                await reset_generation_state(state)
+                await mark_generation_failed(
+                    generation_request_id=generation_request_id,
+                    user_id=user_id,
+                    model_key=model_key,
+                    cost=cost,
+                    error_message=error_message,
+                    refund_credit=True,
+                )
                 await bot.send_message(chat_id, f"❌ Генерация завершилась с ошибкой:\n{error_message}")
                 await bot.send_message(chat_id, "🏠 Главное меню", reply_markup=get_main_menu_keyboard())
                 return
 
             await asyncio.sleep(POLL_INTERVAL_SECONDS)
 
-        async with db_manager.session_factory() as session:
-            generation_repo = GenerationRepository(session)
-            user_repo = UserRepository(session)
-            await generation_repo.update_generation_status(
-                generation_request_id,
-                "failed",
-                error_message="Timeout while waiting for generation result",
-            )
-            await user_repo.increment_user_generation_stats(user_id, success=False)
-
-        await reset_generation_state(state)
+        await mark_generation_failed(
+            generation_request_id=generation_request_id,
+            user_id=user_id,
+            model_key=model_key,
+            cost=cost,
+            error_message="Timeout while waiting for generation result",
+            refund_credit=True,
+        )
         await bot.send_message(
             chat_id,
             "❌ Генерация заняла слишком много времени. Попробуйте позже.",
@@ -193,16 +267,14 @@ async def poll_generation_result(
         )
     except WavespeedTimeoutError as exc:
         logger.exception("Wavespeed timeout while polling generation result: %s", exc)
-        async with db_manager.session_factory() as session:
-            generation_repo = GenerationRepository(session)
-            user_repo = UserRepository(session)
-            await generation_repo.update_generation_status(
-                generation_request_id,
-                "failed",
-                error_message=exc.user_message,
-            )
-            await user_repo.increment_user_generation_stats(user_id, success=False)
-        await reset_generation_state(state)
+        await mark_generation_failed(
+            generation_request_id=generation_request_id,
+            user_id=user_id,
+            model_key=model_key,
+            cost=cost,
+            error_message=exc.user_message,
+            refund_credit=True,
+        )
         await bot.send_message(
             chat_id,
             "❌ Генерация заняла слишком много времени. Попробуйте позже.",
@@ -210,30 +282,25 @@ async def poll_generation_result(
         )
     except WavespeedFailedError as exc:
         logger.exception("Wavespeed failed while polling generation result: %s", exc)
-        async with db_manager.session_factory() as session:
-            generation_repo = GenerationRepository(session)
-            user_repo = UserRepository(session)
-            await generation_repo.update_generation_status(
-                generation_request_id,
-                "failed",
-                error_message=exc.user_message,
-            )
-            await user_repo.increase_balance(user_id, cost)
-            await user_repo.increment_user_generation_stats(user_id, success=False)
-        await reset_generation_state(state)
+        await mark_generation_failed(
+            generation_request_id=generation_request_id,
+            user_id=user_id,
+            model_key=model_key,
+            cost=cost,
+            error_message=exc.user_message,
+            refund_credit=True,
+        )
         await bot.send_message(chat_id, f"❌ {exc.user_message}", reply_markup=get_main_menu_keyboard())
     except WavespeedNetworkError as exc:
         logger.exception("Wavespeed network error while polling generation result: %s", exc)
-        async with db_manager.session_factory() as session:
-            generation_repo = GenerationRepository(session)
-            user_repo = UserRepository(session)
-            await generation_repo.update_generation_status(
-                generation_request_id,
-                "failed",
-                error_message=exc.user_message,
-            )
-            await user_repo.increment_user_generation_stats(user_id, success=False)
-        await reset_generation_state(state)
+        await mark_generation_failed(
+            generation_request_id=generation_request_id,
+            user_id=user_id,
+            model_key=model_key,
+            cost=cost,
+            error_message=exc.user_message,
+            refund_credit=True,
+        )
         await bot.send_message(
             chat_id,
             "❌ Не удалось получить статус генерации. Попробуйте позже.",
@@ -241,19 +308,19 @@ async def poll_generation_result(
         )
     except Exception as exc:
         logger.exception("Error while polling generation result: %s", exc)
-        async with db_manager.session_factory() as session:
-            generation_repo = GenerationRepository(session)
-            user_repo = UserRepository(session)
-            await generation_repo.update_generation_status(
-                generation_request_id,
-                "failed",
-                error_message=str(exc),
-            )
-            await user_repo.increment_user_generation_stats(user_id, success=False)
-        await reset_generation_state(state)
+        await mark_generation_failed(
+            generation_request_id=generation_request_id,
+            user_id=user_id,
+            model_key=model_key,
+            cost=cost,
+            error_message="Не удалось завершить генерацию. Попробуйте позже.",
+            refund_credit=True,
+        )
         await bot.send_message(chat_id, "❌ Ошибка при получении результата генерации.", reply_markup=get_main_menu_keyboard())
     finally:
         ACTIVE_GENERATIONS.pop(user_id, None)
+        await cleanup_generation_file(temp_input_path)
+        await reset_generation_state(state)
         await wavespeed.close()
 
 
@@ -424,10 +491,15 @@ async def confirm_generation(callback: CallbackQuery, state: FSMContext, session
 
     debited_balance = False
     debited_user_id: Optional[int] = None
+    generation_request_id = None
+    temp_input_path: Optional[str] = None
+    task_started = False
 
     try:
         telegram_files = TelegramFilesService(callback.bot)
-        image_url = await telegram_files.save_telegram_file_and_get_public_url(input_image_file_id)
+        temp_media = await telegram_files.download_temp_file_and_get_public_url(input_image_file_id)
+        image_url = temp_media.public_url
+        temp_input_path = str(temp_media.local_path)
 
         user_repo = UserRepository(session)
         generation_repo = GenerationRepository(session)
@@ -449,14 +521,15 @@ async def confirm_generation(callback: CallbackQuery, state: FSMContext, session
             model_key=model_key,
             model_endpoint=model_endpoint,
             prompt=prompt,
-            input_image_file_ids=[input_image_file_id],
-            input_image_urls=[image_url],
+            input_image_file_ids=[],
+            input_image_urls=[],
             cost=GENERATION_COST,
         )
+        generation_request_id = generation_request.id
 
         wavespeed = WavespeedService()
         try:
-            prediction_id, prediction_payload = await wavespeed.submit_generation(
+            prediction_id, _prediction_payload = await wavespeed.submit_generation(
                 model_key=model_key,
                 images=[image_url],
                 prompt=prompt,
@@ -485,22 +558,25 @@ async def confirm_generation(callback: CallbackQuery, state: FSMContext, session
                 user_id=user_id,
                 chat_id=callback.message.chat.id,
                 generation_request_id=generation_request.id,
+                model_key=model_key,
                 prediction_id=prediction_id,
                 cost=generation_request.cost,
                 cancel_event=cancel_event,
+                temp_input_path=temp_input_path,
             )
         )
+        task_started = True
         ACTIVE_GENERATIONS[user_id] = {
             "task": task,
             "cancel_event": cancel_event,
             "generation_request_id": generation_request.id,
         }
+        await log_generation_event(generation_request.id, user.id, model_key, "processing")
 
         await callback.message.edit_text(
             (
                 "🚀 Генерация запущена\n\n"
                 f"Модель: <b>{escape(model_title)}</b>\n"
-                f"Prediction ID: <code>{escape(prediction_id)}</code>\n\n"
                 "Я буду проверять статус каждые несколько секунд."
             ),
             parse_mode="HTML",
@@ -515,6 +591,12 @@ async def confirm_generation(callback: CallbackQuery, state: FSMContext, session
         await callback.answer()
     except WavespeedFailedError as exc:
         logger.exception("Wavespeed failed while launching generation: %s", exc)
+        if generation_request_id is not None:
+            await GenerationRepository(session).update_generation_status(
+                generation_request_id,
+                "failed",
+                error_message=exc.user_message,
+            )
         if debited_balance and debited_user_id is not None:
             try:
                 user_repo = UserRepository(session)
@@ -526,6 +608,12 @@ async def confirm_generation(callback: CallbackQuery, state: FSMContext, session
         await callback.answer()
     except WavespeedTimeoutError as exc:
         logger.exception("Wavespeed timeout while launching generation: %s", exc)
+        if generation_request_id is not None:
+            await GenerationRepository(session).update_generation_status(
+                generation_request_id,
+                "failed",
+                error_message=exc.user_message,
+            )
         if debited_balance and debited_user_id is not None:
             try:
                 user_repo = UserRepository(session)
@@ -540,6 +628,12 @@ async def confirm_generation(callback: CallbackQuery, state: FSMContext, session
         await callback.answer()
     except Exception as exc:
         logger.exception("Error while launching generation: %s", exc)
+        if generation_request_id is not None:
+            await GenerationRepository(session).update_generation_status(
+                generation_request_id,
+                "failed",
+                error_message="Не удалось запустить генерацию. Попробуйте позже.",
+            )
         if debited_balance and debited_user_id is not None:
             try:
                 user_repo = UserRepository(session)
@@ -552,6 +646,9 @@ async def confirm_generation(callback: CallbackQuery, state: FSMContext, session
             reply_markup=get_main_menu_keyboard(),
         )
         await callback.answer()
+    finally:
+        if not task_started:
+            await cleanup_generation_file(temp_input_path)
 
 
 @router.callback_query(lambda cb: cb.data == "generation:cancel")
