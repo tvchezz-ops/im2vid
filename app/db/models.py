@@ -19,6 +19,7 @@ class GenerationRequestStatus(str, enum.Enum):
     PROCESSING = "processing"
     COMPLETED = "completed"
     CANCELLED = "cancelled"
+    TIMEOUT = "timeout"
     FAILED = "failed"
 
 

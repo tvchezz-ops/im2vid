@@ -46,7 +46,7 @@ from app.utils import (
 router = Router()
 
 ACTIVE_GENERATIONS: Dict[int, Dict[str, Any]] = {}
-POLL_TIMEOUT_SECONDS = 120
+POLL_TIMEOUT_SECONDS = 300
 GENERATION_COST = 1
 
 MODEL_PREFIX = "gen:model:"
@@ -262,20 +262,21 @@ async def mark_generation_failed(
     cost: int,
     error_message: str,
     refund_credit: bool,
+    status: str = "failed",
 ) -> None:
-    """Обновить статус генерации как failed и при необходимости вернуть кредит."""
+    """Обновить terminal failed-like статус генерации и при необходимости вернуть кредит."""
     async with db_manager.session_factory() as session:
         generation_repo = GenerationRepository(session)
         user_repo = UserRepository(session)
         await generation_repo.update_generation_status(
             generation_request_id,
-            "failed",
+            status,
             error_message=error_message,
         )
         if refund_credit:
             await user_repo.increase_balance(user_id, cost)
         await user_repo.increment_user_generation_stats(user_id, success=False)
-    await log_generation_event(generation_request_id, user_id, model_key, "failed")
+    await log_generation_event(generation_request_id, user_id, model_key, status)
 
 
 async def mark_generation_cancelled(
@@ -420,12 +421,13 @@ async def poll_generation_result(
             user_id=user_id,
             model_key=model_key,
             cost=cost,
-            error_message=exc.user_message,
+            error_message="Wavespeed polling timed out",
             refund_credit=True,
+            status="timeout",
         )
         await bot.send_message(
             chat_id,
-            "Генерация не удалась. Кредит возвращён.",
+            exc.user_message,
             reply_markup=get_main_menu_keyboard(),
         )
     except WavespeedFailedError as exc:

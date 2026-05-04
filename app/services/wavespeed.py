@@ -200,7 +200,7 @@ class WavespeedService:
                 if attempt >= self.MAX_RESULT_RETRIES:
                     if isinstance(exc, httpx.TimeoutException):
                         raise WavespeedTimeoutError(
-                            "Генерация заняла слишком много времени. Попробуйте позже.",
+                            "Генерация ещё обрабатывается. Попробуйте позже или запустите заново.",
                             log_message="Wavespeed request timeout",
                         ) from exc
                     raise WavespeedNetworkError(
@@ -270,7 +270,7 @@ class WavespeedService:
         self,
         prediction_id: str,
         cancel_event: Optional[asyncio.Event] = None,
-        timeout_seconds: int = 180,
+        timeout_seconds: int = 300,
         interval: int = 4,
     ) -> WavespeedResult:
         """Опросить Wavespeed до terminal status, отмены или таймаута."""
@@ -315,7 +315,7 @@ class WavespeedService:
                 )
 
         raise WavespeedTimeoutError(
-            "Генерация заняла слишком много времени. Попробуйте позже.",
+            "Генерация ещё обрабатывается. Попробуйте позже или запустите заново.",
             log_message="Wavespeed polling timed out",
         )
 
