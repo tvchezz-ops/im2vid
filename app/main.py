@@ -69,6 +69,11 @@ class TelegramBot:
             logger.exception("Error creating database tables: %s", e)
             raise
 
+    @staticmethod
+    def should_create_tables() -> bool:
+        """Разрешить create_all только в локальном dev-режиме."""
+        return os.getenv("ENV", "").strip().lower() == "dev"
+
     async def start_media_server(self):
         """Поднять локальный static endpoint для временных media-файлов."""
         port = int(os.getenv("PORT", 8080))
@@ -86,8 +91,11 @@ class TelegramBot:
         logger.info("Starting Telegram bot...")
         
         try:
-            # Создание таблиц
-            await self.create_tables()
+            # Создание таблиц только в локальном dev-режиме.
+            if self.should_create_tables():
+                await self.create_tables()
+            else:
+                logger.info("Skipping automatic database schema creation; use Alembic migrations")
             
             # Установка команд
             await self.setup_commands()
