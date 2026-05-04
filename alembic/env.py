@@ -1,6 +1,13 @@
 """Alembic environment configuration."""
 import asyncio
+import sys
 from logging.config import fileConfig
+from pathlib import Path
+
+
+ROOT_DIR = Path(__file__).resolve().parents[1]
+if str(ROOT_DIR) not in sys.path:
+    sys.path.insert(0, str(ROOT_DIR))
 
 from sqlalchemy import pool
 from sqlalchemy.ext.asyncio import async_engine_from_config
