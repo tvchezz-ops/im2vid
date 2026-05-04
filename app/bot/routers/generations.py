@@ -8,11 +8,12 @@ from typing import Any, Dict, Optional
 from aiogram import Router
 from aiogram.exceptions import TelegramBadRequest
 from aiogram.fsm.context import FSMContext
-from aiogram.types import CallbackQuery, FSInputFile, Message
+from aiogram.types import CallbackQuery, FSInputFile, Message, ReplyKeyboardRemove
 import httpx
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.bot.keyboards import (
+    build_back_to_settings_keyboard,
     build_generation_confirm_keyboard,
     build_model_selection_keyboard,
     build_model_settings_keyboard,
@@ -179,19 +180,51 @@ async def render_models_screen(message: Message) -> None:
 
 async def render_settings_screen(message: Message, state: FSMContext) -> None:
     """Показать экран настроек выбранной модели."""
+    await render_settings_screen_message(message, state, edit=True)
+
+
+async def render_settings_screen_message(message: Message, state: FSMContext, *, edit: bool) -> None:
+    """Показать экран настроек выбранной модели через edit или обычное сообщение."""
     state_data = await state.get_data()
     model_key = state_data.get("model_key")
     if not model_key:
-        await message.edit_text("❌ Модель не выбрана. Начни заново.", reply_markup=None)
+        if edit:
+            await message.edit_text("❌ Модель не выбрана. Начни заново.", reply_markup=None)
+        else:
+            await message.answer("❌ Модель не выбрана. Начни заново.", reply_markup=get_main_menu_keyboard())
         await message.answer("🏠 Главное меню", reply_markup=get_main_menu_keyboard())
         return
 
     model = get_generation_model(model_key)
     user_settings = get_model_state_settings(state_data, model_key)
-    await message.edit_text(
+    if edit:
+        await message.edit_text(
+            build_settings_text(model, user_settings),
+            reply_markup=build_model_settings_keyboard(model, user_settings),
+            parse_mode="HTML",
+        )
+        return
+
+    await message.answer(
         build_settings_text(model, user_settings),
         reply_markup=build_model_settings_keyboard(model, user_settings),
         parse_mode="HTML",
+    )
+
+
+async def prompt_for_generation_image(message: Message, *, edit: bool) -> None:
+    """Показать шаг загрузки изображения с reply keyboard возврата к настройкам."""
+    if edit:
+        await message.edit_text(
+            "Отправьте изображение как фото или файлом.",
+            reply_markup=None,
+        )
+    else:
+        await message.answer("Отправьте изображение как фото или файлом.")
+
+    await message.answer(
+        "Если передумали, можно вернуться к настройкам.",
+        reply_markup=build_back_to_settings_keyboard(),
     )
 
 
@@ -682,15 +715,16 @@ async def choose_setting_value(callback: CallbackQuery, state: FSMContext):
 async def continue_after_settings(callback: CallbackQuery, state: FSMContext):
     """Перейти от настроек к загрузке изображения."""
     await state.set_state(GenerationStates.waiting_for_image)
-    await callback.message.edit_text(
-        "Отправьте изображение как фото или файлом.",
-        reply_markup=None,
-    )
-    await callback.message.answer(
-        "После загрузки изображения отправьте текстовое описание изменений.",
-        reply_markup=get_main_menu_keyboard(),
-    )
+    await prompt_for_generation_image(callback.message, edit=True)
     await callback.answer()
+
+
+@router.message(GenerationStates.waiting_for_image, lambda message: message.text == "⬅️ Назад к настройкам")
+async def back_to_settings_from_image_step(message: Message, state: FSMContext):
+    """Вернуться с этапа загрузки изображения к настройкам модели без потери выбранных значений."""
+    await state.set_state(GenerationStates.choosing_settings)
+    await message.answer("Возвращаю к настройкам модели.", reply_markup=ReplyKeyboardRemove())
+    await render_settings_screen_message(message, state, edit=False)
 
 
 @router.message(GenerationStates.waiting_for_image, lambda message: bool(message.photo) or bool(message.document))
@@ -711,7 +745,7 @@ async def process_generation_image(message: Message, state: FSMContext):
     await state.set_state(GenerationStates.waiting_for_prompt)
     await message.answer(
         "Опишите, что нужно изменить на изображении.",
-        reply_markup=get_main_menu_keyboard(),
+        reply_markup=ReplyKeyboardRemove(),
     )
 
 
@@ -720,7 +754,7 @@ async def invalid_generation_image(message: Message):
     """Сообщить, что ожидается изображение."""
     await message.answer(
         "❌ Я жду изображение. Отправь фото Telegram или document с форматом image/*.",
-        reply_markup=get_main_menu_keyboard(),
+        reply_markup=build_back_to_settings_keyboard(),
     )
 
 
@@ -744,7 +778,7 @@ async def process_prompt(
             await message.answer("❌ Описание слишком короткое (минимум 10 символов)")
             return
         if not input_image_file_id:
-            await message.answer("❌ Сначала отправь изображение.", reply_markup=get_main_menu_keyboard())
+            await message.answer("❌ Сначала отправь изображение.", reply_markup=build_back_to_settings_keyboard())
             await state.set_state(GenerationStates.waiting_for_image)
             return
         

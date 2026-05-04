@@ -69,6 +69,15 @@ def get_back_to_menu_keyboard() -> ReplyKeyboardMarkup:
     )
 
 
+def build_back_to_settings_keyboard() -> ReplyKeyboardMarkup:
+    """Reply keyboard для возврата с этапа загрузки изображения к настройкам."""
+    return ReplyKeyboardMarkup(
+        keyboard=[[KeyboardButton(text="⬅️ Назад к настройкам")]],
+        resize_keyboard=True,
+        one_time_keyboard=False,
+    )
+
+
 def build_model_selection_keyboard(models: Iterable[Any]) -> InlineKeyboardMarkup:
     """Построить клавиатуру выбора модели из реестра."""
     rows = [
