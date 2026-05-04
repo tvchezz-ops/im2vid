@@ -1,0 +1,12 @@
+.env
+venv/
+.venv/
+__pycache__/
+*.pyc
+media/
+bot.db
+*.db
+*.sqlite
+*.sqlite3
+.DS_Store
+.pytest_cache/
