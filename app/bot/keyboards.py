@@ -24,7 +24,6 @@ PROVIDER_LABELS = {
     "openai": "OpenAI",
     "bytedance": "ByteDance",
     "google": "Google",
-    "midjourney": "Midjourney",
 }
 
 

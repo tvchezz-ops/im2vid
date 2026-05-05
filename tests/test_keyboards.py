@@ -47,6 +47,7 @@ def test_build_providers_keyboard_uses_expected_callback_prefix() -> None:
     callback_data = [button.callback_data for button in buttons]
     assert "gen:provider:google" in callback_data
     assert "gen:provider:bytedance" in callback_data
+    assert "gen:provider:midjourney" not in callback_data
 
 
 def test_build_models_keyboard_uses_passed_models_only() -> None:

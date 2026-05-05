@@ -102,40 +102,6 @@ def test_build_payload_seedream_custom_settings() -> None:
     assert payload["enable_base64_output"] is False
 
 
-def test_build_payload_omits_negative_seed_for_alibaba_wan() -> None:
-    payload = build_payload(
-        "alibaba_wan_2_6_text_to_image",
-        [],
-        "Generate a product hero shot",
-        {"seed": "-1"},
-    )
-
-    assert "seed" not in payload
-
-
-def test_build_payload_keeps_non_negative_seed_as_integer() -> None:
-    payload = build_payload(
-        "alibaba_wan_2_6_text_to_image",
-        [],
-        "Generate a product hero shot",
-        {"seed": "42"},
-    )
-
-    assert payload["seed"] == 42
-    assert isinstance(payload["seed"], int)
-
-
-def test_build_payload_ignores_non_numeric_seed() -> None:
-    payload = build_payload(
-        "bytedance_seedream_v3_1",
-        [],
-        "Generate a concept art shot",
-        {"seed": "not-a-number"},
-    )
-
-    assert "seed" not in payload
-
-
 def test_build_payload_multi_image_models_keep_all_uploaded_images() -> None:
     payload = build_payload(
         "nano_banana",
@@ -325,17 +291,6 @@ def test_generation_model_exposes_new_fields_and_legacy_aliases() -> None:
     assert model.max_images == 14
 
 
-def test_seed_settings_expose_random_and_fixed_description() -> None:
-    wan_seed = get_generation_model("alibaba_wan_2_6_text_to_image").user_settings["seed"]
-    happyhorse_seed = get_generation_model("alibaba_happyhorse_1_0_text_to_video").user_settings["seed"]
-    seedream_seed = get_generation_model("bytedance_seedream_v3_1").user_settings["seed"]
-
-    assert wan_seed.title == "Seed"
-    assert wan_seed.description == "-1 = случайный\n>=0 = фиксированный"
-    assert happyhorse_seed.description == "-1 = случайный\n>=0 = фиксированный"
-    assert seedream_seed.description == "-1 = случайный\n>=0 = фиксированный"
-
-
 def test_generation_registry_constants_include_supported_values() -> None:
     assert GENERATION_TYPES == [
         "text_to_image",
@@ -350,7 +305,6 @@ def test_generation_registry_constants_include_supported_values() -> None:
         "openai",
         "bytedance",
         "google",
-        "midjourney",
     ]
 
 def test_required_input_type_helpers_follow_generation_type() -> None:
@@ -493,13 +447,30 @@ def test_enabled_models_have_settings_or_explicit_empty_state() -> None:
 def test_model_specific_defaults_are_used_for_docs_confirmed_models() -> None:
     model = get_generation_model("alibaba_wan_2_6_text_to_image")
 
-    assert set(model.user_settings) == {"width", "height", "enable_prompt_expansion", "seed"}
+    assert set(model.user_settings) == {"width", "height"}
     assert get_default_settings(model.key) == {
         "width": "1024",
         "height": "1024",
-        "enable_prompt_expansion": "false",
-        "seed": "-1",
     }
+
+
+def test_seed_is_not_exposed_for_any_enabled_model() -> None:
+    for model in list_generation_models():
+        assert "seed" not in model.user_settings
+
+
+def test_prompt_expansion_is_not_exposed_for_any_enabled_model() -> None:
+    for model in list_generation_models():
+        assert "enable_prompt_expansion" not in model.user_settings
+
+
+def test_negative_prompt_is_exposed_only_for_models_that_support_it() -> None:
+    for model in list_generation_models():
+        has_negative_prompt_setting = "negative_prompt" in model.user_settings
+        supports_negative_prompt = "negative_prompt" in model.allowed_payload_fields
+        assert has_negative_prompt_setting is supports_negative_prompt
+        if has_negative_prompt_setting:
+            assert model.user_settings["negative_prompt"].description == "Что нужно исключить из результата"
 
 
 def test_unverified_openai_models_are_disabled() -> None:
@@ -516,16 +487,36 @@ def test_build_payload_keeps_allowed_fields_for_known_models() -> None:
         "alibaba_wan_2_6_text_to_image",
         [],
         "Generate a poster",
-        {"width": "1280", "height": "1536", "seed": "42", "unknown": "ignored"},
+        {"width": "1280", "height": "1536", "unknown": "ignored"},
     )
 
     assert payload == {
         "prompt": "Generate a poster",
         "width": "1280",
         "height": "1536",
-        "enable_prompt_expansion": "false",
-        "seed": 42,
     }
+
+
+def test_empty_negative_prompt_is_not_added_to_payload() -> None:
+    payload = build_payload(
+        "alibaba_wan_2_6_text_to_video",
+        [],
+        "Generate a sunrise drone shot",
+        {"negative_prompt": ""},
+    )
+
+    assert "negative_prompt" not in payload
+
+
+def test_filled_negative_prompt_is_added_to_payload() -> None:
+    payload = build_payload(
+        "alibaba_wan_2_6_text_to_video",
+        [],
+        "Generate a sunrise drone shot",
+        {"negative_prompt": "blur, noise"},
+    )
+
+    assert payload["negative_prompt"] == "blur, noise"
 
 
 def test_build_payload_maps_media_fields_per_model_contract() -> None:
@@ -610,7 +601,7 @@ def test_list_generation_types_returns_only_types_present_in_registry() -> None:
 
 
 def test_list_providers_returns_only_providers_present_in_registry() -> None:
-    assert list_providers() == ["alibaba", "openai", "bytedance", "google", "midjourney"]
+    assert list_providers() == ["alibaba", "openai", "bytedance", "google"]
 
 
 def test_list_models_by_type_returns_only_matching_models() -> None:
@@ -637,7 +628,6 @@ def test_list_models_by_provider_returns_only_matching_models() -> None:
         {model.key for model in bytedance_models}
     )
     assert list_models_by_provider("openai") == []
-    assert list_models_by_provider("midjourney") == []
 
 
 def test_list_models_by_type_and_provider_returns_intersection() -> None:

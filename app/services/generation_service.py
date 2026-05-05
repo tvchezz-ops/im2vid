@@ -113,7 +113,6 @@ PROVIDERS = [
     "openai",
     "bytedance",
     "google",
-    "midjourney",
 ]
 
 
@@ -279,6 +278,23 @@ def _normalize_seed_setting(settings: Mapping[str, Any]) -> dict[str, Any]:
             "used_seed": used_seed,
         }
     )
+    return normalized_settings
+
+
+def _remove_empty_optional_text_settings(
+    model: GenerationModel,
+    settings: Mapping[str, Any],
+) -> dict[str, Any]:
+    """Убрать пустые optional text settings из payload-настроек."""
+    normalized_settings = dict(settings)
+    for setting_key, setting in model.user_settings.items():
+        value = normalized_settings.get(setting_key)
+        if setting.type != "text":
+            continue
+        if setting_key in model.required_payload_fields:
+            continue
+        if isinstance(value, str) and not value.strip():
+            normalized_settings.pop(setting_key, None)
     return normalized_settings
 
 
@@ -464,8 +480,6 @@ MODEL_REGISTRY = build_model_registry((
         user_settings={
             "width": _select_setting("width", "Ширина", "1024", ("512", "768", "1024", "1280", "1536")),
             "height": _select_setting("height", "Высота", "1024", ("512", "768", "1024", "1280", "1536")),
-            "enable_prompt_expansion": _select_setting("enable_prompt_expansion", "Улучшение prompt", "false", ("false", "true")),
-            "seed": _text_setting("seed", "Seed", "-1", "-1 = случайный\n>=0 = фиксированный"),
         },
     ),
     _model(
@@ -483,7 +497,7 @@ MODEL_REGISTRY = build_model_registry((
         allowed_payload_fields=("prompt", "negative_prompt", "audio", "size"),
         user_settings={
             "size": _select_setting("size", "Размер", "1280*720", ("1280*720", "720*1280", "1920*1080", "1080*1920")),
-            "negative_prompt": _text_setting("negative_prompt", "Negative prompt", ""),
+            "negative_prompt": _text_setting("negative_prompt", "Negative prompt", "", "Что нужно исключить из результата"),
         },
     ),
     _model(
@@ -523,7 +537,7 @@ MODEL_REGISTRY = build_model_registry((
             "resolution": _select_setting("resolution", "Разрешение", "1080p", ("1080p", "2k", "4k")),
             "duration": _select_setting("duration", "Длительность", "5", ("5", "8", "10", "15")),
             "shot_type": _select_setting("shot_type", "Тип кадра", "single", ("single", "multi")),
-            "negative_prompt": _text_setting("negative_prompt", "Negative prompt", ""),
+            "negative_prompt": _text_setting("negative_prompt", "Negative prompt", "", "Что нужно исключить из результата"),
         },
     ),
     _model(
@@ -546,7 +560,7 @@ MODEL_REGISTRY = build_model_registry((
             "resolution": _select_setting("resolution", "Разрешение", "720p", ("720p", "1080p")),
             "duration": _select_setting("duration", "Длительность", "15", ("5", "8", "10", "15")),
             "shot_type": _select_setting("shot_type", "Тип кадра", "single", ("single", "multi")),
-            "negative_prompt": _text_setting("negative_prompt", "Negative prompt", ""),
+            "negative_prompt": _text_setting("negative_prompt", "Negative prompt", "", "Что нужно исключить из результата"),
         },
     ),
     _model(
@@ -583,7 +597,6 @@ MODEL_REGISTRY = build_model_registry((
             "aspect_ratio": _select_setting("aspect_ratio", "Формат", "16:9", ("16:9", "9:16", "1:1", "4:3", "3:4")),
             "resolution": _select_setting("resolution", "Разрешение", "720p", ("720p", "1080p")),
             "duration": _select_setting("duration", "Длительность", "5", ("3", "5", "8", "10", "15")),
-            "seed": _text_setting("seed", "Seed", "-1", "-1 = случайный\n>=0 = фиксированный"),
         },
     ),
     _model(
@@ -761,8 +774,6 @@ MODEL_REGISTRY = build_model_registry((
         allowed_payload_fields=("prompt", "size", "seed", "enable_prompt_expansion", "enable_sync_mode", "enable_base64_output"),
         user_settings={
             "size": _select_setting("size", "Размер", "1024*1024", ("512*512", "768*768", "1024*1024", "1280*720", "720*1280", "2048*2048")),
-            "seed": _text_setting("seed", "Seed", "-1", "-1 = случайный\n>=0 = фиксированный"),
-            "enable_prompt_expansion": _select_setting("enable_prompt_expansion", "Улучшение prompt", "false", ("false", "true")),
         },
         system_settings=COMMON_IMAGE_SYSTEM_SETTINGS,
     ),
@@ -1056,7 +1067,10 @@ def build_payload(
 
     cleaned_prompt = prompt.strip()
     valid_inputs = [image_url.strip() for image_url in image_urls if image_url.strip()]
-    validated_settings = _normalize_seed_setting(validate_model_settings(model_key, user_settings))
+    validated_settings = _remove_empty_optional_text_settings(
+        model,
+        _normalize_seed_setting(validate_model_settings(model_key, user_settings)),
+    )
 
     if model.generation_type == "lipsync":
         media_url = valid_inputs[0] if valid_inputs else ""

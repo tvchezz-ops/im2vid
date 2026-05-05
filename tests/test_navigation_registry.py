@@ -115,6 +115,12 @@ def test_all_list_returns_all_providers() -> None:
     assert list_providers() == PROVIDERS
 
 
+def test_midjourney_is_removed_from_provider_lists_and_keyboard() -> None:
+    assert list_providers() == ["alibaba", "openai", "bytedance", "google"]
+    provider_callbacks = _iter_callback_data(build_providers_keyboard())
+    assert "gen:provider:midjourney" not in provider_callbacks
+
+
 def test_each_enabled_model_has_required_metadata_and_builds_payload() -> None:
     for model in list_generation_models():
         assert model.provider

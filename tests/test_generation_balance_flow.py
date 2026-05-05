@@ -195,19 +195,6 @@ async def test_choose_provider_shows_provider_models() -> None:
 
 
 @pytest.mark.asyncio
-async def test_choose_provider_shows_midjourney_placeholder_when_models_absent() -> None:
-    state = FakeState({"selected_generation_type": "all"})
-    message = FakeMessage(chat_id=404)
-    callback = FakeCallback(user_id=404, message=message, data="gen:provider:midjourney")
-
-    await generations.choose_provider(callback, state)
-
-    assert state.state == GenerationStates.choosing_provider
-    assert state.data["selected_provider"] is None
-    assert message.edits[-1] == "У этого провайдера пока нет подключённых моделей"
-
-
-@pytest.mark.asyncio
 async def test_back_to_generation_models_returns_to_provider_filtered_models() -> None:
     state = FakeState(
         {
@@ -280,6 +267,64 @@ async def test_open_setting_selector_and_choose_setting_value_for_model_with_set
     await generations.choose_setting_value(choose_callback, state)
 
     assert state.data["user_settings"]["aspect_ratio"] == "16:9"
+
+
+@pytest.mark.asyncio
+async def test_open_setting_selector_for_text_setting_switches_to_text_input() -> None:
+    state = FakeState(
+        {
+            "model_key": "alibaba_wan_2_6_text_to_video",
+            "user_settings": {"size": "1280*720", "negative_prompt": ""},
+        }
+    )
+    message = FakeMessage(chat_id=451)
+    callback = FakeCallback(user_id=451, message=message, data="gen:setting:negative_prompt")
+
+    await generations.open_setting_selector(callback, state)
+
+    assert state.state == GenerationStates.waiting_for_setting_text
+    assert state.data["current_setting_key"] == "negative_prompt"
+    assert "Параметр: <b>Negative prompt</b>" in message.edits[-1]
+    assert "Что нужно исключить из результата" in message.edits[-1]
+
+
+@pytest.mark.asyncio
+async def test_process_text_setting_value_saves_text_and_returns_to_settings() -> None:
+    state = FakeState(
+        {
+            "model_key": "alibaba_wan_2_6_text_to_video",
+            "current_setting_key": "negative_prompt",
+            "user_settings": {"size": "1280*720", "negative_prompt": ""},
+        }
+    )
+    state.state = GenerationStates.waiting_for_setting_text
+    message = FakeMessage(chat_id=452)
+    message.text = "blur, noise"
+
+    await generations.process_text_setting_value(message, state)
+
+    assert state.state == GenerationStates.choosing_settings
+    assert state.data["user_settings"]["negative_prompt"] == "blur, noise"
+    assert message.answers[0] == "Значение сохранено."
+
+
+@pytest.mark.asyncio
+async def test_process_text_setting_value_clears_dash_to_empty_string() -> None:
+    state = FakeState(
+        {
+            "model_key": "alibaba_wan_2_6_text_to_video",
+            "current_setting_key": "negative_prompt",
+            "user_settings": {"size": "1280*720", "negative_prompt": "existing"},
+        }
+    )
+    state.state = GenerationStates.waiting_for_setting_text
+    message = FakeMessage(chat_id=453)
+    message.text = "-"
+
+    await generations.process_text_setting_value(message, state)
+
+    assert state.state == GenerationStates.choosing_settings
+    assert state.data["user_settings"]["negative_prompt"] == ""
 
 
 @pytest.mark.asyncio

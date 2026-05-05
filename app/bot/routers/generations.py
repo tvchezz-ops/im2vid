@@ -179,7 +179,6 @@ PROVIDER_LABELS = {
     "openai": "OpenAI",
     "bytedance": "ByteDance",
     "google": "Google",
-    "midjourney": "Midjourney",
 }
 
 
@@ -247,7 +246,7 @@ def build_setting_value_text(model: GenerationModel, setting_key: str, current_v
             f"Настройки модели: <b>{escape(model.title)}</b>\n\n"
             f"Параметр: <b>{escape(setting.title)}</b>\n"
             f"Текущее значение: <code>{escape(current_value)}</code>\n\n"
-            f"Для текстовых параметров сейчас используется сохранённое значение по умолчанию.{description_block}"
+            f"Отправьте новое текстовое значение сообщением. Отправьте <code>-</code>, чтобы очистить поле.{description_block}"
         )
     options = "\n".join(f"• <code>{escape(option.value)}</code>" for option in setting.options)
     return (
@@ -1309,6 +1308,9 @@ async def choose_provider(callback: CallbackQuery, state: FSMContext):
     """Выбрать провайдера и показать его модели."""
     log_generation_callback(callback)
     provider = callback.data.removeprefix(PROVIDER_PREFIX)
+    if provider not in list_providers():
+        await callback.answer("Провайдер недоступен", show_alert=True)
+        return
     models = list_models_by_provider(provider)
     if not models:
         await state.set_state(GenerationStates.choosing_provider)
@@ -1411,7 +1413,23 @@ async def open_setting_selector(callback: CallbackQuery, state: FSMContext):
     if setting_key not in model.user_settings:
         await callback.answer("Настройка не найдена", show_alert=True)
         return
+    setting = model.user_settings[setting_key]
     await state.update_data(current_setting_key=setting_key)
+    if setting.type == "text":
+        user_settings = get_model_state_settings(state_data, model_key)
+        current_value = str(user_settings.get(setting_key, setting.default))
+        await state.set_state(GenerationStates.waiting_for_setting_text)
+        await callback.message.edit_text(
+            build_setting_value_text(model, setting_key, current_value),
+            reply_markup=None,
+            parse_mode="HTML",
+        )
+        await callback.message.answer(
+            "Если передумали, можно вернуться к настройкам.",
+            reply_markup=build_back_to_settings_keyboard(),
+        )
+        await callback.answer()
+        return
     await state.set_state(GenerationStates.choosing_setting_value)
     await show_setting_options(callback.message, state, setting_key)
     await callback.answer()
@@ -1425,6 +1443,47 @@ async def back_to_settings(callback: CallbackQuery, state: FSMContext):
     await state.update_data(current_setting_key=None)
     await render_settings_screen(callback.message, state)
     await callback.answer()
+
+
+@router.message(GenerationStates.waiting_for_setting_text, lambda message: message.text == "⬅️ Назад к настройкам")
+async def back_to_settings_from_text_setting(message: Message, state: FSMContext):
+    """Вернуться с текстового ввода настройки к экрану настроек модели."""
+    await state.set_state(GenerationStates.choosing_settings)
+    await state.update_data(current_setting_key=None)
+    await message.answer("Возвращаю к настройкам модели.", reply_markup=ReplyKeyboardRemove())
+    await render_settings_screen_message(message, state, edit=False)
+
+
+@router.message(GenerationStates.waiting_for_setting_text)
+async def process_text_setting_value(message: Message, state: FSMContext):
+    """Сохранить текстовое значение настройки и вернуть пользователя к настройкам модели."""
+    state_data = await state.get_data()
+    model_key = state_data.get("model_key")
+    setting_key = state_data.get("current_setting_key")
+    if not model_key or not setting_key:
+        await message.answer(format_user_error(ErrorCode.E010_INTERNAL_ERROR, "настройка не выбрана."))
+        return
+
+    model = get_generation_model(model_key)
+    if setting_key not in model.user_settings:
+        await message.answer(format_user_error(ErrorCode.E010_INTERNAL_ERROR, "настройка недоступна."))
+        return
+
+    if message_contains_file(message):
+        await message.answer(
+            format_user_error(ErrorCode.E001_INVALID_INPUT_TYPE, "нужно отправить текстовое значение настройки."),
+            reply_markup=build_back_to_settings_keyboard(),
+        )
+        return
+
+    raw_text = (message.text or "").strip()
+    value = "" if raw_text in {"", "-"} else raw_text
+    user_settings = get_model_state_settings(state_data, model_key)
+    user_settings[str(setting_key)] = value
+    await state.update_data(user_settings=user_settings, current_setting_key=None)
+    await state.set_state(GenerationStates.choosing_settings)
+    await message.answer("Значение сохранено.", reply_markup=ReplyKeyboardRemove())
+    await render_settings_screen_message(message, state, edit=False)
 
 
 @router.callback_query(lambda cb: cb.data.startswith(SETTINGS_VALUE_PREFIX))
