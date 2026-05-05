@@ -146,11 +146,10 @@ async def test_show_generation_menu_starts_with_generation_type_selection() -> N
 
     assert state.state == GenerationStates.choosing_generation_type
     assert "Выберите тип генерации:" in message.answers[-1]
-    assert "Lipsync (озвучка лица)" in message.answers[-1]
-    assert "Анимация лица под аудио или текст" in message.answers[-1]
+    assert "Text → Video" in message.answers[-1]
     keyboard = message.answer_markups[-1]
     callback_data = [row[0].callback_data for row in keyboard.inline_keyboard[:-1]]
-    assert "gen:section:lipsync" in callback_data
+    assert "gen:section:lipsync" not in callback_data
 
 
 @pytest.mark.asyncio
@@ -245,7 +244,7 @@ async def test_back_to_generation_types_from_provider_screen() -> None:
     assert state.data["selected_generation_type"] is None
     assert state.data["selected_provider"] is None
     assert "Выберите тип генерации:" in message.edits[-1]
-    assert "Lipsync (озвучка лица)" in message.edits[-1]
+    assert "Text → Video" in message.edits[-1]
 
 
 @pytest.mark.asyncio
@@ -270,6 +269,28 @@ async def test_unknown_generation_callback_shows_fallback_alert_screen() -> None
 
     assert state.state == GenerationStates.choosing_generation_type
     assert "Выберите тип генерации:" in message.edits[-1]
+
+
+@pytest.mark.asyncio
+async def test_open_setting_selector_and_choose_setting_value_for_model_with_settings() -> None:
+    state = FakeState(
+        {
+            "model_key": "nano_banana",
+            "user_settings": {"aspect_ratio": "1:1", "resolution": "4k", "output_format": "png"},
+        }
+    )
+    message = FakeMessage(chat_id=450)
+    open_callback = FakeCallback(user_id=450, message=message, data="gen:setting:aspect_ratio")
+
+    await generations.open_setting_selector(open_callback, state)
+
+    assert state.data["current_setting_key"] == "aspect_ratio"
+    assert "Параметр: <b>Формат</b>" in message.edits[-1]
+
+    choose_callback = FakeCallback(user_id=450, message=message, data="gen:set:aspect_ratio:8")
+    await generations.choose_setting_value(choose_callback, state)
+
+    assert state.data["user_settings"]["aspect_ratio"] == "16:9"
 
 
 @pytest.mark.asyncio

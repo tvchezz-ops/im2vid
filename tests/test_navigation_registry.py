@@ -121,7 +121,14 @@ def test_each_enabled_model_has_required_metadata_and_builds_payload() -> None:
         assert model.generation_type
         assert model.endpoint
         assert model.docs_url
+        assert model.required_payload_fields
         assert _build_minimal_payload_for_model(model)
+
+
+def test_enabled_model_payloads_stay_within_allowed_fields() -> None:
+    for model in list_generation_models():
+        payload = _build_minimal_payload_for_model(model)
+        assert set(payload).issubset(set(model.allowed_payload_fields))
 
 
 def test_callback_data_of_all_navigation_keyboards_fit_telegram_limit() -> None:

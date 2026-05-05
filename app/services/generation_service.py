@@ -58,12 +58,17 @@ class GenerationModel:
     outputs: str
     is_enabled: bool = True
     warning: str = ""
+    required_payload_fields: tuple[str, ...] = ()
+    allowed_payload_fields: tuple[str, ...] = ()
+    input_schema: dict[str, Any] = field(default_factory=dict)
     user_settings: dict[str, GenerationSetting] = field(default_factory=dict)
     system_settings: dict[str, Any] = field(default_factory=dict)
 
     @property
     def required_fields(self) -> tuple[str, ...]:
         """Совместимость со старой схемой обязательных полей."""
+        if self.required_payload_fields:
+            return self.required_payload_fields
         fields: list[str] = []
         if self.generation_type == "lipsync":
             fields.append("image_or_video")
@@ -160,6 +165,12 @@ def build_model_registry(models: tuple[GenerationModel, ...]) -> dict[str, Gener
         generation_type = normalize_generation_type(generation_type)
         if generation_type != model.generation_type:
             model = replace(model, generation_type=generation_type)
+        if not model.required_payload_fields:
+            model = replace(model, required_payload_fields=get_default_required_payload_fields(model))
+        if not model.allowed_payload_fields:
+            model = replace(model, allowed_payload_fields=get_default_allowed_payload_fields(model))
+        if not model.input_schema:
+            model = replace(model, input_schema=build_input_schema(model))
         if model.provider not in PROVIDERS:
             raise ValueError(f"Unsupported provider '{model.provider}' for model '{model.key}'")
         if model.generation_type not in GENERATION_TYPES:
@@ -192,6 +203,20 @@ def _select_setting(
     )
 
 
+def _text_setting(
+    key: str,
+    title: str,
+    default: str,
+) -> GenerationSetting:
+    return GenerationSetting(
+        key=key,
+        title=title,
+        type="text",
+        default=default,
+        options=(),
+    )
+
+
 def _api_endpoint(provider: str, path: str) -> str:
     return f"https://api.wavespeed.ai/api/v3/{provider}/{path}"
 
@@ -217,6 +242,9 @@ def _model(
     max_images: int = 1,
     is_enabled: bool = True,
     warning: str = "",
+    required_payload_fields: tuple[str, ...] = (),
+    allowed_payload_fields: tuple[str, ...] = (),
+    input_schema: Optional[dict[str, Any]] = None,
     user_settings: Optional[dict[str, GenerationSetting]] = None,
     system_settings: Optional[dict[str, Any]] = None,
 ) -> GenerationModel:
@@ -236,6 +264,9 @@ def _model(
         outputs=outputs,
         is_enabled=is_enabled,
         warning=warning,
+        required_payload_fields=required_payload_fields,
+        allowed_payload_fields=allowed_payload_fields,
+        input_schema=input_schema or {},
         user_settings=user_settings or {},
         system_settings=system_settings or {},
     )
@@ -292,6 +323,43 @@ COMMON_IMAGE_SYSTEM_SETTINGS = {
 }
 
 
+def get_default_allowed_payload_fields(model: GenerationModel) -> tuple[str, ...]:
+    """Получить безопасный whitelist payload-полей по умолчанию для модели."""
+    fields: list[str] = []
+    if model.generation_type == "lipsync":
+        fields.extend(["image", "video", "text", "audio"])
+    else:
+        if model.requires_prompt:
+            fields.append("prompt")
+        if model.requires_video:
+            fields.append("video")
+        if model.requires_image:
+            fields.append("image" if model.outputs == "video" else "images")
+    fields.extend(str(key) for key in model.system_settings.keys())
+    return tuple(dict.fromkeys(fields))
+
+
+def get_default_required_payload_fields(model: GenerationModel) -> tuple[str, ...]:
+    """Получить обязательные payload-поля по умолчанию на основе сигнатуры модели."""
+    return model.required_fields
+
+
+def build_input_schema(model: GenerationModel) -> dict[str, Any]:
+    """Собрать декларативное описание допустимых параметров модели."""
+    return {
+        "required_payload_fields": list(model.required_payload_fields),
+        "allowed_payload_fields": list(model.allowed_payload_fields),
+        "user_settings": {
+            setting_key: {
+                "type": setting.type,
+                "default": setting.default,
+                "options": [option.value for option in setting.options],
+            }
+            for setting_key, setting in model.user_settings.items()
+        },
+    }
+
+
 # TODO: auto-sync models from Wavespeed docs.
 MODEL_REGISTRY = build_model_registry((
     _model(
@@ -304,6 +372,27 @@ MODEL_REGISTRY = build_model_registry((
         description="Alibaba Wan 2.7 text-to-image model from Wavespeed docs.",
         outputs="image",
         requires_prompt=True,
+        is_enabled=False,
+        warning="Parameters need verification",
+    ),
+    _model(
+        key="alibaba_wan_2_6_text_to_image",
+        title="Alibaba Wan 2.6 Text To Image",
+        provider="alibaba",
+        generation_type="text_to_image",
+        path="wan-2.6/text-to-image",
+        slug="alibaba-wan-2.6-text-to-image",
+        description="Alibaba Wan 2.6 text-to-image model from Wavespeed docs.",
+        outputs="image",
+        requires_prompt=True,
+        required_payload_fields=("prompt",),
+        allowed_payload_fields=("prompt", "width", "height", "enable_prompt_expansion", "seed"),
+        user_settings={
+            "width": _select_setting("width", "Ширина", "1024", ("512", "768", "1024", "1280", "1536")),
+            "height": _select_setting("height", "Высота", "1024", ("512", "768", "1024", "1280", "1536")),
+            "enable_prompt_expansion": _select_setting("enable_prompt_expansion", "Улучшение prompt", "false", ("false", "true")),
+            "seed": _text_setting("seed", "Seed", "-1"),
+        },
     ),
     _model(
         key="alibaba_wan_2_6_text_to_video",
@@ -315,6 +404,12 @@ MODEL_REGISTRY = build_model_registry((
         description="Alibaba Wan 2.6 text-to-video model from Wavespeed docs.",
         outputs="video",
         requires_prompt=True,
+        required_payload_fields=("prompt",),
+        allowed_payload_fields=("prompt", "negative_prompt", "audio", "size"),
+        user_settings={
+            "size": _select_setting("size", "Размер", "1280*720", ("1280*720", "720*1280", "1920*1080", "1080*1920")),
+            "negative_prompt": _text_setting("negative_prompt", "Negative prompt", ""),
+        },
     ),
     _model(
         key="alibaba_wan_2_6_image_to_video",
@@ -327,6 +422,8 @@ MODEL_REGISTRY = build_model_registry((
         outputs="video",
         requires_prompt=True,
         requires_image=True,
+        is_enabled=False,
+        warning="Parameters need verification",
     ),
     _model(
         key="alibaba_wan_2_6_image_to_video_pro",
@@ -339,6 +436,14 @@ MODEL_REGISTRY = build_model_registry((
         outputs="video",
         requires_prompt=True,
         requires_image=True,
+        required_payload_fields=("image", "prompt"),
+        allowed_payload_fields=("image", "prompt", "audio", "negative_prompt", "resolution", "duration", "shot_type"),
+        user_settings={
+            "resolution": _select_setting("resolution", "Разрешение", "1080p", ("1080p", "2k", "4k")),
+            "duration": _select_setting("duration", "Длительность", "5", ("5", "8", "10", "15")),
+            "shot_type": _select_setting("shot_type", "Тип кадра", "single", ("single", "multi")),
+            "negative_prompt": _text_setting("negative_prompt", "Negative prompt", ""),
+        },
     ),
     _model(
         key="alibaba_wan_2_6_image_to_video_flash",
@@ -351,6 +456,14 @@ MODEL_REGISTRY = build_model_registry((
         outputs="video",
         requires_prompt=True,
         requires_image=True,
+        required_payload_fields=("image", "prompt"),
+        allowed_payload_fields=("image", "prompt", "audio", "negative_prompt", "resolution", "duration", "shot_type"),
+        user_settings={
+            "resolution": _select_setting("resolution", "Разрешение", "720p", ("720p", "1080p")),
+            "duration": _select_setting("duration", "Длительность", "15", ("5", "8", "10", "15")),
+            "shot_type": _select_setting("shot_type", "Тип кадра", "single", ("single", "multi")),
+            "negative_prompt": _text_setting("negative_prompt", "Negative prompt", ""),
+        },
     ),
     _model(
         key="alibaba_happyhorse_1_0_image_to_video",
@@ -363,6 +476,27 @@ MODEL_REGISTRY = build_model_registry((
         outputs="video",
         requires_prompt=True,
         requires_image=True,
+        is_enabled=False,
+        warning="Parameters need verification",
+    ),
+    _model(
+        key="alibaba_happyhorse_1_0_text_to_video",
+        title="Alibaba Happyhorse 1.0 Text To Video",
+        provider="alibaba",
+        generation_type="text_to_video",
+        path="happyhorse-1.0/text-to-video",
+        slug="alibaba-happyhorse-1.0-text-to-video",
+        description="Alibaba Happyhorse 1.0 text-to-video model from Wavespeed docs.",
+        outputs="video",
+        requires_prompt=True,
+        required_payload_fields=("prompt",),
+        allowed_payload_fields=("prompt", "aspect_ratio", "resolution", "duration", "seed"),
+        user_settings={
+            "aspect_ratio": _select_setting("aspect_ratio", "Формат", "16:9", ("16:9", "9:16", "1:1", "4:3", "3:4")),
+            "resolution": _select_setting("resolution", "Разрешение", "720p", ("720p", "1080p")),
+            "duration": _select_setting("duration", "Длительность", "5", ("3", "5", "8", "10", "15")),
+            "seed": _text_setting("seed", "Seed", "-1"),
+        },
     ),
     _model(
         key="openai_gpt_image_2_text_to_image",
@@ -374,6 +508,8 @@ MODEL_REGISTRY = build_model_registry((
         description="OpenAI GPT Image 2 text-to-image model from Wavespeed docs.",
         outputs="image",
         requires_prompt=True,
+        is_enabled=False,
+        warning="Parameters need verification from docs",
     ),
     _model(
         key="openai_gpt_image_2_edit",
@@ -387,6 +523,8 @@ MODEL_REGISTRY = build_model_registry((
         requires_prompt=True,
         requires_image=True,
         max_images=10,
+        is_enabled=False,
+        warning="Parameters need verification from docs",
         system_settings=COMMON_IMAGE_SYSTEM_SETTINGS,
     ),
     _model(
@@ -399,6 +537,8 @@ MODEL_REGISTRY = build_model_registry((
         description="OpenAI GPT Image 1 text-to-image model from Wavespeed docs.",
         outputs="image",
         requires_prompt=True,
+        is_enabled=False,
+        warning="Parameters need verification from docs",
     ),
     _model(
         key="openai_gpt_image_1_5_text_to_image",
@@ -410,6 +550,8 @@ MODEL_REGISTRY = build_model_registry((
         description="OpenAI GPT Image 1.5 text-to-image model from Wavespeed docs.",
         outputs="image",
         requires_prompt=True,
+        is_enabled=False,
+        warning="Parameters need verification from docs",
     ),
     _model(
         key="openai_gpt_image_1_mini_text_to_image",
@@ -421,6 +563,8 @@ MODEL_REGISTRY = build_model_registry((
         description="OpenAI GPT Image 1 Mini text-to-image model from Wavespeed docs.",
         outputs="image",
         requires_prompt=True,
+        is_enabled=False,
+        warning="Parameters need verification from docs",
     ),
     _model(
         key="bytedance_seedream_v5_0_lite",
@@ -432,6 +576,8 @@ MODEL_REGISTRY = build_model_registry((
         description="ByteDance Seedream V5.0 Lite text-to-image model from Wavespeed docs.",
         outputs="image",
         requires_prompt=True,
+        is_enabled=False,
+        warning="Parameters need verification",
     ),
     _model(
         key="bytedance_seedream_v5_0_lite_sequential",
@@ -443,6 +589,30 @@ MODEL_REGISTRY = build_model_registry((
         description="ByteDance Seedream V5.0 Lite Sequential model from Wavespeed docs.",
         outputs="image",
         requires_prompt=True,
+        required_payload_fields=("prompt",),
+        allowed_payload_fields=("prompt", "output_format", "enable_base64_output", "enable_sync_mode"),
+        user_settings={
+            "output_format": _select_setting("output_format", "Формат файла", "jpeg", ("jpeg", "png")),
+        },
+        system_settings=COMMON_IMAGE_SYSTEM_SETTINGS,
+    ),
+    _model(
+        key="bytedance_seedream_v4_sequential",
+        title="Bytedance Seedream V4 Sequential",
+        provider="bytedance",
+        generation_type="text_to_image",
+        path="seedream-v4-sequential",
+        slug="bytedance-seedream-v4-sequential",
+        description="ByteDance Seedream V4 Sequential text-to-image model from Wavespeed docs.",
+        outputs="image",
+        requires_prompt=True,
+        required_payload_fields=("prompt",),
+        allowed_payload_fields=("prompt", "size", "max_images", "enable_sync_mode", "enable_base64_output"),
+        user_settings={
+            "size": _select_setting("size", "Размер", "1024*1024", ("512*512", "768*768", "1024*1024", "1280*720", "720*1280", "2048*2048")),
+            "max_images": _select_setting("max_images", "Количество изображений", "1", ("1", "2", "3", "4")),
+        },
+        system_settings=COMMON_IMAGE_SYSTEM_SETTINGS,
     ),
     _model(
         key="bytedance_seedream_v4_5",
@@ -454,6 +624,8 @@ MODEL_REGISTRY = build_model_registry((
         description="ByteDance Seedream V4.5 text-to-image model from Wavespeed docs.",
         outputs="image",
         requires_prompt=True,
+        is_enabled=False,
+        warning="Parameters need verification",
     ),
     _model(
         key="bytedance_seedream_v4_5_edit",
@@ -467,6 +639,8 @@ MODEL_REGISTRY = build_model_registry((
         requires_prompt=True,
         requires_image=True,
         max_images=10,
+        required_payload_fields=("images", "prompt"),
+        allowed_payload_fields=("images", "prompt", "size", "enable_sync_mode", "enable_base64_output"),
         user_settings=SEEDREAM_EDIT_SETTINGS,
         system_settings=COMMON_IMAGE_SYSTEM_SETTINGS,
     ),
@@ -480,6 +654,14 @@ MODEL_REGISTRY = build_model_registry((
         description="ByteDance Seedream V3.1 text-to-image model from Wavespeed docs.",
         outputs="image",
         requires_prompt=True,
+        required_payload_fields=("prompt",),
+        allowed_payload_fields=("prompt", "size", "seed", "enable_prompt_expansion", "enable_sync_mode", "enable_base64_output"),
+        user_settings={
+            "size": _select_setting("size", "Размер", "1024*1024", ("512*512", "768*768", "1024*1024", "1280*720", "720*1280", "2048*2048")),
+            "seed": _text_setting("seed", "Seed", "-1"),
+            "enable_prompt_expansion": _select_setting("enable_prompt_expansion", "Улучшение prompt", "false", ("false", "true")),
+        },
+        system_settings=COMMON_IMAGE_SYSTEM_SETTINGS,
     ),
     _model(
         key="bytedance_seedream_v3",
@@ -491,6 +673,8 @@ MODEL_REGISTRY = build_model_registry((
         description="ByteDance Seedream V3 text-to-image model from Wavespeed docs.",
         outputs="image",
         requires_prompt=True,
+        is_enabled=False,
+        warning="Parameters need verification",
     ),
     _model(
         key="bytedance_lipsync",
@@ -503,6 +687,8 @@ MODEL_REGISTRY = build_model_registry((
         outputs="video",
         requires_prompt=False,
         max_images=1,
+        is_enabled=False,
+        warning="Parameters need verification",
     ),
     _model(
         key="avatar_omni_human",
@@ -515,6 +701,8 @@ MODEL_REGISTRY = build_model_registry((
         outputs="video",
         requires_prompt=False,
         max_images=1,
+        is_enabled=False,
+        warning="Parameters need verification",
     ),
     _model(
         key="google_nano_banana_pro_edit_ultra",
@@ -528,6 +716,8 @@ MODEL_REGISTRY = build_model_registry((
         requires_prompt=True,
         requires_image=True,
         max_images=14,
+        required_payload_fields=("images", "prompt"),
+        allowed_payload_fields=("images", "prompt", "aspect_ratio", "resolution", "output_format", "enable_sync_mode", "enable_base64_output"),
         user_settings=NANO_BANANA_SETTINGS,
         system_settings=COMMON_IMAGE_SYSTEM_SETTINGS,
     ),
@@ -541,6 +731,14 @@ MODEL_REGISTRY = build_model_registry((
         description="Google Veo3 text-to-video model from Wavespeed docs.",
         outputs="video",
         requires_prompt=True,
+        required_payload_fields=("prompt",),
+        allowed_payload_fields=("prompt", "duration", "resolution", "aspect_ratio", "enable_sync_mode", "enable_base64_output"),
+        user_settings={
+            "duration": _select_setting("duration", "Длительность", "8", ("5", "8")),
+            "resolution": _select_setting("resolution", "Разрешение", "720p", ("720p", "1080p")),
+            "aspect_ratio": _select_setting("aspect_ratio", "Формат", "16:9", ("16:9", "9:16")),
+        },
+        system_settings=COMMON_IMAGE_SYSTEM_SETTINGS,
     ),
     _model(
         key="google_veo3_fast",
@@ -552,6 +750,14 @@ MODEL_REGISTRY = build_model_registry((
         description="Google Veo3 Fast text-to-video model from Wavespeed docs.",
         outputs="video",
         requires_prompt=True,
+        required_payload_fields=("prompt",),
+        allowed_payload_fields=("prompt", "duration", "resolution", "aspect_ratio", "enable_sync_mode", "enable_base64_output"),
+        user_settings={
+            "duration": _select_setting("duration", "Длительность", "8", ("5", "8")),
+            "resolution": _select_setting("resolution", "Разрешение", "720p", ("720p", "1080p")),
+            "aspect_ratio": _select_setting("aspect_ratio", "Формат", "16:9", ("16:9", "9:16")),
+        },
+        system_settings=COMMON_IMAGE_SYSTEM_SETTINGS,
     ),
     _model(
         key="google_veo3_1_fast_video_extend",
@@ -564,6 +770,12 @@ MODEL_REGISTRY = build_model_registry((
         outputs="video",
         requires_prompt=False,
         requires_video=True,
+        required_payload_fields=("video",),
+        allowed_payload_fields=("video", "prompt", "enable_sync_mode", "enable_base64_output"),
+        user_settings={
+            "prompt": _text_setting("prompt", "Описание продолжения", ""),
+        },
+        system_settings=COMMON_IMAGE_SYSTEM_SETTINGS,
     ),
 ))
 
@@ -668,7 +880,7 @@ def validate_model_settings(
             raise ValueError(
                 f"Setting '{setting_key}' for model '{model.key}' must be a string value"
             )
-        if raw_value not in setting.allowed_values:
+        if setting.type == "select" and raw_value not in setting.allowed_values:
             allowed_values = ", ".join(option.value for option in setting.options)
             raise ValueError(
                 f"Invalid value '{raw_value}' for setting '{setting_key}' in model '{model.key}'. "
@@ -679,6 +891,35 @@ def validate_model_settings(
     return validated_settings
 
 
+def _apply_supported_system_flags(
+    payload: dict[str, Any],
+    allowed_payload_fields: tuple[str, ...],
+) -> None:
+    for field_name in ("enable_base64_output", "enable_sync_mode"):
+        if field_name in allowed_payload_fields and field_name not in payload:
+            payload[field_name] = False
+
+
+def _assert_required_payload_fields(
+    model: GenerationModel,
+    payload: Mapping[str, Any],
+) -> None:
+    missing_fields: list[str] = []
+    for field_name in model.required_payload_fields:
+        value = payload.get(field_name)
+        if value is None:
+            missing_fields.append(field_name)
+            continue
+        if isinstance(value, str) and not value.strip():
+            missing_fields.append(field_name)
+            continue
+        if isinstance(value, list) and not value:
+            missing_fields.append(field_name)
+    if missing_fields:
+        missing = ", ".join(missing_fields)
+        raise ValueError(f"Model '{model.key}' requires payload field(s): {missing}")
+
+
 def build_payload(
     model_key: str,
     image_urls: list[str],
@@ -687,6 +928,7 @@ def build_payload(
 ) -> dict[str, Any]:
     """Собрать валидный payload для выбранной модели."""
     model = get_generation_model(model_key)
+    allowed_payload_fields = model.allowed_payload_fields or get_default_allowed_payload_fields(model)
     if not model.is_enabled:
         warning_suffix = f" ({model.warning})" if model.warning else ""
         raise ValueError(f"Model '{model.key}' is disabled{warning_suffix}")
@@ -727,7 +969,14 @@ def build_payload(
             payload["audio"] = cleaned_audio
         if cleaned_prompt:
             payload["text"] = cleaned_prompt
-        return payload
+        _apply_supported_system_flags(payload, allowed_payload_fields)
+        filtered_payload = {
+            key: value
+            for key, value in payload.items()
+            if key in allowed_payload_fields
+        }
+        _assert_required_payload_fields(model, filtered_payload)
+        return filtered_payload
 
     if any(not isinstance(value, str) for value in validated_settings.values()):
         raise ValueError("All validated settings must be string values")
@@ -754,7 +1003,14 @@ def build_payload(
         payload["image"] = valid_inputs[0]
     elif model.requires_image:
         payload["images"] = valid_inputs
-    return payload
+    _apply_supported_system_flags(payload, allowed_payload_fields)
+    filtered_payload = {
+        key: value
+        for key, value in payload.items()
+        if key in allowed_payload_fields
+    }
+    _assert_required_payload_fields(model, filtered_payload)
+    return filtered_payload
 
 
 class GenerationService:

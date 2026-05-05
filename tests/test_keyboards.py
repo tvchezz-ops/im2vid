@@ -29,12 +29,14 @@ from app.bot.keyboards import (
 def test_build_generation_sections_keyboard_uses_expected_callback_prefix() -> None:
     keyboard = build_generation_sections_keyboard()
 
-    buttons = [row[0] for row in keyboard.inline_keyboard[:-1]]
+    buttons = [row[0] for row in keyboard.inline_keyboard[:-2]]
+    all_button = keyboard.inline_keyboard[-2][0]
 
     callback_data = [button.callback_data for button in buttons]
     assert "gen:section:image_edit" in callback_data
-    assert "gen:section:lipsync" in callback_data
-    assert "gen:all" in callback_data
+    assert "gen:section:text_to_video" in callback_data
+    assert "gen:section:lipsync" not in callback_data
+    assert all_button.callback_data == "gen:all"
     assert keyboard.inline_keyboard[-1][0].callback_data == "gen:back:main"
 
 

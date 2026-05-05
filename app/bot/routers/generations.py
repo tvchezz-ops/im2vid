@@ -157,6 +157,11 @@ def format_generation_settings(model: GenerationModel, user_settings: dict[str, 
 
 def build_settings_text(model: GenerationModel, user_settings: dict[str, Any]) -> str:
     """Собрать экран настроек модели."""
+    if not model.user_settings:
+        return (
+            f"Настройки модели: <b>{escape(model.title)}</b>\n\n"
+            "У этой модели нет дополнительных настроек. Можно продолжить."
+        )
     return (
         f"Настройки модели: <b>{escape(model.title)}</b>\n\n"
         f"Выберите параметры или нажмите Продолжить.\n\n"
@@ -167,6 +172,13 @@ def build_settings_text(model: GenerationModel, user_settings: dict[str, Any]) -
 def build_setting_value_text(model: GenerationModel, setting_key: str, current_value: str) -> str:
     """Собрать экран выбора конкретной настройки."""
     setting = model.user_settings[setting_key]
+    if setting.type == "text":
+        return (
+            f"Настройки модели: <b>{escape(model.title)}</b>\n\n"
+            f"Параметр: <b>{escape(setting.title)}</b>\n"
+            f"Текущее значение: <code>{escape(current_value)}</code>\n\n"
+            "Для текстовых параметров сейчас используется сохранённое значение по умолчанию."
+        )
     options = "\n".join(f"• <code>{escape(option.value)}</code>" for option in setting.options)
     return (
         f"Настройки модели: <b>{escape(model.title)}</b>\n\n"
@@ -326,21 +338,17 @@ def build_generation_types_screen_text() -> str:
     """Собрать текст экрана выбора типа генерации."""
     details = "\n".join(
         f"• <b>{escape(GENERATION_TYPE_TITLES[generation_type])}</b> — {escape(GENERATION_TYPE_DESCRIPTIONS[generation_type])}"
-        for generation_type in ("text_to_image", "text_to_video", "image_edit", "image_to_video", "video_edit", "lipsync")
+        for generation_type in list_generation_types()
     )
     return f"Выберите тип генерации:\n\n{details}"
 
 
 def build_generation_type_options() -> list[tuple[str, str]]:
     """Собрать опции клавиатуры выбора типа генерации."""
-    available_generation_types = set(list_generation_types())
-    if "lipsync" in GENERATION_TYPE_LABELS:
-        available_generation_types.add("lipsync")
-
     ordered_generation_types = [
         generation_type
         for generation_type in ("text_to_image", "text_to_video", "image_edit", "image_to_video", "video_edit", "lipsync")
-        if generation_type in available_generation_types
+        if generation_type in set(list_generation_types())
     ]
     options = [
         (generation_type, GENERATION_TYPE_LABELS[generation_type])

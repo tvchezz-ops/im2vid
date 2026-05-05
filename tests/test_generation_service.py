@@ -17,6 +17,7 @@ from app.services.generation_service import (
     GENERATION_TYPES,
     PROVIDERS,
     GENERATION_MODELS,
+    get_default_settings,
     build_model_registry,
     build_payload,
     get_generation_model,
@@ -259,6 +260,10 @@ def test_generation_model_exposes_new_fields_and_legacy_aliases() -> None:
     assert model.outputs == "image"
     assert model.is_enabled is True
     assert model.warning == ""
+    assert model.required_payload_fields == ("images", "prompt")
+    assert "images" in model.allowed_payload_fields
+    assert "prompt" in model.allowed_payload_fields
+    assert model.input_schema["required_payload_fields"] == ["images", "prompt"]
     assert model.required_fields == ("images", "prompt")
 
 
@@ -378,7 +383,91 @@ def test_build_model_registry_ignores_model_when_generation_type_cannot_be_infer
 
 
 def test_list_generation_models_returns_all_registry_models() -> None:
-    assert list_generation_models() == list(MODEL_REGISTRY.values())
+    assert list_generation_models() == [model for model in MODEL_REGISTRY.values() if model.is_enabled]
+
+
+def test_enabled_models_have_settings_or_explicit_empty_state() -> None:
+    for model in list_generation_models():
+        defaults = get_default_settings(model.key)
+        assert model.user_settings or defaults == {}
+        assert model.required_payload_fields
+        assert model.input_schema["required_payload_fields"] == list(model.required_payload_fields)
+
+
+def test_model_specific_defaults_are_used_for_docs_confirmed_models() -> None:
+    model = get_generation_model("alibaba_wan_2_6_text_to_image")
+
+    assert set(model.user_settings) == {"width", "height", "enable_prompt_expansion", "seed"}
+    assert get_default_settings(model.key) == {
+        "width": "1024",
+        "height": "1024",
+        "enable_prompt_expansion": "false",
+        "seed": "-1",
+    }
+
+
+def test_unverified_openai_models_are_disabled() -> None:
+    model = get_generation_model("openai_gpt_image_1_text_to_image")
+
+    assert model.is_enabled is False
+    assert model.warning == "Parameters need verification from docs"
+    with pytest.raises(ValueError, match="Parameters need verification from docs"):
+        build_payload(model.key, [], "Generate a poster")
+
+
+def test_build_payload_keeps_allowed_fields_for_known_models() -> None:
+    payload = build_payload(
+        "alibaba_wan_2_6_text_to_image",
+        [],
+        "Generate a poster",
+        {"width": "1280", "height": "1536", "seed": "42", "unknown": "ignored"},
+    )
+
+    assert payload == {
+        "prompt": "Generate a poster",
+        "width": "1280",
+        "height": "1536",
+        "enable_prompt_expansion": "false",
+        "seed": "42",
+    }
+
+
+def test_build_payload_maps_media_fields_per_model_contract() -> None:
+    image_edit_payload = build_payload(
+        "nano_banana",
+        ["https://example.com/input.png"],
+        "Refine the image",
+    )
+    image_to_video_payload = build_payload(
+        "alibaba_wan_2_6_image_to_video_pro",
+        ["https://example.com/input.png"],
+        "Animate the image",
+    )
+    video_edit_payload = build_payload(
+        "google_veo3_1_fast_video_extend",
+        ["https://example.com/input.mp4"],
+        "",
+    )
+
+    assert image_edit_payload["images"] == ["https://example.com/input.png"]
+    assert image_to_video_payload["image"] == "https://example.com/input.png"
+    assert video_edit_payload["video"] == "https://example.com/input.mp4"
+
+
+def test_build_payload_rejects_missing_required_payload_field() -> None:
+    with pytest.raises(ValueError, match="Prompt must not be empty"):
+        build_payload("google_veo3", [], "   ")
+
+
+def test_build_payload_sets_supported_output_flags_to_false() -> None:
+    payload = build_payload(
+        "bytedance_seedream_v3_1",
+        [],
+        "Generate a concept art shot",
+    )
+
+    assert payload["enable_sync_mode"] is False
+    assert payload["enable_base64_output"] is False
 
 
 @pytest.mark.parametrize("model", list_generation_models(), ids=lambda model: model.key)
@@ -421,7 +510,6 @@ def test_list_generation_types_returns_only_types_present_in_registry() -> None:
         "image_edit",
         "image_to_video",
         "video_edit",
-        "lipsync",
     ]
 
 
@@ -433,31 +521,26 @@ def test_list_models_by_type_returns_only_matching_models() -> None:
     models = list_models_by_type("image_edit")
 
     model_keys = {model.key for model in models}
-    assert {
-        "google_nano_banana_pro_edit_ultra",
-        "openai_gpt_image_2_edit",
-        "bytedance_seedream_v4_5_edit",
-    }.issubset(model_keys)
+    assert {"google_nano_banana_pro_edit_ultra", "bytedance_seedream_v4_5_edit"}.issubset(model_keys)
     assert {model.key for model in list_models_by_type("text_to_image")} >= {
-        "alibaba_wan_2_7_text_to_image",
-        "openai_gpt_image_2_text_to_image",
-        "bytedance_seedream_v5_0_lite",
+        "alibaba_wan_2_6_text_to_image",
+        "bytedance_seedream_v3_1",
+        "bytedance_seedream_v5_0_lite_sequential",
     }
+    assert "openai_gpt_image_2_text_to_image" not in {model.key for model in list_models_by_type("text_to_image")}
 
 
 def test_list_models_by_provider_returns_only_matching_models() -> None:
     google_models = list_models_by_provider("google")
     bytedance_models = list_models_by_provider("bytedance")
 
-    assert {"google_nano_banana_pro_edit_ultra", "google_veo3", "google_veo3_fast"}.issubset(
+    assert {"google_nano_banana_pro_edit_ultra", "google_veo3", "google_veo3_fast", "google_veo3_1_fast_video_extend"}.issubset(
         {model.key for model in google_models}
     )
-    assert {"bytedance_seedream_v4_5_edit", "bytedance_seedream_v4_5", "bytedance_lipsync"}.issubset(
+    assert {"bytedance_seedream_v4_5_edit", "bytedance_seedream_v4_sequential", "bytedance_seedream_v3_1"}.issubset(
         {model.key for model in bytedance_models}
     )
-    assert {"openai_gpt_image_2_text_to_image", "openai_gpt_image_1_mini_text_to_image"}.issubset(
-        {model.key for model in list_models_by_provider("openai")}
-    )
+    assert list_models_by_provider("openai") == []
     assert list_models_by_provider("midjourney") == []
 
 
