@@ -5,8 +5,11 @@ import asyncio
 from dataclasses import dataclass
 from html import escape
 from pathlib import Path
+import re
 import tempfile
 from typing import Any, Dict, Optional
+from urllib.parse import unquote, urlparse
+import uuid
 
 from aiogram import F, Router
 from aiogram.exceptions import TelegramBadRequest, TelegramNetworkError
@@ -890,11 +893,12 @@ async def safe_send_bot_message(bot, chat_id: int, text: str, reply_markup=None)
 
 async def send_document_with_retry(*, bot, chat_id: int, file_path: str, caption: Optional[str]) -> None:
     """Отправить документ в Telegram c retry при сетевых ошибках."""
+    normalized_filename = Path(file_path).name
     for attempt in range(DOCUMENT_SEND_RETRY_COUNT + 1):
         try:
             await bot.send_document(
                 chat_id,
-                FSInputFile(file_path),
+                FSInputFile(file_path, filename=normalized_filename),
                 caption=caption,
                 request_timeout=DOCUMENT_SEND_REQUEST_TIMEOUT_SECONDS,
             )
@@ -982,6 +986,23 @@ def get_output_suffix_and_type(content_type: Optional[str]) -> str:
     return ".bin"
 
 
+def normalize_filename(original_name: str) -> str:
+    """Нормализовать имя output-файла Wavespeed к формату imai-*.ext."""
+    raw_name = Path(unquote(original_name or "")).name
+    suffix = Path(raw_name).suffix.lower()
+    stem = Path(raw_name).stem
+    for prefix in ("wavespeed-", "output-"):
+        while stem.startswith(prefix):
+            stem = stem[len(prefix):]
+
+    cleaned_stem = re.sub(r"[^a-zA-Z0-9_-]+", "-", stem).strip("-_")
+    if not cleaned_stem:
+        cleaned_stem = uuid.uuid4().hex
+    if not suffix:
+        suffix = ".bin"
+    return f"imai-{cleaned_stem}{suffix}"
+
+
 async def download_output_file_to_temp(output_url: str) -> tuple[str, Optional[str], Optional[int]]:
     """Скачать output-файл во временный файл для последующей отправки в Telegram."""
     temp_path: Optional[str] = None
@@ -1002,8 +1023,17 @@ async def download_output_file_to_temp(output_url: str) -> tuple[str, Optional[s
                             raise OutputDeliveryTooLargeError()
 
                 suffix = get_output_suffix_and_type(content_type)
-                temp_file = tempfile.NamedTemporaryFile(prefix="wavespeed-output-", suffix=suffix, delete=False)
-                temp_path = temp_file.name
+                original_filename = Path(unquote(urlparse(output_url).path)).name
+                normalized_filename = normalize_filename(original_filename)
+                if Path(normalized_filename).suffix == ".bin" and suffix != ".bin":
+                    normalized_filename = f"{Path(normalized_filename).stem}{suffix}"
+
+                temp_dir = Path(tempfile.gettempdir())
+                candidate_path = temp_dir / normalized_filename
+                if candidate_path.exists():
+                    candidate_path = temp_dir / f"imai-{uuid.uuid4().hex}{Path(normalized_filename).suffix}"
+                temp_path = str(candidate_path)
+                temp_file = open(candidate_path, "wb")
                 try:
                     async for chunk in response.aiter_bytes():
                         bytes_written += len(chunk)

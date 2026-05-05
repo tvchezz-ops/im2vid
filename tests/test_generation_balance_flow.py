@@ -881,3 +881,51 @@ def _async_collector():
         return None
 
     return _call
+
+
+def test_normalize_filename_replaces_wavespeed_prefix() -> None:
+    assert generations.normalize_filename("wavespeed-output-abc.jpg") == "imai-abc.jpg"
+
+
+@pytest.mark.asyncio
+async def test_download_output_file_to_temp_uses_imai_filename(monkeypatch) -> None:
+    class FakeResponse:
+        headers = {"content-type": "image/jpeg", "content-length": "4"}
+
+        def raise_for_status(self) -> None:
+            return None
+
+        async def aiter_bytes(self):
+            yield b"test"
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, exc_type, exc, tb):
+            return None
+
+    class FakeAsyncClient:
+        def __init__(self, *args, **kwargs):
+            return None
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, exc_type, exc, tb):
+            return None
+
+        def stream(self, method: str, url: str):
+            return FakeResponse()
+
+    monkeypatch.setattr(generations.httpx, "AsyncClient", FakeAsyncClient)
+
+    temp_output_path, content_type, file_size_bytes = await generations.download_output_file_to_temp(
+        "https://example.com/files/wavespeed-output-abc.jpg?token=1"
+    )
+
+    try:
+        assert Path(temp_output_path).name == "imai-abc.jpg"
+        assert content_type == "image/jpeg"
+        assert file_size_bytes == 4
+    finally:
+        Path(temp_output_path).unlink(missing_ok=True)
