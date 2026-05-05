@@ -76,9 +76,9 @@ GENERATION_CONFIRM = "gen:confirm"
 GENERATION_TYPE_LABELS = {
     "text_to_image": "🖼 Text → Image",
     "text_to_video": "🎬 Text → Video",
-    "image_to_image": "🧩 Image → Image",
+    "image_edit": "🧩 Image Edit",
     "image_to_video": "🎥 Image → Video",
-    "video_to_video": "🎞 Video → Video",
+    "video_edit": "🎞 Video Edit",
     "lipsync": "🗣 Lipsync",
     "all": "📚 All models",
 }
@@ -86,18 +86,18 @@ GENERATION_TYPE_LABELS = {
 GENERATION_TYPE_TITLES = {
     "text_to_image": "Text → Image",
     "text_to_video": "Text → Video",
-    "image_to_image": "Image → Image",
+    "image_edit": "Image Edit",
     "image_to_video": "Image → Video",
-    "video_to_video": "Video → Video",
+    "video_edit": "Video Edit",
     "lipsync": "Lipsync (озвучка лица)",
 }
 
 GENERATION_TYPE_DESCRIPTIONS = {
     "text_to_image": "Создание изображения по тексту",
     "text_to_video": "Создание видео по тексту",
-    "image_to_image": "Редактирование или преобразование изображения",
+    "image_edit": "Редактирование или преобразование изображения",
     "image_to_video": "Анимация изображения в видео",
-    "video_to_video": "Преобразование или стилизация видео",
+    "video_edit": "Преобразование или стилизация видео",
     "lipsync": "Анимация лица под аудио или текст",
 }
 
@@ -322,7 +322,7 @@ def build_generation_types_screen_text() -> str:
     """Собрать текст экрана выбора типа генерации."""
     details = "\n".join(
         f"• <b>{escape(GENERATION_TYPE_TITLES[generation_type])}</b> — {escape(GENERATION_TYPE_DESCRIPTIONS[generation_type])}"
-        for generation_type in ("text_to_image", "text_to_video", "image_to_image", "image_to_video", "video_to_video", "lipsync")
+        for generation_type in ("text_to_image", "text_to_video", "image_edit", "image_to_video", "video_edit", "lipsync")
     )
     return f"Выберите тип генерации:\n\n{details}"
 
@@ -335,7 +335,7 @@ def build_generation_type_options() -> list[tuple[str, str]]:
 
     ordered_generation_types = [
         generation_type
-        for generation_type in ("text_to_image", "text_to_video", "image_to_image", "image_to_video", "video_to_video", "lipsync")
+        for generation_type in ("text_to_image", "text_to_video", "image_edit", "image_to_video", "video_edit", "lipsync")
         if generation_type in available_generation_types
     ]
     options = [
@@ -960,7 +960,16 @@ async def choose_provider(callback: CallbackQuery, state: FSMContext):
     provider = callback.data.removeprefix(PROVIDER_PREFIX)
     models = list_models_by_provider(provider)
     if not models:
-        await callback.answer("Для этого провайдера пока нет моделей", show_alert=True)
+        await state.set_state(GenerationStates.choosing_provider)
+        await state.update_data(selected_generation_type="all", selected_provider=None)
+        await callback.message.edit_text(
+            "У этого провайдера пока нет подключённых моделей",
+            reply_markup=build_provider_keyboard(
+                [(provider_key, PROVIDER_LABELS[provider_key]) for provider_key in list_providers()]
+            ),
+            parse_mode="HTML",
+        )
+        await callback.answer()
         return
 
     await state.set_state(GenerationStates.choosing_provider)

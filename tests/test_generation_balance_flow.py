@@ -150,19 +150,19 @@ async def test_show_generation_menu_starts_with_generation_type_selection() -> N
     assert "Анимация лица под аудио или текст" in message.answers[-1]
     keyboard = message.answer_markups[-1]
     callback_data = [row[0].callback_data for row in keyboard.inline_keyboard[:-1]]
-    assert "gen:type:lipsync" in callback_data
+    assert "gen:section:lipsync" in callback_data
 
 
 @pytest.mark.asyncio
 async def test_choose_generation_type_shows_models_for_type() -> None:
     state = FakeState()
     message = FakeMessage(chat_id=402)
-    callback = FakeCallback(user_id=402, message=message, data="gen:type:image_to_image")
+    callback = FakeCallback(user_id=402, message=message, data="gen:type:image_edit")
 
     await generations.choose_generation_type(callback, state)
 
     assert state.state == GenerationStates.choosing_generation_type
-    assert state.data["selected_generation_type"] == "image_to_image"
+    assert state.data["selected_generation_type"] == "image_edit"
     assert state.data["selected_provider"] is None
     assert message.edits[-1] == "Выберите модель:"
 
@@ -192,6 +192,19 @@ async def test_choose_provider_shows_provider_models() -> None:
     assert state.state == GenerationStates.choosing_provider
     assert state.data["selected_provider"] == "google"
     assert message.edits[-1] == "Выберите модель:"
+
+
+@pytest.mark.asyncio
+async def test_choose_provider_shows_midjourney_placeholder_when_models_absent() -> None:
+    state = FakeState({"selected_generation_type": "all"})
+    message = FakeMessage(chat_id=404)
+    callback = FakeCallback(user_id=404, message=message, data="gen:provider:midjourney")
+
+    await generations.choose_provider(callback, state)
+
+    assert state.state == GenerationStates.choosing_provider
+    assert state.data["selected_provider"] is None
+    assert message.edits[-1] == "У этого провайдера пока нет подключённых моделей"
 
 
 @pytest.mark.asyncio

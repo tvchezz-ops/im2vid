@@ -45,5 +45,5 @@ def test_infer_generation_type_from_page_prefers_endpoint_detection_when_availab
         endpoint="https://wavespeed.ai/docs-api/google/video-to-video/model",
     )
 
-    assert detection.generation_type == "video_to_video"
+    assert detection.generation_type == "video_edit"
     assert detection.confidence == "high"

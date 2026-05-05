@@ -163,7 +163,7 @@ def test_build_payload_rejects_non_string_prompt() -> None:
 
 
 def test_build_payload_rejects_non_string_image_urls() -> None:
-    with pytest.raises(ValueError, match="All image URLs must be string values"):
+    with pytest.raises(ValueError, match="All input URLs must be string values"):
         build_payload(
             "nano_banana",
             ["https://example.com/input.png", 123],  # type: ignore[list-item]
@@ -184,11 +184,17 @@ def test_build_payload_lipsync_requires_media_and_text_or_audio() -> None:
     lipsync_model = GenerationModel(
         key="test_lipsync",
         title="Test Lipsync",
-        endpoint="https://example.com/lipsync",
         provider="google",
         generation_type="lipsync",
+          endpoint="https://example.com/lipsync",
+          docs_url="https://example.com/docs/lipsync",
+          description="Test lipsync model",
         max_images=1,
-        required_fields=("image", "text"),
+          requires_prompt=False,
+          requires_image=False,
+          requires_video=False,
+          requires_audio=False,
+          outputs="video",
     )
     MODEL_REGISTRY["test_lipsync"] = lipsync_model
     try:
@@ -205,11 +211,17 @@ def test_build_payload_lipsync_builds_media_and_text_payload() -> None:
     lipsync_model = GenerationModel(
         key="test_lipsync",
         title="Test Lipsync",
-        endpoint="https://example.com/lipsync",
         provider="google",
         generation_type="lipsync",
+          endpoint="https://example.com/lipsync",
+          docs_url="https://example.com/docs/lipsync",
+          description="Test lipsync model",
         max_images=1,
-        required_fields=("image", "text"),
+          requires_prompt=False,
+          requires_image=False,
+          requires_video=False,
+          requires_audio=False,
+          outputs="video",
     )
     MODEL_REGISTRY["test_lipsync"] = lipsync_model
     try:
@@ -236,19 +248,27 @@ def test_build_payload_lipsync_builds_media_and_text_payload() -> None:
 def test_generation_model_exposes_new_fields_and_legacy_aliases() -> None:
     model = get_generation_model("nano_banana")
 
+    assert model.key == "google_nano_banana_pro_edit_ultra"
     assert model.provider == "google"
-    assert model.generation_type == "image_to_image"
-    assert model.type == "image_to_image"
-    assert model.model_type == "image_to_image"
+    assert model.generation_type == "image_edit"
+    assert model.type == "image_edit"
+    assert model.model_type == "image_edit"
+    assert model.docs_url.endswith("google/google-nano-banana-pro-edit-ultra")
+    assert model.requires_prompt is True
+    assert model.requires_image is True
+    assert model.outputs == "image"
+    assert model.is_enabled is True
+    assert model.warning == ""
+    assert model.required_fields == ("images", "prompt")
 
 
 def test_generation_registry_constants_include_supported_values() -> None:
     assert GENERATION_TYPES == [
         "text_to_image",
         "text_to_video",
-        "image_to_image",
+        "image_edit",
         "image_to_video",
-        "video_to_video",
+        "video_edit",
         "lipsync",
     ]
     assert PROVIDERS == [
@@ -262,9 +282,11 @@ def test_generation_registry_constants_include_supported_values() -> None:
 
 def test_model_registry_is_canonical_and_compatible() -> None:
     assert MODEL_REGISTRY is GENERATION_MODELS
-    assert MODEL_REGISTRY["nano_banana"].provider == "google"
-    assert MODEL_REGISTRY["seedream"].provider == "bytedance"
-    assert MODEL_REGISTRY["seedream"].generation_type == "image_to_image"
+    assert MODEL_REGISTRY["google_nano_banana_pro_edit_ultra"].provider == "google"
+    assert MODEL_REGISTRY["bytedance_seedream_v4_5_edit"].provider == "bytedance"
+    assert MODEL_REGISTRY["bytedance_seedream_v4_5_edit"].generation_type == "image_edit"
+    assert "nano_banana" not in MODEL_REGISTRY
+    assert "seedream" not in MODEL_REGISTRY
 
 
 def test_build_model_registry_rejects_invalid_metadata() -> None:
@@ -273,11 +295,17 @@ def test_build_model_registry_rejects_invalid_metadata() -> None:
             GenerationModel(
                 key="broken",
                 title="Broken",
-                endpoint="https://example.com/broken",
                 provider="unknown",
-                generation_type="image_to_image",
+                generation_type="image_edit",
+                endpoint="https://example.com/broken",
+                docs_url="https://example.com/docs/broken",
+                description="Broken test model",
                 max_images=1,
-                required_fields=("prompt",),
+                requires_prompt=True,
+                requires_image=False,
+                requires_video=False,
+                requires_audio=False,
+                outputs="image",
             ),
         ))
 
@@ -287,9 +315,11 @@ def test_build_model_registry_rejects_invalid_metadata() -> None:
     [
         ("https://wavespeed.ai/docs-api/google/text-to-image/model", "text_to_image"),
         ("https://wavespeed.ai/docs-api/google/text-to-video/model", "text_to_video"),
-        ("https://wavespeed.ai/docs-api/google/image-to-image/model", "image_to_image"),
+        ("https://wavespeed.ai/docs-api/google/image-to-image/model", "image_edit"),
+        ("https://wavespeed.ai/docs-api/google/image-edit/model", "image_edit"),
         ("https://wavespeed.ai/docs-api/google/image-to-video/model", "image_to_video"),
-        ("https://wavespeed.ai/docs-api/google/video-to-video/model", "video_to_video"),
+        ("https://wavespeed.ai/docs-api/google/video-to-video/model", "video_edit"),
+        ("https://wavespeed.ai/docs-api/google/video-edit/model", "video_edit"),
         ("https://wavespeed.ai/docs-api/google/lipsync/model", "lipsync"),
         ("https://wavespeed.ai/docs-api/google/talking-avatar/model", "lipsync"),
         ("https://wavespeed.ai/docs-api/google/speech-to-video/model", "lipsync"),
@@ -308,11 +338,17 @@ def test_build_model_registry_infers_generation_type_from_endpoint() -> None:
         GenerationModel(
             key="inferred-model",
             title="Inferred Model",
-            endpoint="https://wavespeed.ai/docs-api/google/text-to-image/inferred-model",
             provider="google",
             generation_type="",
+            endpoint="https://wavespeed.ai/docs-api/google/text-to-image/inferred-model",
+            docs_url="https://example.com/docs/inferred-model",
+            description="Inferred test model",
             max_images=1,
-            required_fields=("prompt",),
+            requires_prompt=True,
+            requires_image=False,
+            requires_video=False,
+            requires_audio=False,
+            outputs="image",
         ),
     ))
 
@@ -324,11 +360,17 @@ def test_build_model_registry_ignores_model_when_generation_type_cannot_be_infer
         GenerationModel(
             key="ignored-model",
             title="Ignored Model",
-            endpoint="https://wavespeed.ai/docs-api/google/custom-endpoint/ignored-model",
             provider="google",
             generation_type="",
+            endpoint="https://wavespeed.ai/docs-api/google/custom-endpoint/ignored-model",
+            docs_url="https://example.com/docs/ignored-model",
+            description="Ignored test model",
             max_images=1,
-            required_fields=("prompt",),
+            requires_prompt=True,
+            requires_image=False,
+            requires_video=False,
+            requires_audio=False,
+            outputs="image",
         ),
     ))
 
@@ -339,32 +381,113 @@ def test_list_generation_models_returns_all_registry_models() -> None:
     assert list_generation_models() == list(MODEL_REGISTRY.values())
 
 
+@pytest.mark.parametrize("model", list_generation_models(), ids=lambda model: model.key)
+def test_build_payload_supports_every_enabled_model(model: GenerationModel) -> None:
+    image_urls: list[str] = []
+    prompt = "Smoke test prompt"
+    user_settings: dict[str, str] = {}
+
+    if model.generation_type == "lipsync":
+        image_urls = ["https://example.com/face.png"]
+        payload = build_payload(model.key, image_urls, "Lip sync text")
+        assert payload.get("image") == "https://example.com/face.png"
+        assert payload.get("text") == "Lip sync text"
+        return
+
+    if model.requires_image:
+        image_urls = ["https://example.com/input.png"]
+    elif model.requires_video:
+        image_urls = ["https://example.com/input.mp4"]
+
+    if not model.requires_prompt:
+        prompt = ""
+
+    payload = build_payload(model.key, image_urls, prompt, user_settings)
+
+    if model.requires_prompt:
+        assert payload.get("prompt") == "Smoke test prompt"
+    if model.requires_image and model.outputs == "video":
+        assert payload.get("image") == "https://example.com/input.png"
+    elif model.requires_image:
+        assert payload.get("images") == ["https://example.com/input.png"]
+    if model.requires_video:
+        assert payload.get("video") == "https://example.com/input.mp4"
+
+
 def test_list_generation_types_returns_only_types_present_in_registry() -> None:
-    assert list_generation_types() == ["image_to_image"]
+    assert list_generation_types() == [
+        "text_to_image",
+        "text_to_video",
+        "image_edit",
+        "image_to_video",
+        "video_edit",
+        "lipsync",
+    ]
 
 
 def test_list_providers_returns_only_providers_present_in_registry() -> None:
-    assert list_providers() == ["bytedance", "google"]
+    assert list_providers() == ["alibaba", "openai", "bytedance", "google", "midjourney"]
 
 
 def test_list_models_by_type_returns_only_matching_models() -> None:
-    models = list_models_by_type("image_to_image")
+    models = list_models_by_type("image_edit")
 
-    assert [model.key for model in models] == ["nano_banana", "seedream"]
-    assert list_models_by_type("text_to_image") == []
+    model_keys = {model.key for model in models}
+    assert {
+        "google_nano_banana_pro_edit_ultra",
+        "openai_gpt_image_2_edit",
+        "bytedance_seedream_v4_5_edit",
+    }.issubset(model_keys)
+    assert {model.key for model in list_models_by_type("text_to_image")} >= {
+        "alibaba_wan_2_7_text_to_image",
+        "openai_gpt_image_2_text_to_image",
+        "bytedance_seedream_v5_0_lite",
+    }
 
 
 def test_list_models_by_provider_returns_only_matching_models() -> None:
     google_models = list_models_by_provider("google")
     bytedance_models = list_models_by_provider("bytedance")
 
-    assert [model.key for model in google_models] == ["nano_banana"]
-    assert [model.key for model in bytedance_models] == ["seedream"]
-    assert list_models_by_provider("openai") == []
+    assert {"google_nano_banana_pro_edit_ultra", "google_veo3", "google_veo3_fast"}.issubset(
+        {model.key for model in google_models}
+    )
+    assert {"bytedance_seedream_v4_5_edit", "bytedance_seedream_v4_5", "bytedance_lipsync"}.issubset(
+        {model.key for model in bytedance_models}
+    )
+    assert {"openai_gpt_image_2_text_to_image", "openai_gpt_image_1_mini_text_to_image"}.issubset(
+        {model.key for model in list_models_by_provider("openai")}
+    )
+    assert list_models_by_provider("midjourney") == []
 
 
 def test_list_models_by_type_and_provider_returns_intersection() -> None:
-    models = list_models_by_type_and_provider("image_to_image", "google")
+    models = list_models_by_type_and_provider("image_edit", "google")
 
-    assert [model.key for model in models] == ["nano_banana"]
+    assert {model.key for model in models} == {"google_nano_banana_pro_edit_ultra"}
     assert list_models_by_type_and_provider("text_to_image", "google") == []
+
+
+def test_build_payload_rejects_disabled_models() -> None:
+    MODEL_REGISTRY["disabled_model"] = GenerationModel(
+        key="disabled_model",
+        title="Disabled Model",
+        provider="google",
+        generation_type="text_to_image",
+        endpoint="https://api.wavespeed.ai/api/v3/google/disabled-model",
+        docs_url="https://wavespeed.ai/docs/docs-api/google/google-disabled-model",
+        description="Disabled test model",
+        max_images=1,
+        requires_prompt=True,
+        requires_image=False,
+        requires_video=False,
+        requires_audio=False,
+        outputs="image",
+        is_enabled=False,
+        warning="Endpoint needs verification",
+    )
+    try:
+        with pytest.raises(ValueError, match="disabled"):
+            build_payload("disabled_model", [], "Test prompt")
+    finally:
+        MODEL_REGISTRY.pop("disabled_model", None)
