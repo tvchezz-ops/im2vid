@@ -68,8 +68,8 @@ class R2StorageService:
             )
             logger.info(
                 {
-                    "action": "generation_output_delivery",
-                    "method": "r2",
+                    "action": "upload_to_r2_success",
+                    "delivery_method": "r2",
                     "file_size": file_size,
                     "status": "success",
                 }
@@ -83,34 +83,28 @@ class R2StorageService:
         """Сгенерировать signed URL для объекта в R2."""
         try:
             client = self._get_client()
-            return client.generate_presigned_url(
+            signed_url = client.generate_presigned_url(
                 "get_object",
                 Params={"Bucket": settings.r2_bucket_name, "Key": object_name},
                 ExpiresIn=settings.r2_signed_url_ttl_seconds,
             )
+            logger.info(
+                {
+                    "action": "signed_url_generated",
+                    "delivery_method": "r2",
+                    "status": "success",
+                }
+            )
+            return signed_url
         except Exception:
             logger.exception("Failed to generate Cloudflare R2 signed URL")
             raise
 
     def upload_and_get_url(self, local_path: str, filename: str, content_type: str) -> str:
         """Загрузить файл в R2 и вернуть signed URL."""
-        try:
-            file_size = Path(local_path).stat().st_size
-            object_name = self._build_object_name(filename, local_path)
-            self.upload_file(local_path, object_name, content_type)
-            signed_url = self.generate_signed_url(object_name)
-            logger.info(
-                {
-                    "action": "generation_output_delivery",
-                    "method": "r2",
-                    "file_size": file_size,
-                    "status": "success",
-                }
-            )
-            return signed_url
-        except Exception:
-            logger.exception("Failed to upload file and generate Cloudflare R2 signed URL")
-            raise
+        object_name = self._build_object_name(filename, local_path)
+        self.upload_file(local_path, object_name, content_type)
+        return self.generate_signed_url(object_name)
 
     def generate_presigned_url(self, object_key: str, expires_in: Optional[int] = None) -> str:
         """Backward-compatible alias for legacy call sites."""

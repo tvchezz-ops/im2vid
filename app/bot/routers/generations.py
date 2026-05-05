@@ -892,6 +892,9 @@ async def mark_generation_completed(
 
 async def safe_send_bot_message(bot, chat_id: int, text: str, reply_markup=None) -> None:
     """Безопасно отправить сообщение пользователю, не роняя background task."""
+    if not text or not text.strip():
+        logger.warning("Skipped sending empty Telegram message to user")
+        return
     try:
         await bot.send_message(chat_id, text, reply_markup=reply_markup)
     except Exception as exc:
@@ -904,6 +907,36 @@ def get_max_telegram_document_size_bytes() -> int:
 
 def get_safe_telegram_document_size_bytes() -> int:
     return settings.telegram_safe_document_size_mb * 1024 * 1024
+
+
+def build_large_file_r2_message(signed_url: str) -> str:
+    return (
+        "⚠️ Файл слишком большой для отправки через Telegram.\n\n"
+        "Мы загрузили его в защищённое облачное хранилище (Cloudflare R2).\n\n"
+        f"🔗 Скачать файл:\n{signed_url}\n\n"
+        "🔒 Ссылка временная и безопасная — файл доступен только по этой ссылке.\n\n"
+        "Если у вас есть сомнения, вы можете:\n"
+        "- открыть ссылку в браузере\n"
+        "- проверить её через любой AI или онлайн-анализатор ссылок"
+    )
+
+
+async def upload_output_to_r2_and_get_signed_url(
+    *,
+    r2_storage: R2StorageService,
+    file_path: str,
+    content_type: Optional[str],
+) -> str:
+    """Загрузить output-файл в R2 без блокировки event loop и вернуть signed URL."""
+    signed_url = await asyncio.to_thread(
+        r2_storage.upload_and_get_signed_url,
+        file_path,
+        Path(file_path).name,
+        content_type,
+    )
+    if not signed_url or not signed_url.strip():
+        raise RuntimeError("Cloudflare R2 returned an empty signed URL")
+    return signed_url
 
 
 async def send_document_with_retry(*, bot, chat_id: int, file_path: str, caption: Optional[str]) -> None:
@@ -948,15 +981,29 @@ async def send_generation_outputs(bot, chat_id: int, output_urls: list[str]) -> 
             if file_size_bytes is not None and file_size_bytes > get_safe_telegram_document_size_bytes():
                 use_r2 = True
                 if r2_storage.is_configured():
-                    signed_url = r2_storage.upload_and_get_signed_url(
-                        temp_output_path,
-                        Path(temp_output_path).name,
-                        content_type,
-                    )
+                    try:
+                        signed_url = await upload_output_to_r2_and_get_signed_url(
+                            r2_storage=r2_storage,
+                            file_path=temp_output_path,
+                            content_type=content_type,
+                        )
+                    except Exception:
+                        delivered_successfully = False
+                        log_generation_output_delivery(
+                            "r2",
+                            file_size_bytes=file_size_bytes,
+                            status="failed",
+                        )
+                        await safe_send_bot_message(
+                            bot,
+                            chat_id,
+                            "❌ Не удалось загрузить файл. Попробуйте ещё раз позже",
+                        )
+                        continue
                     await safe_send_bot_message(
                         bot,
                         chat_id,
-                        f"Файл слишком большой, скачайте по ссылке: {signed_url}",
+                        build_large_file_r2_message(signed_url),
                     )
                     log_generation_output_delivery(
                         "r2",
@@ -973,7 +1020,7 @@ async def send_generation_outputs(bot, chat_id: int, output_urls: list[str]) -> 
                 await safe_send_bot_message(
                     bot,
                     chat_id,
-                    "⚠️ Файл слишком большой для отправки через Telegram, а fallback-хранилище недоступно.",
+                    "❌ Не удалось загрузить файл. Попробуйте ещё раз позже",
                 )
                 continue
             await send_document_with_retry(
@@ -990,26 +1037,68 @@ async def send_generation_outputs(bot, chat_id: int, output_urls: list[str]) -> 
         except OutputDeliveryTooLargeError:
             delivered_successfully = False
             log_generation_error(ErrorCode.E009_TELEGRAM_DELIVERY_FAILED, status="delivery_failed")
+            if temp_output_path and r2_storage.is_configured():
+                use_r2 = True
+                try:
+                    signed_url = await upload_output_to_r2_and_get_signed_url(
+                        r2_storage=r2_storage,
+                        file_path=temp_output_path,
+                        content_type=content_type,
+                    )
+                except Exception:
+                    log_generation_output_delivery(
+                        "r2",
+                        file_size_bytes=file_size_bytes,
+                        status="failed",
+                    )
+                    await safe_send_bot_message(
+                        bot,
+                        chat_id,
+                        "❌ Не удалось загрузить файл. Попробуйте ещё раз позже",
+                    )
+                    continue
+                await safe_send_bot_message(bot, chat_id, build_large_file_r2_message(signed_url))
+                log_generation_output_delivery(
+                    "r2",
+                    file_size_bytes=file_size_bytes,
+                    status="success",
+                )
+                delivered_successfully = True
+                continue
             log_generation_output_delivery(
-                "telegram",
+                "r2",
                 file_size_bytes=file_size_bytes,
                 status="failed",
             )
             await safe_send_bot_message(
                 bot,
                 chat_id,
-                "⚠️ Файл слишком большой для отправки через Telegram.",
+                "❌ Не удалось загрузить файл. Попробуйте ещё раз позже",
             )
         except Exception:
             logger.exception("Failed to deliver completed Wavespeed output as document")
             log_generation_error(ErrorCode.E009_TELEGRAM_DELIVERY_FAILED, status="delivery_failed")
             if temp_output_path and r2_storage.is_configured():
                 use_r2 = True
-                signed_url = r2_storage.upload_and_get_signed_url(
-                    temp_output_path,
-                    Path(temp_output_path).name,
-                    content_type,
-                )
+                try:
+                    signed_url = await upload_output_to_r2_and_get_signed_url(
+                        r2_storage=r2_storage,
+                        file_path=temp_output_path,
+                        content_type=content_type,
+                    )
+                except Exception:
+                    delivered_successfully = False
+                    log_generation_output_delivery(
+                        "r2",
+                        file_size_bytes=file_size_bytes,
+                        status="failed",
+                    )
+                    await safe_send_bot_message(
+                        bot,
+                        chat_id,
+                        "❌ Не удалось загрузить файл. Попробуйте ещё раз позже",
+                    )
+                    continue
                 log_generation_output_delivery(
                     "r2",
                     file_size_bytes=file_size_bytes,
@@ -1018,7 +1107,7 @@ async def send_generation_outputs(bot, chat_id: int, output_urls: list[str]) -> 
                 await safe_send_bot_message(
                     bot,
                     chat_id,
-                    f"Файл слишком большой, скачайте по ссылке: {signed_url}",
+                    build_large_file_r2_message(signed_url),
                 )
                 continue
             delivered_successfully = False
@@ -1113,7 +1202,7 @@ def normalize_filename(original_name: str) -> str:
     return f"imai-{cleaned_stem}{suffix}"
 
 
-async def download_file_from_url(url: str) -> str:
+async def download_file_from_url(url: str, max_size_bytes: Optional[int] = None) -> str:
     """Скачать файл по URL во временную директорию и вернуть путь к нему."""
     temp_path: Optional[str] = None
     bytes_written = 0
@@ -1130,7 +1219,7 @@ async def download_file_from_url(url: str) -> str:
                     except ValueError:
                         content_length = None
                     else:
-                        if content_length > get_max_telegram_document_size_bytes():
+                        if max_size_bytes is not None and content_length > max_size_bytes:
                             raise OutputDeliveryTooLargeError()
 
                 suffix = get_output_suffix_and_type(content_type)
@@ -1148,7 +1237,7 @@ async def download_file_from_url(url: str) -> str:
                 try:
                     async for chunk in response.content.iter_chunked(64 * 1024):
                         bytes_written += len(chunk)
-                        if bytes_written > get_max_telegram_document_size_bytes():
+                        if max_size_bytes is not None and bytes_written > max_size_bytes:
                             raise OutputDeliveryTooLargeError()
                         temp_file.write(chunk)
                 finally:

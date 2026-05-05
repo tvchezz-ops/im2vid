@@ -77,8 +77,8 @@ def test_upload_file_logs_and_uses_expected_bucket(tmp_path, monkeypatch) -> Non
     ]
     assert payloads == [
         {
-            "action": "generation_output_delivery",
-            "method": "r2",
+            "action": "upload_to_r2_success",
+            "delivery_method": "r2",
             "file_size": len(b"image-data"),
             "status": "success",
         }
@@ -139,15 +139,14 @@ def test_upload_and_get_signed_url_does_not_log_signed_url(tmp_path, monkeypatch
     assert signed_url == "https://signed.example.com/temp"
     assert payloads == [
         {
-            "action": "generation_output_delivery",
-            "method": "r2",
+            "action": "upload_to_r2_success",
+            "delivery_method": "r2",
             "file_size": len(b"video-data"),
             "status": "success",
         },
         {
-            "action": "generation_output_delivery",
-            "method": "r2",
-            "file_size": len(b"video-data"),
+            "action": "signed_url_generated",
+            "delivery_method": "r2",
             "status": "success",
         },
     ]

@@ -1002,7 +1002,7 @@ async def test_send_generation_outputs_notifies_when_file_too_large(monkeypatch,
     oversized_path.write_bytes(b"large")
 
     async def fake_download_output_file_to_temp(output_url: str):
-        raise generations.OutputDeliveryTooLargeError()
+        return str(oversized_path), "video/mp4", generations.get_safe_telegram_document_size_bytes() + 1
 
     bot = FakeBot()
     monkeypatch.setattr(generations, "download_output_file_to_temp", fake_download_output_file_to_temp)
@@ -1010,8 +1010,8 @@ async def test_send_generation_outputs_notifies_when_file_too_large(monkeypatch,
     delivered = await generations.send_generation_outputs(bot, 1, ["https://example.com/output.mp4"])
 
     assert delivered.delivered_successfully is False
-    assert delivered.use_r2 is False
-    assert bot.messages[-1] == "⚠️ Файл слишком большой для отправки через Telegram."
+    assert delivered.use_r2 is True
+    assert bot.messages[-1] == "❌ Не удалось загрузить файл. Попробуйте ещё раз позже"
     assert bot.documents == []
 
 
@@ -1031,7 +1031,7 @@ async def test_send_generation_outputs_returns_use_r2_for_files_over_safe_limit(
     assert delivered.delivered_successfully is False
     assert delivered.use_r2 is True
     assert bot.documents == []
-    assert bot.messages[-1] == "⚠️ Файл слишком большой для отправки через Telegram, а fallback-хранилище недоступно."
+    assert bot.messages[-1] == "❌ Не удалось загрузить файл. Попробуйте ещё раз позже"
 
 
 @pytest.mark.asyncio
@@ -1061,7 +1061,15 @@ async def test_send_generation_outputs_uses_r2_fallback_when_configured(monkeypa
     assert delivered.delivered_successfully is True
     assert delivered.use_r2 is True
     assert bot.documents == []
-    assert bot.messages[-1] == "Файл слишком большой, скачайте по ссылке: https://signed.example.com/file"
+    assert bot.messages[-1] == (
+        "⚠️ Файл слишком большой для отправки через Telegram.\n\n"
+        "Мы загрузили его в защищённое облачное хранилище (Cloudflare R2).\n\n"
+        "🔗 Скачать файл:\nhttps://signed.example.com/file\n\n"
+        "🔒 Ссылка временная и безопасная — файл доступен только по этой ссылке.\n\n"
+        "Если у вас есть сомнения, вы можете:\n"
+        "- открыть ссылку в браузере\n"
+        "- проверить её через любой AI или онлайн-анализатор ссылок"
+    )
 
 
 @pytest.mark.asyncio
@@ -1193,7 +1201,69 @@ async def test_send_generation_outputs_uses_r2_after_telegram_delivery_failure(m
     assert delivered.delivered_successfully is True
     assert delivered.use_r2 is True
     assert bot.documents == []
-    assert bot.messages[-1] == "Файл слишком большой, скачайте по ссылке: https://signed.example.com/retry-fallback"
+    assert bot.messages[-1] == (
+        "⚠️ Файл слишком большой для отправки через Telegram.\n\n"
+        "Мы загрузили его в защищённое облачное хранилище (Cloudflare R2).\n\n"
+        "🔗 Скачать файл:\nhttps://signed.example.com/retry-fallback\n\n"
+        "🔒 Ссылка временная и безопасная — файл доступен только по этой ссылке.\n\n"
+        "Если у вас есть сомнения, вы можете:\n"
+        "- открыть ссылку в браузере\n"
+        "- проверить её через любой AI или онлайн-анализатор ссылок"
+    )
+
+
+@pytest.mark.asyncio
+async def test_send_generation_outputs_reports_error_when_r2_upload_fails(monkeypatch, tmp_path) -> None:
+    safe_limit_path = tmp_path / "imai-safe-limit.mp4"
+    safe_limit_path.write_bytes(b"safe-limit")
+
+    async def fake_download_output_file_to_temp(output_url: str):
+        return str(safe_limit_path), "video/mp4", generations.get_safe_telegram_document_size_bytes() + 1
+
+    class FakeR2StorageService:
+        def is_configured(self) -> bool:
+            return True
+
+        def upload_and_get_signed_url(self, local_path: str, filename: str, content_type: str | None) -> str:
+            raise RuntimeError("upload failed")
+
+    bot = FakeBot()
+    monkeypatch.setattr(generations, "download_output_file_to_temp", fake_download_output_file_to_temp)
+    monkeypatch.setattr(generations, "R2StorageService", FakeR2StorageService)
+
+    delivered = await generations.send_generation_outputs(bot, 1, ["https://example.com/output.mp4"])
+
+    assert delivered.delivered_successfully is False
+    assert delivered.use_r2 is True
+    assert bot.documents == []
+    assert bot.messages[-1] == "❌ Не удалось загрузить файл. Попробуйте ещё раз позже"
+
+
+@pytest.mark.asyncio
+async def test_send_generation_outputs_reports_error_when_r2_returns_empty_url(monkeypatch, tmp_path) -> None:
+    safe_limit_path = tmp_path / "imai-safe-limit.mp4"
+    safe_limit_path.write_bytes(b"safe-limit")
+
+    async def fake_download_output_file_to_temp(output_url: str):
+        return str(safe_limit_path), "video/mp4", generations.get_safe_telegram_document_size_bytes() + 1
+
+    class FakeR2StorageService:
+        def is_configured(self) -> bool:
+            return True
+
+        def upload_and_get_signed_url(self, local_path: str, filename: str, content_type: str | None) -> str:
+            return ""
+
+    bot = FakeBot()
+    monkeypatch.setattr(generations, "download_output_file_to_temp", fake_download_output_file_to_temp)
+    monkeypatch.setattr(generations, "R2StorageService", FakeR2StorageService)
+
+    delivered = await generations.send_generation_outputs(bot, 1, ["https://example.com/output.mp4"])
+
+    assert delivered.delivered_successfully is False
+    assert delivered.use_r2 is True
+    assert bot.documents == []
+    assert bot.messages[-1] == "❌ Не удалось загрузить файл. Попробуйте ещё раз позже"
 
 
 @pytest.mark.asyncio
