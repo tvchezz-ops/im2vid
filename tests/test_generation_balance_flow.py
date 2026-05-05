@@ -1141,7 +1141,10 @@ def test_log_generation_output_delivery_uses_only_safe_fields(monkeypatch) -> No
     monkeypatch.setattr(generations.logger, "info", fake_info)
 
     generations.log_generation_output_delivery(
-        "telegram",
+        "photo",
+        user_id=123,
+        send_results_as_files=False,
+        content_type="image/jpeg; charset=binary",
         file_size_bytes=123,
         status="success",
     )
@@ -1149,7 +1152,10 @@ def test_log_generation_output_delivery_uses_only_safe_fields(monkeypatch) -> No
     assert payloads == [
         {
             "action": "generation_output_delivery",
-            "method": "telegram",
+            "user_id": 123,
+            "send_results_as_files": False,
+            "content_type": "image/jpeg",
+            "delivery_method": "photo",
             "file_size": 123,
             "status": "success",
         }
@@ -1633,6 +1639,28 @@ async def test_send_generation_outputs_sends_image_as_photo_by_default(monkeypat
 
 
 @pytest.mark.asyncio
+async def test_send_generation_outputs_sends_png_as_photo_when_preference_disabled(monkeypatch, tmp_path) -> None:
+    output_path = tmp_path / "imai-photo.png"
+    output_path.write_bytes(b"image")
+
+    async def fake_download_output_file_to_temp(output_url: str):
+        return str(output_path), "image/png", 5
+
+    async def fake_get_user_send_results_as_files(user_id: int) -> bool:
+        return False
+
+    bot = FakeBot()
+    monkeypatch.setattr(generations, "download_output_file_to_temp", fake_download_output_file_to_temp)
+    monkeypatch.setattr(generations, "get_user_send_results_as_files", fake_get_user_send_results_as_files)
+
+    delivered = await generations.send_generation_outputs(bot, 1, ["https://example.com/output.png"], user_id=1)
+
+    assert delivered.delivered_successfully is True
+    assert bot.photos != []
+    assert bot.documents == []
+
+
+@pytest.mark.asyncio
 async def test_send_generation_outputs_sends_video_as_video_by_default(monkeypatch, tmp_path) -> None:
     output_path = tmp_path / "imai-video.mp4"
     output_path.write_bytes(b"video")
@@ -1651,6 +1679,28 @@ async def test_send_generation_outputs_sends_video_as_video_by_default(monkeypat
 
     assert delivered.delivered_successfully is True
     assert bot.photos == []
+    assert bot.videos != []
+    assert bot.documents == []
+
+
+@pytest.mark.asyncio
+async def test_send_generation_outputs_sends_video_as_video_when_preference_disabled(monkeypatch, tmp_path) -> None:
+    output_path = tmp_path / "imai-video.mp4"
+    output_path.write_bytes(b"video")
+
+    async def fake_download_output_file_to_temp(output_url: str):
+        return str(output_path), "video/mp4", 5
+
+    async def fake_get_user_send_results_as_files(user_id: int) -> bool:
+        return False
+
+    bot = FakeBot()
+    monkeypatch.setattr(generations, "download_output_file_to_temp", fake_download_output_file_to_temp)
+    monkeypatch.setattr(generations, "get_user_send_results_as_files", fake_get_user_send_results_as_files)
+
+    delivered = await generations.send_generation_outputs(bot, 1, ["https://example.com/output.mp4"], user_id=1)
+
+    assert delivered.delivered_successfully is True
     assert bot.videos != []
     assert bot.documents == []
 

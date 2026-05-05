@@ -970,28 +970,18 @@ async def send_document_with_retry(*, bot, chat_id: int, file_path: str, caption
                 caption=caption,
                 request_timeout=DOCUMENT_SEND_REQUEST_TIMEOUT_SECONDS,
             )
-            log_generation_output_delivery(
-                "telegram",
-                file_size_bytes=Path(file_path).stat().st_size,
-                status="success",
-            )
             return
         except (TelegramNetworkError, TimeoutError):
             if attempt > DOCUMENT_SEND_RETRY_COUNT:
-                log_generation_output_delivery(
-                    "telegram",
-                    file_size_bytes=Path(file_path).stat().st_size,
-                    status="failed",
-                )
                 raise
             await asyncio.sleep(2 ** (attempt - 1))
 
 
 def get_output_delivery_kind(content_type: Optional[str]) -> str:
-    normalized_content_type = (content_type or "").split(";", 1)[0].strip().lower()
-    if normalized_content_type.startswith("image/"):
+    normalized_content_type = normalize_content_type(content_type)
+    if normalized_content_type in {"image/png", "image/jpeg", "image/webp"}:
         return "photo"
-    if normalized_content_type.startswith("video/"):
+    if normalized_content_type in {"video/mp4", "video/webm", "video/quicktime"}:
         return "video"
     return "document"
 
@@ -1018,13 +1008,14 @@ async def send_generation_outputs(
     chat_id: int,
     output_urls: list[str],
     user_id: Optional[int] = None,
+    delivery_preference: Optional[bool] = None,
 ) -> OutputDeliveryResult:
     """Отправить пользователю результаты генерации с учётом пользовательского способа доставки."""
     delivered_successfully = True
     use_r2 = False
     r2_storage = R2StorageService()
-    send_results_as_files = False
-    if user_id is not None:
+    send_results_as_files = delivery_preference if delivery_preference is not None else False
+    if delivery_preference is None and user_id is not None:
         send_results_as_files = await get_user_send_results_as_files(user_id)
     for output_url in output_urls:
         temp_output_path: Optional[str] = None
@@ -1046,6 +1037,9 @@ async def send_generation_outputs(
                         delivered_successfully = False
                         log_generation_output_delivery(
                             "r2",
+                            user_id=user_id,
+                            send_results_as_files=send_results_as_files,
+                            content_type=content_type,
                             file_size_bytes=file_size_bytes,
                             status="failed",
                         )
@@ -1062,6 +1056,9 @@ async def send_generation_outputs(
                     )
                     log_generation_output_delivery(
                         "r2",
+                        user_id=user_id,
+                        send_results_as_files=send_results_as_files,
+                        content_type=content_type,
                         file_size_bytes=file_size_bytes,
                         status="success",
                     )
@@ -1069,6 +1066,9 @@ async def send_generation_outputs(
                 delivered_successfully = False
                 log_generation_output_delivery(
                     "r2",
+                    user_id=user_id,
+                    send_results_as_files=send_results_as_files,
+                    content_type=content_type,
                     file_size_bytes=file_size_bytes,
                     status="failed",
                 )
@@ -1083,24 +1083,46 @@ async def send_generation_outputs(
                 try:
                     await send_photo_output(bot=bot, chat_id=chat_id, file_path=temp_output_path)
                     log_generation_output_delivery(
-                        "telegram_photo",
+                        "photo",
+                        user_id=user_id,
+                        send_results_as_files=send_results_as_files,
+                        content_type=content_type,
                         file_size_bytes=file_size_bytes,
                         status="success",
                     )
                     continue
                 except Exception:
                     logger.exception("Failed to deliver completed Wavespeed output as photo")
+                    log_generation_output_delivery(
+                        "photo",
+                        user_id=user_id,
+                        send_results_as_files=send_results_as_files,
+                        content_type=content_type,
+                        file_size_bytes=file_size_bytes,
+                        status="failed",
+                    )
             elif delivery_kind == "video":
                 try:
                     await send_video_output(bot=bot, chat_id=chat_id, file_path=temp_output_path)
                     log_generation_output_delivery(
-                        "telegram_video",
+                        "video",
+                        user_id=user_id,
+                        send_results_as_files=send_results_as_files,
+                        content_type=content_type,
                         file_size_bytes=file_size_bytes,
                         status="success",
                     )
                     continue
                 except Exception:
                     logger.exception("Failed to deliver completed Wavespeed output as video")
+                    log_generation_output_delivery(
+                        "video",
+                        user_id=user_id,
+                        send_results_as_files=send_results_as_files,
+                        content_type=content_type,
+                        file_size_bytes=file_size_bytes,
+                        status="failed",
+                    )
 
             await send_document_with_retry(
                 bot=bot,
@@ -1109,7 +1131,10 @@ async def send_generation_outputs(
                 caption=None,
             )
             log_generation_output_delivery(
-                "telegram_document",
+                "document",
+                user_id=user_id,
+                send_results_as_files=send_results_as_files,
+                content_type=content_type,
                 file_size_bytes=file_size_bytes,
                 status="success",
             )
@@ -1128,6 +1153,9 @@ async def send_generation_outputs(
                 except Exception:
                     log_generation_output_delivery(
                         "r2",
+                        user_id=user_id,
+                        send_results_as_files=send_results_as_files,
+                        content_type=content_type,
                         file_size_bytes=file_size_bytes,
                         status="failed",
                     )
@@ -1140,6 +1168,9 @@ async def send_generation_outputs(
                 await safe_send_bot_message(bot, chat_id, build_large_file_r2_message(short_url))
                 log_generation_output_delivery(
                     "r2",
+                    user_id=user_id,
+                    send_results_as_files=send_results_as_files,
+                    content_type=content_type,
                     file_size_bytes=file_size_bytes,
                     status="success",
                 )
@@ -1147,6 +1178,9 @@ async def send_generation_outputs(
                 continue
             log_generation_output_delivery(
                 "r2",
+                user_id=user_id,
+                send_results_as_files=send_results_as_files,
+                content_type=content_type,
                 file_size_bytes=file_size_bytes,
                 status="failed",
             )
@@ -1171,6 +1205,9 @@ async def send_generation_outputs(
                     delivered_successfully = False
                     log_generation_output_delivery(
                         "r2",
+                        user_id=user_id,
+                        send_results_as_files=send_results_as_files,
+                        content_type=content_type,
                         file_size_bytes=file_size_bytes,
                         status="failed",
                     )
@@ -1182,6 +1219,9 @@ async def send_generation_outputs(
                     continue
                 log_generation_output_delivery(
                     "r2",
+                    user_id=user_id,
+                    send_results_as_files=send_results_as_files,
+                    content_type=content_type,
                     file_size_bytes=file_size_bytes,
                     status="success",
                 )
@@ -1193,7 +1233,10 @@ async def send_generation_outputs(
                 continue
             delivered_successfully = False
             log_generation_output_delivery(
-                "telegram",
+                "document",
+                user_id=user_id,
+                send_results_as_files=send_results_as_files,
+                content_type=content_type,
                 file_size_bytes=file_size_bytes,
                 status="failed",
             )
@@ -1225,6 +1268,9 @@ async def cleanup_temp_output_file(file_path: Optional[str]) -> None:
 def log_generation_output_delivery(
     delivery_method: str,
     *,
+    user_id: Optional[int],
+    send_results_as_files: bool,
+    content_type: Optional[str],
     file_size_bytes: Optional[int] = None,
     status: str,
 ) -> None:
@@ -1232,16 +1278,24 @@ def log_generation_output_delivery(
     logger.info(
         {
             "action": "generation_output_delivery",
-            "method": delivery_method,
+            "user_id": user_id,
+            "send_results_as_files": send_results_as_files,
+            "content_type": normalize_content_type(content_type),
+            "delivery_method": delivery_method,
             "file_size": file_size_bytes,
             "status": status,
         }
     )
 
 
+def normalize_content_type(content_type: Optional[str]) -> Optional[str]:
+    normalized_content_type = (content_type or "").split(";", 1)[0].strip().lower()
+    return normalized_content_type or None
+
+
 def get_output_suffix_and_type(content_type: Optional[str]) -> str:
     """Определить расширение временного output-файла по Content-Type."""
-    normalized_content_type = (content_type or "").split(";", 1)[0].strip().lower()
+    normalized_content_type = normalize_content_type(content_type)
     if normalized_content_type == "image/png":
         return ".png"
     if normalized_content_type == "image/jpeg":
@@ -1250,6 +1304,10 @@ def get_output_suffix_and_type(content_type: Optional[str]) -> str:
         return ".webp"
     if normalized_content_type == "video/mp4":
         return ".mp4"
+    if normalized_content_type == "video/webm":
+        return ".webm"
+    if normalized_content_type == "video/quicktime":
+        return ".mov"
     return ".bin"
 
 
@@ -1257,12 +1315,16 @@ def get_content_type_for_path(file_path: str) -> Optional[str]:
     suffix = Path(file_path).suffix.lower()
     if suffix == ".png":
         return "image/png"
-    if suffix == ".jpg":
+    if suffix in {".jpg", ".jpeg"}:
         return "image/jpeg"
     if suffix == ".webp":
         return "image/webp"
     if suffix == ".mp4":
         return "video/mp4"
+    if suffix == ".webm":
+        return "video/webm"
+    if suffix == ".mov":
+        return "video/quicktime"
     return None
 
 
