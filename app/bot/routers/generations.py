@@ -1056,9 +1056,9 @@ async def poll_generation_result(
     model_key: str,
     cost: int,
     payload: dict[str, Any],
-    temp_input_path: str,
+    temp_input_path: Optional[str] | list[str],
 ) -> None:
-    """Выполнить submit и дождаться terminal результата, затем удалить временный файл."""
+    """Выполнить submit и дождаться terminal результата, затем удалить временный input media."""
     wavespeed = WavespeedService()
     result: Optional[WavespeedResult] = None
     try:
@@ -2106,11 +2106,6 @@ async def confirm_generation(callback: CallbackQuery, state: FSMContext, session
             reply_markup=get_main_menu_keyboard(),
         )
         await callback.answer()
-    finally:
-        if not task_started:
-            await cleanup_generation_file(temp_input_path)
-
-
 @router.callback_query(F.data.startswith("gen:"))
 async def handle_unknown_generation_callback(callback: CallbackQuery, state: FSMContext):
     """Fallback для устаревших или неподдерживаемых inline-кнопок генераций."""

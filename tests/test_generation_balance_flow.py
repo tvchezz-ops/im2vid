@@ -677,6 +677,57 @@ async def test_confirm_generation_reuses_uploaded_multi_image_items(session_fact
 
 
 @pytest.mark.asyncio
+async def test_confirm_generation_keeps_temp_media_until_polling_finishes(session_factory, monkeypatch, tmp_path) -> None:
+    async with session_factory() as session:
+        await create_user(session, user_id=103, balance=3)
+
+        temp_input_path = tmp_path / "input-persist.png"
+        temp_input_path.write_bytes(b"input")
+        captured: dict[str, object] = {}
+
+        class FakeTelegramFilesService:
+            def __init__(self, bot):
+                self.bot = bot
+
+            async def download_temp_file_and_get_public_url(self, file_id: str):
+                return SimpleNamespace(
+                    local_path=temp_input_path,
+                    public_url="https://example.com/media/input-persist.png",
+                )
+
+        async def fake_poll_generation_result(**kwargs) -> None:
+            captured["exists_during_poll"] = temp_input_path.exists()
+            captured.update(kwargs)
+            temp_input_path.unlink(missing_ok=True)
+
+        monkeypatch.setattr(generations, "TelegramFilesService", FakeTelegramFilesService)
+        monkeypatch.setattr(generations, "poll_generation_result", fake_poll_generation_result)
+
+        state = FakeState(
+            {
+                "model_key": "nano_banana",
+                "model_title": "Nano Banana",
+                "model_endpoint": "/api/v3/nano-banana",
+                "prompt": "Keep the source available until background polling starts",
+                "input_image_file_id": "telegram-file-id",
+                "user_settings": {"aspect_ratio": "1:1", "resolution": "4k", "output_format": "png"},
+            }
+        )
+        callback = FakeCallback(user_id=103)
+
+        try:
+            await generations.confirm_generation(callback, state, session)
+            if 103 in generations.ACTIVE_GENERATIONS:
+                await generations.ACTIVE_GENERATIONS[103]["task"]
+
+            assert captured["exists_during_poll"] is True
+            assert captured["temp_input_path"] == str(temp_input_path)
+        finally:
+            generations.ACTIVE_GENERATIONS.clear()
+            temp_input_path.unlink(missing_ok=True)
+
+
+@pytest.mark.asyncio
 async def test_failed_generation_refunds_credit(session_factory, monkeypatch, tmp_path) -> None:
     session_maker = session_factory
     monkeypatch.setattr(generations.db_manager, "session_factory", session_maker)

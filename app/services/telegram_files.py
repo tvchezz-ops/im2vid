@@ -5,7 +5,6 @@ from dataclasses import dataclass
 import time
 import uuid
 from pathlib import Path
-from urllib.parse import quote
 
 from aiohttp import web
 from aiogram import Bot
@@ -55,7 +54,12 @@ def ensure_temp_media_dir() -> Path:
 def build_public_media_url(filename: str) -> str:
     """Собрать публичный URL для временного файла."""
     base_url = ensure_public_base_url()
-    return f"{base_url}{MEDIA_ROUTE_PREFIX}/{quote(filename)}"
+    return f"{base_url}{build_public_media_path(filename)}"
+
+
+def build_public_media_path(filename: str) -> str:
+    """Собрать public path для временного файла."""
+    return f"{MEDIA_ROUTE_PREFIX}/{filename}"
 
 
 def create_media_app() -> web.Application:
@@ -139,6 +143,30 @@ class TelegramFilesService:
                 "Не удалось загрузить изображение. Отправьте другое и попробуйте снова.",
                 log_message=f"Telegram file download failed: {type(e).__name__}",
             ) from e
+        if not destination.exists():
+            logger.error(
+                "Telegram temp media missing after download",
+                extra={
+                    "media_filename": filename,
+                    "public_url_path": build_public_media_path(filename),
+                    "local_path_exists": False,
+                    "file_size_bytes": 0,
+                },
+            )
+            raise ImageUploadError(
+                "Не удалось загрузить изображение. Отправьте другое и попробуйте снова.",
+                log_message="Telegram file missing after local save",
+            )
+        file_size_bytes = destination.stat().st_size
+        logger.info(
+            "Telegram temp media saved",
+            extra={
+                "media_filename": filename,
+                "public_url_path": build_public_media_path(filename),
+                "local_path_exists": True,
+                "file_size_bytes": file_size_bytes,
+            },
+        )
         return TemporaryTelegramMedia(
             local_path=destination,
             public_url=build_public_media_url(filename),
