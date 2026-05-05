@@ -35,6 +35,7 @@ def test_build_generation_sections_keyboard_uses_expected_callback_prefix() -> N
     assert "gen:section:image_edit" in callback_data
     assert "gen:section:lipsync" in callback_data
     assert "gen:all" in callback_data
+    assert keyboard.inline_keyboard[-1][0].callback_data == "gen:back:main"
 
 
 def test_build_providers_keyboard_uses_expected_callback_prefix() -> None:

@@ -154,12 +154,12 @@ async def test_show_generation_menu_starts_with_generation_type_selection() -> N
 
 
 @pytest.mark.asyncio
-async def test_choose_generation_type_shows_models_for_type() -> None:
+async def test_choose_generation_section_shows_models_for_type() -> None:
     state = FakeState()
     message = FakeMessage(chat_id=402)
-    callback = FakeCallback(user_id=402, message=message, data="gen:type:image_edit")
+    callback = FakeCallback(user_id=402, message=message, data="gen:section:image_edit")
 
-    await generations.choose_generation_type(callback, state)
+    await generations.choose_generation_section(callback, state)
 
     assert state.state == GenerationStates.choosing_generation_type
     assert state.data["selected_generation_type"] == "image_edit"
@@ -171,9 +171,9 @@ async def test_choose_generation_type_shows_models_for_type() -> None:
 async def test_choose_all_models_shows_provider_list() -> None:
     state = FakeState()
     message = FakeMessage(chat_id=403)
-    callback = FakeCallback(user_id=403, message=message, data="gen:type:all")
+    callback = FakeCallback(user_id=403, message=message, data="gen:all")
 
-    await generations.choose_generation_type(callback, state)
+    await generations.show_all_generation_providers(callback, state)
 
     assert state.state == GenerationStates.choosing_provider
     assert state.data["selected_generation_type"] == "all"
@@ -223,7 +223,7 @@ async def test_back_to_generation_models_returns_to_provider_filtered_models() -
         }
     )
     message = FakeMessage(chat_id=405)
-    callback = FakeCallback(user_id=405, message=message, data="gen:back_models")
+    callback = FakeCallback(user_id=405, message=message, data="gen:back:models")
 
     await generations.back_to_generation_models(callback, state)
 
@@ -237,15 +237,39 @@ async def test_back_to_generation_models_returns_to_provider_filtered_models() -
 async def test_back_to_generation_types_from_provider_screen() -> None:
     state = FakeState({"selected_generation_type": "all", "selected_provider": "google"})
     message = FakeMessage(chat_id=406)
-    callback = FakeCallback(user_id=406, message=message, data="gen:back_types")
+    callback = FakeCallback(user_id=406, message=message, data="gen:back:sections")
 
-    await generations.back_to_generation_types(callback, state)
+    await generations.back_to_generation_sections(callback, state)
 
     assert state.state == GenerationStates.choosing_generation_type
     assert state.data["selected_generation_type"] is None
     assert state.data["selected_provider"] is None
     assert "Выберите тип генерации:" in message.edits[-1]
     assert "Lipsync (озвучка лица)" in message.edits[-1]
+
+
+@pytest.mark.asyncio
+async def test_back_to_main_from_sections_restores_reply_keyboard() -> None:
+    state = FakeState({"selected_generation_type": "image_edit"})
+    message = FakeMessage(chat_id=406)
+    callback = FakeCallback(user_id=406, message=message, data="gen:back:main")
+
+    await generations.back_to_generation_main_menu(callback, state)
+
+    assert message.edits[-1] == "🏠 Главное меню"
+    assert message.answers[-1] == "Выбери нужный раздел."
+
+
+@pytest.mark.asyncio
+async def test_unknown_generation_callback_shows_fallback_alert_screen() -> None:
+    state = FakeState()
+    message = FakeMessage(chat_id=406)
+    callback = FakeCallback(user_id=406, message=message, data="gen:obsolete")
+
+    await generations.handle_unknown_generation_callback(callback, state)
+
+    assert state.state == GenerationStates.choosing_generation_type
+    assert "Выберите тип генерации:" in message.edits[-1]
 
 
 @pytest.mark.asyncio

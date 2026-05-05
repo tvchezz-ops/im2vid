@@ -5,7 +5,7 @@ from pathlib import Path
 import tempfile
 from typing import Any, Dict, Optional
 
-from aiogram import Router
+from aiogram import F, Router
 from aiogram.exceptions import TelegramBadRequest, TelegramNetworkError
 from aiogram.fsm.context import FSMContext
 from aiogram.types import CallbackQuery, FSInputFile, Message, ReplyKeyboardRemove
@@ -15,14 +15,16 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.bot.keyboards import (
     build_back_to_settings_keyboard,
     build_generation_confirm_keyboard,
+    build_generation_sections_keyboard,
     build_generation_type_keyboard,
+    build_models_keyboard,
     build_model_selection_keyboard,
     build_model_settings_keyboard,
+    build_providers_keyboard,
     build_provider_keyboard,
     build_setting_options_keyboard,
-    get_option_value_by_index,
-    get_setting_key_by_index,
     get_main_menu_keyboard,
+    resolve_model_key_from_token,
 )
 from app.bot.states import GenerationStates
 from app.db import GenerationRepository, UserRepository
@@ -62,15 +64,17 @@ DOCUMENT_SEND_RETRY_DELAY_SECONDS = 5
 MAX_TELEGRAM_DOCUMENT_SIZE_BYTES = 50 * 1024 * 1024
 
 MODEL_PREFIX = "gen:model:"
-GENERATION_TYPE_PREFIX = "gen:type:"
+GENERATION_SECTION_PREFIX = "gen:section:"
+GENERATION_ALL = "gen:all"
 PROVIDER_PREFIX = "gen:provider:"
 SETTINGS_OPEN_PREFIX = "gen:setting:"
 SETTINGS_VALUE_PREFIX = "gen:set:"
-SETTINGS_BACK_PREFIX = "gen:back_settings"
-SETTINGS_BACK_MODELS = "gen:back_models"
-PROVIDERS_BACK_TYPES = "gen:back_types"
+BACK_TO_MAIN = "gen:back:main"
+BACK_TO_SECTIONS = "gen:back:sections"
+BACK_TO_PROVIDERS = "gen:back:providers"
+SETTINGS_BACK_PREFIX = "gen:back:settings"
+SETTINGS_BACK_MODELS = "gen:back:models"
 SETTINGS_CONTINUE = "gen:continue"
-SETTINGS_EDIT = "gen:edit"
 GENERATION_CONFIRM = "gen:confirm"
 
 GENERATION_TYPE_LABELS = {
@@ -346,29 +350,51 @@ def build_generation_type_options() -> list[tuple[str, str]]:
     return options
 
 
+def log_generation_callback(callback: CallbackQuery) -> None:
+    """Логировать callback из раздела генерации."""
+    logger.info(
+        {
+            "action": "generation_callback",
+            "user_id": callback.from_user.id,
+            "callback_data": callback.data,
+        }
+    )
+
+
+def get_selected_models_for_state(state_data: dict[str, Any]) -> list[GenerationModel]:
+    """Получить активный список моделей для текущего экрана выбора."""
+    selected_provider = state_data.get("selected_provider")
+    selected_generation_type = state_data.get("selected_generation_type")
+
+    if selected_provider:
+        return list_models_by_provider(str(selected_provider))
+    if selected_generation_type and selected_generation_type != "all":
+        return list_models_by_type(str(selected_generation_type))
+    return []
+
+
 async def render_models_screen(message: Message) -> None:
     """Показать список типов генерации."""
     await message.answer(
         build_generation_types_screen_text(),
-        reply_markup=build_generation_type_keyboard(build_generation_type_options()),
+        reply_markup=build_generation_sections_keyboard(),
         parse_mode="HTML",
     )
 
 
 async def render_provider_screen(message: Message, *, edit: bool) -> None:
     """Показать список провайдеров для выбора моделей."""
-    provider_options = [(provider, PROVIDER_LABELS[provider]) for provider in list_providers()]
     text = "Выберите провайдера:"
     if edit:
         await message.edit_text(
             text,
-            reply_markup=build_provider_keyboard(provider_options),
+            reply_markup=build_providers_keyboard(),
             parse_mode="HTML",
         )
         return
     await message.answer(
         text,
-        reply_markup=build_provider_keyboard(provider_options),
+        reply_markup=build_providers_keyboard(),
         parse_mode="HTML",
     )
 
@@ -379,18 +405,19 @@ async def render_model_list_screen(
     models: list[GenerationModel],
     edit: bool,
     heading: str,
+    back_callback: str,
 ) -> None:
     """Показать список моделей для выбранного типа или провайдера."""
     if edit:
         await message.edit_text(
             heading,
-            reply_markup=build_model_selection_keyboard(models),
+            reply_markup=build_models_keyboard(models, back_callback),
             parse_mode="HTML",
         )
         return
     await message.answer(
         heading,
-        reply_markup=build_model_selection_keyboard(models),
+        reply_markup=build_models_keyboard(models, back_callback),
         parse_mode="HTML",
     )
 
@@ -447,15 +474,9 @@ async def show_setting_options(message: Message, state: FSMContext, setting_key:
         return
     user_settings = get_model_state_settings(state_data, model_key)
     current_value = str(user_settings.get(setting_key, model.user_settings[setting_key].default))
-    setting_entries = list(model.user_settings)
-    setting_index = setting_entries.index(setting_key)
     await message.edit_text(
         build_setting_value_text(model, setting_key, current_value),
-        reply_markup=build_setting_options_keyboard(
-            setting_index,
-            model.user_settings[setting_key].options,
-            current_value,
-        ),
+        reply_markup=build_setting_options_keyboard(model, setting_key, current_value),
         parse_mode="HTML",
     )
 
@@ -892,6 +913,7 @@ async def show_generation_menu(message: Message, state: FSMContext):
 
         await reset_generation_state(state)
         await state.set_state(GenerationStates.choosing_generation_type)
+        await state.update_data(selected_generation_type=None, selected_provider=None)
         await render_models_screen(message)
         
         logger.debug(f"Generation menu shown for user {message.from_user.id}")
@@ -903,11 +925,14 @@ async def show_generation_menu(message: Message, state: FSMContext):
 @router.callback_query(lambda cb: cb.data.startswith(MODEL_PREFIX))
 async def choose_generation_model(callback: CallbackQuery, state: FSMContext):
     """Выбрать модель для генерации."""
-    model_key = callback.data.removeprefix(MODEL_PREFIX)
+    log_generation_callback(callback)
+    model_token = callback.data.removeprefix(MODEL_PREFIX)
     if callback.from_user.id in ACTIVE_GENERATIONS:
         await callback.answer("У вас уже запущена генерация", show_alert=True)
         return
 
+    state_data = await state.get_data()
+    model_key = resolve_model_key_from_token(get_selected_models_for_state(state_data), model_token) or model_token
     model = get_generation_model(model_key)
     await state.set_state(GenerationStates.choosing_settings)
     await state.update_data(
@@ -926,30 +951,63 @@ async def choose_generation_model(callback: CallbackQuery, state: FSMContext):
     await callback.answer()
 
 
-@router.callback_query(lambda cb: cb.data.startswith(GENERATION_TYPE_PREFIX))
-async def choose_generation_type(callback: CallbackQuery, state: FSMContext):
-    """Выбрать тип генерации или перейти к выбору провайдера."""
-    generation_type = callback.data.removeprefix(GENERATION_TYPE_PREFIX)
-
-    if generation_type == "all":
-        await state.set_state(GenerationStates.choosing_provider)
-        await state.update_data(selected_generation_type="all", selected_provider=None)
-        await render_provider_screen(callback.message, edit=True)
+@router.callback_query(F.data.startswith(GENERATION_SECTION_PREFIX))
+async def choose_generation_section(callback: CallbackQuery, state: FSMContext):
+    """Выбрать раздел генерации и показать список моделей."""
+    log_generation_callback(callback)
+    generation_type = callback.data.removeprefix(GENERATION_SECTION_PREFIX)
+    models = list_models_by_type(generation_type)
+    await state.set_state(GenerationStates.choosing_generation_type)
+    await state.update_data(selected_generation_type=generation_type, selected_provider=None)
+    if not models:
+        await callback.message.edit_text(
+            "В этом разделе пока нет подключённых моделей",
+            reply_markup=build_models_keyboard([], BACK_TO_SECTIONS),
+            parse_mode="HTML",
+        )
         await callback.answer()
         return
 
-    models = list_models_by_type(generation_type)
-    if not models:
-        await callback.answer("Для этого типа пока нет моделей", show_alert=True)
-        return
-
-    await state.set_state(GenerationStates.choosing_generation_type)
-    await state.update_data(selected_generation_type=generation_type, selected_provider=None)
     await render_model_list_screen(
         callback.message,
         models=models,
         edit=True,
         heading="Выберите модель:",
+        back_callback=BACK_TO_SECTIONS,
+    )
+    await callback.answer()
+
+
+@router.callback_query(F.data == GENERATION_ALL)
+async def show_all_generation_providers(callback: CallbackQuery, state: FSMContext):
+    """Показать список провайдеров для All List."""
+    log_generation_callback(callback)
+    await state.set_state(GenerationStates.choosing_provider)
+    await state.update_data(selected_generation_type="all", selected_provider=None, current_screen="providers")
+    await render_provider_screen(callback.message, edit=True)
+    await callback.answer()
+
+
+@router.callback_query(F.data == BACK_TO_MAIN)
+async def back_to_generation_main_menu(callback: CallbackQuery, state: FSMContext):
+    """Закрыть inline-экран генераций и вернуть главное меню."""
+    log_generation_callback(callback)
+    await reset_generation_state(state)
+    await callback.message.edit_text("🏠 Главное меню", reply_markup=None)
+    await callback.message.answer("Выбери нужный раздел.", reply_markup=get_main_menu_keyboard())
+    await callback.answer()
+
+
+@router.callback_query(F.data == BACK_TO_SECTIONS)
+async def back_to_generation_sections(callback: CallbackQuery, state: FSMContext):
+    """Вернуться к выбору раздела генерации."""
+    log_generation_callback(callback)
+    await state.set_state(GenerationStates.choosing_generation_type)
+    await state.update_data(selected_generation_type=None, selected_provider=None)
+    await callback.message.edit_text(
+        build_generation_types_screen_text(),
+        reply_markup=build_generation_sections_keyboard(),
+        parse_mode="HTML",
     )
     await callback.answer()
 
@@ -957,6 +1015,7 @@ async def choose_generation_type(callback: CallbackQuery, state: FSMContext):
 @router.callback_query(lambda cb: cb.data.startswith(PROVIDER_PREFIX))
 async def choose_provider(callback: CallbackQuery, state: FSMContext):
     """Выбрать провайдера и показать его модели."""
+    log_generation_callback(callback)
     provider = callback.data.removeprefix(PROVIDER_PREFIX)
     models = list_models_by_provider(provider)
     if not models:
@@ -964,9 +1023,7 @@ async def choose_provider(callback: CallbackQuery, state: FSMContext):
         await state.update_data(selected_generation_type="all", selected_provider=None)
         await callback.message.edit_text(
             "У этого провайдера пока нет подключённых моделей",
-            reply_markup=build_provider_keyboard(
-                [(provider_key, PROVIDER_LABELS[provider_key]) for provider_key in list_providers()]
-            ),
+            reply_markup=build_providers_keyboard(),
             parse_mode="HTML",
         )
         await callback.answer()
@@ -979,6 +1036,7 @@ async def choose_provider(callback: CallbackQuery, state: FSMContext):
         models=models,
         edit=True,
         heading="Выберите модель:",
+        back_callback=BACK_TO_PROVIDERS,
     )
     await callback.answer()
 
@@ -986,6 +1044,7 @@ async def choose_provider(callback: CallbackQuery, state: FSMContext):
 @router.callback_query(lambda cb: cb.data == SETTINGS_BACK_MODELS)
 async def back_to_generation_models(callback: CallbackQuery, state: FSMContext):
     """Вернуться к предыдущему экрану выбора модели."""
+    log_generation_callback(callback)
     state_data = await state.get_data()
     selected_provider = state_data.get("selected_provider")
     selected_generation_type = state_data.get("selected_generation_type")
@@ -1011,6 +1070,7 @@ async def back_to_generation_models(callback: CallbackQuery, state: FSMContext):
             models=list_models_by_provider(str(selected_provider)),
             edit=True,
             heading="Выберите модель:",
+            back_callback=BACK_TO_PROVIDERS,
         )
         await callback.answer()
         return
@@ -1022,36 +1082,32 @@ async def back_to_generation_models(callback: CallbackQuery, state: FSMContext):
             models=list_models_by_type(str(selected_generation_type)),
             edit=True,
             heading="Выберите модель:",
+            back_callback=BACK_TO_SECTIONS,
         )
         await callback.answer()
         return
 
-    await state.set_state(GenerationStates.choosing_generation_type)
-    await render_models_screen(callback.message)
-    await callback.answer()
+    await back_to_generation_sections(callback, state)
 
 
-@router.callback_query(lambda cb: cb.data == PROVIDERS_BACK_TYPES)
-async def back_to_generation_types(callback: CallbackQuery, state: FSMContext):
-    """Вернуться от провайдеров к типам генерации."""
-    await state.set_state(GenerationStates.choosing_generation_type)
-    await state.update_data(selected_generation_type=None, selected_provider=None)
-    await callback.message.edit_text(
-        build_generation_types_screen_text(),
-        reply_markup=build_generation_type_keyboard(build_generation_type_options()),
-        parse_mode="HTML",
-    )
+@router.callback_query(F.data == BACK_TO_PROVIDERS)
+async def back_to_generation_providers(callback: CallbackQuery, state: FSMContext):
+    """Вернуться к списку провайдеров."""
+    log_generation_callback(callback)
+    await state.set_state(GenerationStates.choosing_provider)
+    await state.update_data(selected_generation_type="all", selected_provider=None)
+    await render_provider_screen(callback.message, edit=True)
     await callback.answer()
 
 
 @router.callback_query(lambda cb: cb.data.startswith(SETTINGS_OPEN_PREFIX))
 async def open_setting_selector(callback: CallbackQuery, state: FSMContext):
     """Открыть выбор значения настройки модели."""
-    setting_index_raw = callback.data.removeprefix(SETTINGS_OPEN_PREFIX)
-    if not setting_index_raw.isdigit():
+    log_generation_callback(callback)
+    setting_key = callback.data.removeprefix(SETTINGS_OPEN_PREFIX)
+    if not setting_key:
         await callback.answer("Настройка не найдена", show_alert=True)
         return
-    setting_index = int(setting_index_raw)
     state_data = await state.get_data()
     model_key = state_data.get("model_key")
     if not model_key:
@@ -1059,8 +1115,7 @@ async def open_setting_selector(callback: CallbackQuery, state: FSMContext):
         await callback.answer()
         return
     model = get_generation_model(model_key)
-    setting_key = get_setting_key_by_index(model, setting_index)
-    if setting_key is None:
+    if setting_key not in model.user_settings:
         await callback.answer("Настройка не найдена", show_alert=True)
         return
     await state.update_data(current_setting_key=setting_key)
@@ -1072,6 +1127,7 @@ async def open_setting_selector(callback: CallbackQuery, state: FSMContext):
 @router.callback_query(lambda cb: cb.data == SETTINGS_BACK_PREFIX)
 async def back_to_settings(callback: CallbackQuery, state: FSMContext):
     """Вернуться на экран настроек модели."""
+    log_generation_callback(callback)
     await state.set_state(GenerationStates.choosing_settings)
     await state.update_data(current_setting_key=None)
     await render_settings_screen(callback.message, state)
@@ -1081,12 +1137,13 @@ async def back_to_settings(callback: CallbackQuery, state: FSMContext):
 @router.callback_query(lambda cb: cb.data.startswith(SETTINGS_VALUE_PREFIX))
 async def choose_setting_value(callback: CallbackQuery, state: FSMContext):
     """Сохранить выбранное значение настройки и вернуться к экрану настроек."""
-    parts = callback.data.split(":", 3)
-    if len(parts) != 4:
+    log_generation_callback(callback)
+    setting_payload = callback.data.removeprefix(SETTINGS_VALUE_PREFIX)
+    if ":" not in setting_payload:
         await callback.answer("Некорректное значение", show_alert=True)
         return
-    _, _, setting_index_raw, option_index_raw = parts
-    if not setting_index_raw.isdigit() or not option_index_raw.isdigit():
+    setting_key, option_index_raw = setting_payload.rsplit(":", 1)
+    if not option_index_raw.isdigit():
         await callback.answer("Некорректное значение", show_alert=True)
         return
     state_data = await state.get_data()
@@ -1097,16 +1154,17 @@ async def choose_setting_value(callback: CallbackQuery, state: FSMContext):
         return
 
     model = get_generation_model(model_key)
-    setting_key = get_setting_key_by_index(model, int(setting_index_raw))
-    if setting_key is None:
+    if setting_key not in model.user_settings:
         await callback.answer("Настройка не найдена", show_alert=True)
         return
 
     user_settings = get_model_state_settings(state_data, model_key)
-    selected_value = get_option_value_by_index(model, setting_key, int(option_index_raw))
-    if selected_value is None:
+    option_index = int(option_index_raw)
+    options = model.user_settings[setting_key].options
+    if option_index < 0 or option_index >= len(options):
         await callback.answer("Некорректное значение", show_alert=True)
         return
+    selected_value = str(options[option_index].value)
     user_settings[setting_key] = selected_value
     await state.update_data(user_settings=user_settings, current_setting_key=None)
     await state.set_state(GenerationStates.choosing_settings)
@@ -1117,6 +1175,7 @@ async def choose_setting_value(callback: CallbackQuery, state: FSMContext):
 @router.callback_query(lambda cb: cb.data == SETTINGS_CONTINUE)
 async def continue_after_settings(callback: CallbackQuery, state: FSMContext):
     """Перейти от настроек к загрузке изображения."""
+    log_generation_callback(callback)
     state_data = await state.get_data()
     await state.set_state(GenerationStates.waiting_for_image)
     await prompt_for_generation_input(
@@ -1246,17 +1305,10 @@ async def process_prompt(
         await message.answer("❌ Произошла ошибка при обработке запроса")
 
 
-@router.callback_query(lambda cb: cb.data == SETTINGS_EDIT)
-async def edit_generation_settings(callback: CallbackQuery, state: FSMContext):
-    """Вернуться из подтверждения к настройкам модели."""
-    await state.set_state(GenerationStates.choosing_settings)
-    await render_settings_screen(callback.message, state)
-    await callback.answer()
-
-
 @router.callback_query(lambda cb: cb.data == GENERATION_CONFIRM)
 async def confirm_generation(callback: CallbackQuery, state: FSMContext, session: AsyncSession):
     """Запустить генерацию после подтверждения."""
+    log_generation_callback(callback)
     user_id = callback.from_user.id
     if user_id in ACTIVE_GENERATIONS:
         await callback.answer("Генерация уже запущена", show_alert=True)
@@ -1401,3 +1453,17 @@ async def confirm_generation(callback: CallbackQuery, state: FSMContext, session
     finally:
         if not task_started:
             await cleanup_generation_file(temp_input_path)
+
+
+@router.callback_query(F.data.startswith("gen:"))
+async def handle_unknown_generation_callback(callback: CallbackQuery, state: FSMContext):
+    """Fallback для устаревших или неподдерживаемых inline-кнопок генераций."""
+    log_generation_callback(callback)
+    await state.set_state(GenerationStates.choosing_generation_type)
+    await state.update_data(selected_generation_type=None, selected_provider=None)
+    await callback.answer("Кнопка устарела. Откройте Генерации заново.", show_alert=True)
+    await callback.message.edit_text(
+        build_generation_types_screen_text(),
+        reply_markup=build_generation_sections_keyboard(),
+        parse_mode="HTML",
+    )
