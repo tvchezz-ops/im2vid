@@ -80,6 +80,34 @@ class Settings(BaseSettings):
         default=False,
         description="Флаг совместимости: не сохранять output URL в БД",
     )
+    telegram_max_document_size_mb: int = Field(
+        default=50,
+        description="Максимальный размер документа для отправки через Telegram Bot API в МБ",
+    )
+    telegram_safe_document_size_mb: int = Field(
+        default=45,
+        description="Безопасный размер документа для отправки через Telegram Bot API в МБ",
+    )
+    r2_endpoint_url: str = Field(
+        default="",
+        description="Endpoint URL для Cloudflare R2",
+    )
+    r2_access_key_id: str = Field(
+        default="",
+        description="Access Key ID для Cloudflare R2",
+    )
+    r2_secret_access_key: str = Field(
+        default="",
+        description="Secret Access Key для Cloudflare R2",
+    )
+    r2_bucket_name: str = Field(
+        default="",
+        description="Имя bucket в Cloudflare R2",
+    )
+    r2_signed_url_ttl_seconds: int = Field(
+        default=1800,
+        description="TTL подписанного URL для Cloudflare R2 в секундах",
+    )
     
     # Database
     database_url: str = Field(
@@ -110,6 +138,18 @@ class Settings(BaseSettings):
         )
 
 
+def is_r2_configured() -> bool:
+    """Проверить, что обязательная конфигурация Cloudflare R2 заполнена."""
+    return all(
+        (
+            settings.r2_endpoint_url.strip(),
+            settings.r2_access_key_id.strip(),
+            settings.r2_secret_access_key.strip(),
+            settings.r2_bucket_name.strip(),
+        )
+    )
+
+
 # Создаем глобальный экземпляр настроек
 try:
     settings = Settings()
@@ -125,6 +165,13 @@ except Exception as e:
         f"- TEMP_MEDIA_TTL_MINUTES (опционально, по умолчанию 30)\n"
         f"- STORE_INPUT_MEDIA (опционально, по умолчанию false)\n"
         f"- STORE_OUTPUT_URLS (опционально, по умолчанию false)\n"
+        f"- TELEGRAM_MAX_DOCUMENT_SIZE_MB (опционально, по умолчанию 50)\n"
+        f"- TELEGRAM_SAFE_DOCUMENT_SIZE_MB (опционально, по умолчанию 45)\n"
+        f"- R2_ENDPOINT_URL (опционально, для Cloudflare R2)\n"
+        f"- R2_ACCESS_KEY_ID (опционально, для Cloudflare R2)\n"
+        f"- R2_SECRET_ACCESS_KEY (опционально, для Cloudflare R2)\n"
+        f"- R2_BUCKET_NAME (опционально, для Cloudflare R2)\n"
+        f"- R2_SIGNED_URL_TTL_SECONDS (опционально, по умолчанию 1800)\n"
         f"- DATABASE_URL (опционально, есть значение по умолчанию)\n"
         f"- ADMIN_IDS (опционально, список чисел через запятую)"
     ) from e

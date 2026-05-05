@@ -103,6 +103,25 @@ class FakeCallback:
         self.answered = True
 
 
+class FakeBot:
+    def __init__(self):
+        self.documents: list[dict[str, object]] = []
+        self.messages: list[str] = []
+
+    async def send_document(self, chat_id, document, caption=None, request_timeout=None):
+        self.documents.append(
+            {
+                "chat_id": chat_id,
+                "document": document,
+                "caption": caption,
+                "request_timeout": request_timeout,
+            }
+        )
+
+    async def send_message(self, chat_id, text, reply_markup=None):
+        self.messages.append(text)
+
+
 @pytest_asyncio.fixture
 async def session_factory(tmp_path):
     db_path = tmp_path / "generation-balance.sqlite3"
@@ -883,20 +902,47 @@ def _async_collector():
     return _call
 
 
+def test_log_generation_output_delivery_uses_only_safe_fields(monkeypatch) -> None:
+    payloads: list[dict[str, object]] = []
+
+    def fake_info(payload):
+        payloads.append(payload)
+
+    monkeypatch.setattr(generations.logger, "info", fake_info)
+
+    generations.log_generation_output_delivery(
+        "telegram",
+        file_size_bytes=123,
+        status="success",
+    )
+
+    assert payloads == [
+        {
+            "action": "generation_output_delivery",
+            "method": "telegram",
+            "file_size": 123,
+            "status": "success",
+        }
+    ]
+
+
 def test_normalize_filename_replaces_wavespeed_prefix() -> None:
     assert generations.normalize_filename("wavespeed-output-abc.jpg") == "imai-abc.jpg"
 
 
 @pytest.mark.asyncio
-async def test_download_output_file_to_temp_uses_imai_filename(monkeypatch) -> None:
+async def test_download_file_from_url_uses_imai_filename(monkeypatch) -> None:
     class FakeResponse:
         headers = {"content-type": "image/jpeg", "content-length": "4"}
 
         def raise_for_status(self) -> None:
             return None
 
-        async def aiter_bytes(self):
-            yield b"test"
+        class Content:
+            async def iter_chunked(self, chunk_size):
+                yield b"test"
+
+        content = Content()
 
         async def __aenter__(self):
             return self
@@ -904,7 +950,7 @@ async def test_download_output_file_to_temp_uses_imai_filename(monkeypatch) -> N
         async def __aexit__(self, exc_type, exc, tb):
             return None
 
-    class FakeAsyncClient:
+    class FakeClientSession:
         def __init__(self, *args, **kwargs):
             return None
 
@@ -914,18 +960,342 @@ async def test_download_output_file_to_temp_uses_imai_filename(monkeypatch) -> N
         async def __aexit__(self, exc_type, exc, tb):
             return None
 
-        def stream(self, method: str, url: str):
+        def get(self, url: str, allow_redirects: bool = True):
             return FakeResponse()
 
-    monkeypatch.setattr(generations.httpx, "AsyncClient", FakeAsyncClient)
+    monkeypatch.setattr(generations.aiohttp, "ClientSession", FakeClientSession)
 
-    temp_output_path, content_type, file_size_bytes = await generations.download_output_file_to_temp(
+    temp_output_path = await generations.download_file_from_url(
         "https://example.com/files/wavespeed-output-abc.jpg?token=1"
     )
 
     try:
         assert Path(temp_output_path).name == "imai-abc.jpg"
-        assert content_type == "image/jpeg"
-        assert file_size_bytes == 4
+        assert Path(temp_output_path).exists() is True
+        assert Path(temp_output_path).read_bytes() == b"test"
     finally:
         Path(temp_output_path).unlink(missing_ok=True)
+
+
+@pytest.mark.asyncio
+async def test_download_output_file_to_temp_returns_metadata_from_downloaded_file(monkeypatch, tmp_path) -> None:
+    output_path = tmp_path / "imai-abc.jpg"
+    output_path.write_bytes(b"test")
+
+    async def fake_download_file_from_url(url: str) -> str:
+        return str(output_path)
+
+    monkeypatch.setattr(generations, "download_file_from_url", fake_download_file_from_url)
+
+    temp_output_path, content_type, file_size_bytes = await generations.download_output_file_to_temp(
+        "https://example.com/files/wavespeed-output-abc.jpg?token=1"
+    )
+
+    assert temp_output_path == str(output_path)
+    assert content_type == "image/jpeg"
+    assert file_size_bytes == 4
+
+
+@pytest.mark.asyncio
+async def test_send_generation_outputs_notifies_when_file_too_large(monkeypatch, tmp_path) -> None:
+    oversized_path = tmp_path / "imai-large.mp4"
+    oversized_path.write_bytes(b"large")
+
+    async def fake_download_output_file_to_temp(output_url: str):
+        raise generations.OutputDeliveryTooLargeError()
+
+    bot = FakeBot()
+    monkeypatch.setattr(generations, "download_output_file_to_temp", fake_download_output_file_to_temp)
+
+    delivered = await generations.send_generation_outputs(bot, 1, ["https://example.com/output.mp4"])
+
+    assert delivered.delivered_successfully is False
+    assert delivered.use_r2 is False
+    assert bot.messages[-1] == "⚠️ Файл слишком большой для отправки через Telegram."
+    assert bot.documents == []
+
+
+@pytest.mark.asyncio
+async def test_send_generation_outputs_returns_use_r2_for_files_over_safe_limit(monkeypatch, tmp_path) -> None:
+    safe_limit_path = tmp_path / "imai-safe-limit.mp4"
+    safe_limit_path.write_bytes(b"safe-limit")
+
+    async def fake_download_output_file_to_temp(output_url: str):
+        return str(safe_limit_path), "video/mp4", generations.get_safe_telegram_document_size_bytes() + 1
+
+    bot = FakeBot()
+    monkeypatch.setattr(generations, "download_output_file_to_temp", fake_download_output_file_to_temp)
+
+    delivered = await generations.send_generation_outputs(bot, 1, ["https://example.com/output.mp4"])
+
+    assert delivered.delivered_successfully is False
+    assert delivered.use_r2 is True
+    assert bot.documents == []
+    assert bot.messages[-1] == "⚠️ Файл слишком большой для отправки через Telegram, а fallback-хранилище недоступно."
+
+
+@pytest.mark.asyncio
+async def test_send_generation_outputs_uses_r2_fallback_when_configured(monkeypatch, tmp_path) -> None:
+    safe_limit_path = tmp_path / "imai-safe-limit.mp4"
+    safe_limit_path.write_bytes(b"safe-limit")
+
+    async def fake_download_output_file_to_temp(output_url: str):
+        return str(safe_limit_path), "video/mp4", generations.get_safe_telegram_document_size_bytes() + 1
+
+    class FakeR2StorageService:
+        def is_configured(self) -> bool:
+            return True
+
+        def upload_and_get_signed_url(self, local_path: str, filename: str, content_type: str | None) -> str:
+            assert local_path == str(safe_limit_path)
+            assert filename == safe_limit_path.name
+            assert content_type == "video/mp4"
+            return "https://signed.example.com/file"
+
+    bot = FakeBot()
+    monkeypatch.setattr(generations, "download_output_file_to_temp", fake_download_output_file_to_temp)
+    monkeypatch.setattr(generations, "R2StorageService", FakeR2StorageService)
+
+    delivered = await generations.send_generation_outputs(bot, 1, ["https://example.com/output.mp4"])
+
+    assert delivered.delivered_successfully is True
+    assert delivered.use_r2 is True
+    assert bot.documents == []
+    assert bot.messages[-1] == "Файл слишком большой, скачайте по ссылке: https://signed.example.com/file"
+
+
+@pytest.mark.asyncio
+async def test_send_document_with_retry_retries_network_errors(monkeypatch, tmp_path) -> None:
+    file_path = tmp_path / "imai-test.jpg"
+    file_path.write_bytes(b"test")
+    bot = FakeBot()
+    attempts = {"count": 0}
+    sleep_calls: list[int] = []
+
+    async def flaky_send_document(chat_id, document, caption=None, request_timeout=None):
+        attempts["count"] += 1
+        if attempts["count"] < 4:
+            raise TimeoutError("timeout")
+        await FakeBot.send_document(bot, chat_id, document, caption, request_timeout)
+
+    async def fake_sleep(seconds: int):
+        sleep_calls.append(seconds)
+
+    monkeypatch.setattr(bot, "send_document", flaky_send_document)
+    monkeypatch.setattr(generations.asyncio, "sleep", fake_sleep)
+
+    await generations.send_document_with_retry(bot=bot, chat_id=1, file_path=str(file_path), caption=None)
+
+    assert attempts["count"] == 4
+    assert sleep_calls == [1, 2, 4]
+    assert bot.documents[-1]["request_timeout"] == 3600
+
+
+@pytest.mark.asyncio
+async def test_send_generation_outputs_deletes_temp_file_only_after_document_send(monkeypatch, tmp_path) -> None:
+    output_path = tmp_path / "imai-send.jpg"
+    output_path.write_bytes(b"image")
+    captured = {}
+    payloads = []
+
+    async def fake_download_output_file_to_temp(output_url: str):
+        return str(output_path), "image/jpeg", 5
+
+    async def fake_send_document_with_retry(*, bot, chat_id: int, file_path: str, caption=None):
+        captured["exists_during_send"] = Path(file_path).exists()
+
+    def fake_info(payload):
+        payloads.append(payload)
+
+    bot = FakeBot()
+    monkeypatch.setattr(generations, "download_output_file_to_temp", fake_download_output_file_to_temp)
+    monkeypatch.setattr(generations, "send_document_with_retry", fake_send_document_with_retry)
+    monkeypatch.setattr(generations.logger, "info", fake_info)
+
+    delivered = await generations.send_generation_outputs(bot, 1, ["https://example.com/output.jpg"])
+
+    assert delivered.delivered_successfully is True
+    assert captured["exists_during_send"] is True
+    assert output_path.exists() is False
+    assert payloads[-1] == {
+        "delivery_method": "cleanup",
+        "content_type": None,
+        "file_size_bytes": None,
+    }
+
+
+@pytest.mark.asyncio
+async def test_send_generation_outputs_deletes_temp_file_only_after_r2_upload(monkeypatch, tmp_path) -> None:
+    output_path = tmp_path / "imai-r2.mp4"
+    output_path.write_bytes(b"video")
+    captured = {}
+    payloads = []
+
+    async def fake_download_output_file_to_temp(output_url: str):
+        return str(output_path), "video/mp4", generations.get_safe_telegram_document_size_bytes() + 1
+
+    class FakeR2StorageService:
+        def is_configured(self) -> bool:
+            return True
+
+        def upload_and_get_signed_url(self, local_path: str, filename: str, content_type: str | None) -> str:
+            captured["exists_during_r2_upload"] = Path(local_path).exists()
+            return "https://signed.example.com/file"
+
+    def fake_info(payload):
+        payloads.append(payload)
+
+    bot = FakeBot()
+    monkeypatch.setattr(generations, "download_output_file_to_temp", fake_download_output_file_to_temp)
+    monkeypatch.setattr(generations, "R2StorageService", FakeR2StorageService)
+    monkeypatch.setattr(generations.logger, "info", fake_info)
+
+    delivered = await generations.send_generation_outputs(bot, 1, ["https://example.com/output.mp4"])
+
+    assert delivered.use_r2 is True
+    assert captured["exists_during_r2_upload"] is True
+    assert output_path.exists() is False
+    assert payloads[-1] == {
+        "delivery_method": "cleanup",
+        "content_type": None,
+        "file_size_bytes": None,
+    }
+
+
+@pytest.mark.asyncio
+async def test_send_generation_outputs_uses_r2_after_telegram_delivery_failure(monkeypatch, tmp_path) -> None:
+    output_path = tmp_path / "imai-failed-delivery.jpg"
+    output_path.write_bytes(b"image")
+
+    async def fake_download_output_file_to_temp(output_url: str):
+        return str(output_path), "image/jpeg", 5
+
+    async def fake_send_document_with_retry(*, bot, chat_id: int, file_path: str, caption=None):
+        raise ConnectionResetError("delivery failed")
+
+    class FakeR2StorageService:
+        def is_configured(self) -> bool:
+            return True
+
+        def upload_and_get_signed_url(self, local_path: str, filename: str, content_type: str | None) -> str:
+            assert local_path == str(output_path)
+            assert filename == output_path.name
+            assert content_type == "image/jpeg"
+            return "https://signed.example.com/retry-fallback"
+
+    bot = FakeBot()
+    monkeypatch.setattr(generations, "download_output_file_to_temp", fake_download_output_file_to_temp)
+    monkeypatch.setattr(generations, "send_document_with_retry", fake_send_document_with_retry)
+    monkeypatch.setattr(generations, "R2StorageService", FakeR2StorageService)
+
+    delivered = await generations.send_generation_outputs(bot, 1, ["https://example.com/output.jpg"])
+
+    assert delivered.delivered_successfully is True
+    assert delivered.use_r2 is True
+    assert bot.documents == []
+    assert bot.messages[-1] == "Файл слишком большой, скачайте по ссылке: https://signed.example.com/retry-fallback"
+
+
+@pytest.mark.asyncio
+async def test_send_generation_outputs_reports_plain_message_when_telegram_delivery_fails_without_r2(monkeypatch, tmp_path) -> None:
+    output_path = tmp_path / "imai-failed-delivery.jpg"
+    output_path.write_bytes(b"image")
+
+    async def fake_download_output_file_to_temp(output_url: str):
+        return str(output_path), "image/jpeg", 5
+
+    async def fake_send_document_with_retry(*, bot, chat_id: int, file_path: str, caption=None):
+        raise TimeoutError("delivery failed")
+
+    bot = FakeBot()
+    monkeypatch.setattr(generations, "download_output_file_to_temp", fake_download_output_file_to_temp)
+    monkeypatch.setattr(generations, "send_document_with_retry", fake_send_document_with_retry)
+
+    delivered = await generations.send_generation_outputs(bot, 1, ["https://example.com/output.jpg"])
+
+    assert delivered.delivered_successfully is False
+    assert delivered.use_r2 is False
+    assert bot.documents == []
+    assert bot.messages[-1] == "Файл готов, но Telegram не смог его доставить"
+
+
+@pytest.mark.asyncio
+async def test_cleanup_temp_output_file_does_not_fail_if_file_already_deleted(monkeypatch, tmp_path) -> None:
+    output_path = tmp_path / "imai-missing.jpg"
+    output_path.write_bytes(b"image")
+    output_path.unlink()
+    payloads = []
+
+    def fake_info(payload):
+        payloads.append(payload)
+
+    monkeypatch.setattr(generations.logger, "info", fake_info)
+
+    await generations.cleanup_temp_output_file(str(output_path))
+
+    assert payloads == [
+        {
+            "delivery_method": "cleanup",
+            "content_type": None,
+            "file_size_bytes": None,
+        }
+    ]
+
+
+@pytest.mark.asyncio
+async def test_poll_generation_result_keeps_completed_status_when_document_delivery_fails(session_factory, monkeypatch) -> None:
+    session_maker = session_factory
+    monkeypatch.setattr(generations.db_manager, "session_factory", session_maker)
+
+    async with session_maker() as session:
+        await create_user(session, user_id=501, balance=4)
+        generation = await GenerationRepository(session).create_generation_request(
+            user_id=501,
+            model_key="nano_banana",
+            model_endpoint="/api/v3/nano-banana",
+            prompt="Prompt",
+            settings={},
+            status="created",
+            cost=1,
+        )
+
+    class SuccessfulWavespeedService:
+        async def submit_generation(self, model_key: str, payload: dict[str, object]):
+            return SimpleNamespace(prediction_id="pred-complete")
+
+        async def poll_until_complete(self, prediction_id: str, cancel_event=None, timeout_seconds=600, interval=60):
+            return SimpleNamespace(raw_response={"nsfw_flags": None}, outputs=["https://example.com/output.jpg"])
+
+        async def close(self) -> None:
+            return None
+
+    async def fake_send_generation_outputs(bot, chat_id: int, output_urls: list[str]) -> bool:
+        await generations.safe_send_bot_message(
+            bot,
+            chat_id,
+            "⚠️ Файл сгенерирован, но Telegram не смог доставить его. Попробуйте повторить позже.",
+        )
+        return False
+
+    monkeypatch.setattr(generations, "WavespeedService", SuccessfulWavespeedService)
+    monkeypatch.setattr(generations, "send_generation_outputs", fake_send_generation_outputs)
+
+    bot = FakeBot()
+    state = FakeState()
+
+    await generations.poll_generation_result(
+        bot=bot,
+        state=state,
+        user_id=501,
+        chat_id=501,
+        generation_request_id=generation.id,
+        model_key="nano_banana",
+        cost=1,
+        payload={"prompt": "Prompt"},
+        temp_input_path=None,
+    )
+
+    async with session_maker() as session:
+        assert await get_generation_status(session, generation.id) == GenerationRequestStatus.COMPLETED
+
+    assert bot.messages[-1] == "⚠️ Файл сгенерирован, но Telegram не смог доставить его. Попробуйте повторить позже."

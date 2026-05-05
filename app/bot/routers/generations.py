@@ -15,7 +15,7 @@ from aiogram import F, Router
 from aiogram.exceptions import TelegramBadRequest, TelegramNetworkError
 from aiogram.fsm.context import FSMContext
 from aiogram.types import CallbackQuery, FSInputFile, Message, ReplyKeyboardRemove
-import httpx
+import aiohttp
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.bot.keyboards import (
@@ -34,6 +34,7 @@ from app.bot.keyboards import (
     resolve_model_key_from_token,
 )
 from app.bot.states import GenerationStates
+from app.config import settings
 from app.db import GenerationRepository, UserRepository
 from app.db.session import db_manager
 from app.services.generation_service import (
@@ -50,6 +51,7 @@ from app.services.generation_service import (
     validate_model_settings,
     list_providers,
 )
+from app.services.r2_storage import R2StorageService
 from app.services.telegram_files import TelegramFilesService
 from app.services.wavespeed import WavespeedResult, WavespeedService
 from app.utils import (
@@ -67,10 +69,9 @@ router = Router()
 ACTIVE_GENERATIONS: Dict[int, Dict[str, Any]] = {}
 POLL_TIMEOUT_SECONDS = 600
 GENERATION_COST = 1
-DOCUMENT_SEND_REQUEST_TIMEOUT_SECONDS = 180
-DOCUMENT_SEND_RETRY_COUNT = 2
-DOCUMENT_SEND_RETRY_DELAY_SECONDS = 5
-MAX_TELEGRAM_DOCUMENT_SIZE_BYTES = 50 * 1024 * 1024
+DOCUMENT_SEND_REQUEST_TIMEOUT_SECONDS = 3600
+DOCUMENT_SEND_RETRY_COUNT = 3
+OUTPUT_DOWNLOAD_TIMEOUT_SECONDS = 300
 
 MODEL_PREFIX = "gen:model:"
 GENERATION_SECTION_PREFIX = "gen:section:"
@@ -113,6 +114,12 @@ class FlowTexts:
     missing_media: str = ""
     invalid_media: str = ""
     invalid_specific_media: str = ""
+
+
+@dataclass(frozen=True)
+class OutputDeliveryResult:
+    delivered_successfully: bool
+    use_r2: bool = False
 
 
 FLOW_TEXTS = {
@@ -294,7 +301,7 @@ def get_user_friendly_error_message(error: Exception, result: Optional[Wavespeed
     if isinstance(error, TelegramBadRequest):
         return format_user_error(ErrorCode.E009_TELEGRAM_DELIVERY_FAILED, "Telegram не смог доставить результат.")
 
-    if isinstance(error, (WavespeedNetworkError, httpx.HTTPError, httpx.TimeoutException, TimeoutError)):
+    if isinstance(error, (WavespeedNetworkError, aiohttp.ClientError, TimeoutError)):
         return format_user_error(ErrorCode.E010_INTERNAL_ERROR, "сбой сети при получении результата.")
 
     return format_user_error(ErrorCode.E010_INTERNAL_ERROR, "внутренняя ошибка. Попробуйте ещё раз.")
@@ -891,10 +898,18 @@ async def safe_send_bot_message(bot, chat_id: int, text: str, reply_markup=None)
         logger.exception("Failed to send Telegram message to user: %s", type(exc).__name__)
 
 
+def get_max_telegram_document_size_bytes() -> int:
+    return settings.telegram_max_document_size_mb * 1024 * 1024
+
+
+def get_safe_telegram_document_size_bytes() -> int:
+    return settings.telegram_safe_document_size_mb * 1024 * 1024
+
+
 async def send_document_with_retry(*, bot, chat_id: int, file_path: str, caption: Optional[str]) -> None:
     """Отправить документ в Telegram c retry при сетевых ошибках."""
     normalized_filename = Path(file_path).name
-    for attempt in range(DOCUMENT_SEND_RETRY_COUNT + 1):
+    for attempt in range(1, DOCUMENT_SEND_RETRY_COUNT + 2):
         try:
             await bot.send_document(
                 chat_id,
@@ -902,20 +917,65 @@ async def send_document_with_retry(*, bot, chat_id: int, file_path: str, caption
                 caption=caption,
                 request_timeout=DOCUMENT_SEND_REQUEST_TIMEOUT_SECONDS,
             )
+            log_generation_output_delivery(
+                "telegram",
+                file_size_bytes=Path(file_path).stat().st_size,
+                status="success",
+            )
             return
-        except TelegramNetworkError:
-            if attempt >= DOCUMENT_SEND_RETRY_COUNT:
+        except (TelegramNetworkError, TimeoutError):
+            if attempt > DOCUMENT_SEND_RETRY_COUNT:
+                log_generation_output_delivery(
+                    "telegram",
+                    file_size_bytes=Path(file_path).stat().st_size,
+                    status="failed",
+                )
                 raise
-            await asyncio.sleep(DOCUMENT_SEND_RETRY_DELAY_SECONDS)
+            await asyncio.sleep(2 ** (attempt - 1))
 
 
-async def send_generation_outputs(bot, chat_id: int, output_urls: list[str]) -> bool:
+async def send_generation_outputs(bot, chat_id: int, output_urls: list[str]) -> OutputDeliveryResult:
     """Отправить пользователю результаты генерации только как document через временный локальный файл."""
     delivered_successfully = True
+    use_r2 = False
+    r2_storage = R2StorageService()
     for output_url in output_urls:
         temp_output_path: Optional[str] = None
+        content_type: Optional[str] = None
+        file_size_bytes: Optional[int] = None
         try:
             temp_output_path, content_type, file_size_bytes = await download_output_file_to_temp(output_url)
+            if file_size_bytes is not None and file_size_bytes > get_safe_telegram_document_size_bytes():
+                use_r2 = True
+                if r2_storage.is_configured():
+                    signed_url = r2_storage.upload_and_get_signed_url(
+                        temp_output_path,
+                        Path(temp_output_path).name,
+                        content_type,
+                    )
+                    await safe_send_bot_message(
+                        bot,
+                        chat_id,
+                        f"Файл слишком большой, скачайте по ссылке: {signed_url}",
+                    )
+                    log_generation_output_delivery(
+                        "r2",
+                        file_size_bytes=file_size_bytes,
+                        status="success",
+                    )
+                    continue
+                delivered_successfully = False
+                log_generation_output_delivery(
+                    "r2",
+                    file_size_bytes=file_size_bytes,
+                    status="failed",
+                )
+                await safe_send_bot_message(
+                    bot,
+                    chat_id,
+                    "⚠️ Файл слишком большой для отправки через Telegram, а fallback-хранилище недоступно.",
+                )
+                continue
             await send_document_with_retry(
                 bot=bot,
                 chat_id=chat_id,
@@ -923,51 +983,88 @@ async def send_generation_outputs(bot, chat_id: int, output_urls: list[str]) -> 
                 caption=None,
             )
             log_generation_output_delivery(
-                len(output_urls),
-                "downloaded_document",
-                content_type=content_type,
+                "telegram",
                 file_size_bytes=file_size_bytes,
+                status="success",
             )
         except OutputDeliveryTooLargeError:
             delivered_successfully = False
             log_generation_error(ErrorCode.E009_TELEGRAM_DELIVERY_FAILED, status="delivery_failed")
-            log_generation_output_delivery(len(output_urls), "delivery_failed")
+            log_generation_output_delivery(
+                "telegram",
+                file_size_bytes=file_size_bytes,
+                status="failed",
+            )
             await safe_send_bot_message(
                 bot,
                 chat_id,
-                format_user_error(ErrorCode.E009_TELEGRAM_DELIVERY_FAILED, "Telegram не смог доставить результат."),
+                "⚠️ Файл слишком большой для отправки через Telegram.",
             )
-        except Exception as exc:
-            delivered_successfully = False
+        except Exception:
             logger.exception("Failed to deliver completed Wavespeed output as document")
             log_generation_error(ErrorCode.E009_TELEGRAM_DELIVERY_FAILED, status="delivery_failed")
-            log_generation_output_delivery(len(output_urls), "delivery_failed")
+            if temp_output_path and r2_storage.is_configured():
+                use_r2 = True
+                signed_url = r2_storage.upload_and_get_signed_url(
+                    temp_output_path,
+                    Path(temp_output_path).name,
+                    content_type,
+                )
+                log_generation_output_delivery(
+                    "r2",
+                    file_size_bytes=file_size_bytes,
+                    status="success",
+                )
+                await safe_send_bot_message(
+                    bot,
+                    chat_id,
+                    f"Файл слишком большой, скачайте по ссылке: {signed_url}",
+                )
+                continue
+            delivered_successfully = False
+            log_generation_output_delivery(
+                "telegram",
+                file_size_bytes=file_size_bytes,
+                status="failed",
+            )
             await safe_send_bot_message(
                 bot,
                 chat_id,
-                format_user_error(ErrorCode.E009_TELEGRAM_DELIVERY_FAILED, "Telegram не смог доставить результат."),
+                "Файл готов, но Telegram не смог его доставить",
             )
         finally:
-            if temp_output_path is not None:
-                Path(temp_output_path).unlink(missing_ok=True)
-    return delivered_successfully
+            await cleanup_temp_output_file(temp_output_path)
+    return OutputDeliveryResult(delivered_successfully=delivered_successfully, use_r2=use_r2)
+
+
+async def cleanup_temp_output_file(file_path: Optional[str]) -> None:
+    """Безопасно удалить временный output-файл и залогировать cleanup."""
+    if not file_path:
+        return
+    path = Path(file_path)
+    path.unlink(missing_ok=True)
+    logger.info(
+        {
+            "delivery_method": "cleanup",
+            "content_type": None,
+            "file_size_bytes": None,
+        }
+    )
 
 
 def log_generation_output_delivery(
-    outputs_count: int,
     delivery_method: str,
     *,
-    content_type: Optional[str] = None,
     file_size_bytes: Optional[int] = None,
+    status: str,
 ) -> None:
     """Логировать только безопасные метаданные доставки результатов генерации."""
     logger.info(
         {
             "action": "generation_output_delivery",
-            "outputs_count": outputs_count,
-            "delivery_method": delivery_method,
-            "content_type": content_type,
-            "file_size_bytes": file_size_bytes,
+            "method": delivery_method,
+            "file_size": file_size_bytes,
+            "status": status,
         }
     )
 
@@ -984,6 +1081,19 @@ def get_output_suffix_and_type(content_type: Optional[str]) -> str:
     if normalized_content_type == "video/mp4":
         return ".mp4"
     return ".bin"
+
+
+def get_content_type_for_path(file_path: str) -> Optional[str]:
+    suffix = Path(file_path).suffix.lower()
+    if suffix == ".png":
+        return "image/png"
+    if suffix == ".jpg":
+        return "image/jpeg"
+    if suffix == ".webp":
+        return "image/webp"
+    if suffix == ".mp4":
+        return "video/mp4"
+    return None
 
 
 def normalize_filename(original_name: str) -> str:
@@ -1003,13 +1113,14 @@ def normalize_filename(original_name: str) -> str:
     return f"imai-{cleaned_stem}{suffix}"
 
 
-async def download_output_file_to_temp(output_url: str) -> tuple[str, Optional[str], Optional[int]]:
-    """Скачать output-файл во временный файл для последующей отправки в Telegram."""
+async def download_file_from_url(url: str) -> str:
+    """Скачать файл по URL во временную директорию и вернуть путь к нему."""
     temp_path: Optional[str] = None
     bytes_written = 0
     try:
-        async with httpx.AsyncClient(timeout=120.0, follow_redirects=True) as client:
-            async with client.stream("GET", output_url) as response:
+        timeout = aiohttp.ClientTimeout(total=OUTPUT_DOWNLOAD_TIMEOUT_SECONDS)
+        async with aiohttp.ClientSession(timeout=timeout) as session:
+            async with session.get(url, allow_redirects=True) as response:
                 response.raise_for_status()
                 content_type = response.headers.get("content-type")
                 content_length_header = response.headers.get("content-length")
@@ -1019,11 +1130,11 @@ async def download_output_file_to_temp(output_url: str) -> tuple[str, Optional[s
                     except ValueError:
                         content_length = None
                     else:
-                        if content_length > MAX_TELEGRAM_DOCUMENT_SIZE_BYTES:
+                        if content_length > get_max_telegram_document_size_bytes():
                             raise OutputDeliveryTooLargeError()
 
                 suffix = get_output_suffix_and_type(content_type)
-                original_filename = Path(unquote(urlparse(output_url).path)).name
+                original_filename = Path(unquote(urlparse(url).path)).name
                 normalized_filename = normalize_filename(original_filename)
                 if Path(normalized_filename).suffix == ".bin" and suffix != ".bin":
                     normalized_filename = f"{Path(normalized_filename).stem}{suffix}"
@@ -1035,18 +1146,26 @@ async def download_output_file_to_temp(output_url: str) -> tuple[str, Optional[s
                 temp_path = str(candidate_path)
                 temp_file = open(candidate_path, "wb")
                 try:
-                    async for chunk in response.aiter_bytes():
+                    async for chunk in response.content.iter_chunked(64 * 1024):
                         bytes_written += len(chunk)
-                        if bytes_written > MAX_TELEGRAM_DOCUMENT_SIZE_BYTES:
+                        if bytes_written > get_max_telegram_document_size_bytes():
                             raise OutputDeliveryTooLargeError()
                         temp_file.write(chunk)
                 finally:
                     temp_file.close()
-        return temp_path, content_type, bytes_written
+        return temp_path
     except Exception:
+        logger.exception("Failed to download file from URL")
         if temp_path is not None:
             Path(temp_path).unlink(missing_ok=True)
         raise
+
+
+async def download_output_file_to_temp(output_url: str) -> tuple[str, Optional[str], Optional[int]]:
+    """Скачать output-файл во временный файл для последующей отправки в Telegram."""
+    temp_path = await download_file_from_url(output_url)
+    file_path = Path(temp_path)
+    return temp_path, get_content_type_for_path(temp_path), file_path.stat().st_size
 
 
 def log_background_task_exception(task: asyncio.Task) -> None:
