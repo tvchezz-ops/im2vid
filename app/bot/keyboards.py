@@ -307,3 +307,14 @@ def get_back_to_menu_inline_keyboard() -> InlineKeyboardMarkup:
             [InlineKeyboardButton(text="⬅️ Назад в меню", callback_data="back_to_menu")],
         ]
     )
+
+
+def get_profile_keyboard(*, send_results_as_files: bool) -> InlineKeyboardMarkup:
+    """Инлайн-кнопки профиля пользователя."""
+    toggle_text = "🖼 Отправлять обычным форматом" if send_results_as_files else "📎 Отправлять файлом"
+    return InlineKeyboardMarkup(
+        inline_keyboard=[
+            [InlineKeyboardButton(text=toggle_text, callback_data="profile:toggle_delivery_mode")],
+            [InlineKeyboardButton(text="⬅️ Назад в меню", callback_data="back_to_menu")],
+        ]
+    )

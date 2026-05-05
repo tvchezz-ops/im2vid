@@ -6,7 +6,7 @@ from aiogram import Router
 from aiogram.types import CallbackQuery, Message
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.bot.keyboards import get_back_to_menu_keyboard, get_main_menu_keyboard
+from app.bot.keyboards import get_main_menu_keyboard, get_profile_keyboard
 from app.db import UserRepository
 from app.utils import logger
 
@@ -28,6 +28,30 @@ def format_premium_status(value: Optional[bool]) -> str:
     return "да" if value else "нет"
 
 
+def format_delivery_mode(send_results_as_files: bool) -> str:
+    return "Файлом без сжатия" if send_results_as_files else "Обычный формат"
+
+
+def build_profile_text(user) -> str:
+    return (
+        f"👤 <b>Ваш профиль</b>\n\n"
+        f"🆔 Telegram ID: <code>{user.id}</code>\n"
+        f"👤 Username: @{user.username if user.username else '—'}\n"
+        f"📝 Имя: {(user.first_name or '—')} {(user.last_name or '')}\n"
+        f"🌐 Язык: {user.language_code or '—'}\n"
+        f"⭐ Premium: {format_premium_status(user.is_premium)}\n"
+        f"💰 Баланс: {user.balance}\n"
+        f"🎨 Всего генераций: {user.total_generations}\n"
+        f"✅ Успешные: {user.successful_generations}\n"
+        f"❌ Неуспешные: {user.failed_generations}\n"
+        f"📦 Способ отправки: {format_delivery_mode(user.send_results_as_files)}\n\n"
+        "Обычный формат быстрее и удобнее для просмотра.\n"
+        "Файлом — без сжатия, лучше для качества.\n\n"
+        f"📅 Дата регистрации: {format_datetime(user.created_at)}\n"
+        f"🕒 Последняя активность: {format_datetime(user.last_seen_at)}"
+    )
+
+
 @router.message(lambda msg: msg.text == "👤 Профиль")
 async def show_profile(message: Message, session: AsyncSession):
     """Показать профиль пользователя."""
@@ -39,24 +63,11 @@ async def show_profile(message: Message, session: AsyncSession):
             await message.answer("❌ Пользователь не найден")
             return
         
-        profile_text = (
-            f"👤 <b>Ваш профиль</b>\n\n"
-            f"🆔 Telegram ID: <code>{user.id}</code>\n"
-            f"👤 Username: @{user.username if user.username else '—'}\n"
-            f"📝 Имя: {(user.first_name or '—')} {(user.last_name or '')}\n"
-            f"🌐 Язык: {user.language_code or '—'}\n"
-            f"⭐ Premium: {format_premium_status(user.is_premium)}\n"
-            f"💰 Баланс: {user.balance}\n"
-            f"🎨 Всего генераций: {user.total_generations}\n"
-            f"✅ Успешные: {user.successful_generations}\n"
-            f"❌ Неуспешные: {user.failed_generations}\n"
-            f"📅 Дата регистрации: {format_datetime(user.created_at)}\n"
-            f"🕒 Последняя активность: {format_datetime(user.last_seen_at)}"
-        )
+        profile_text = build_profile_text(user)
         
         await message.answer(
             profile_text,
-            reply_markup=get_back_to_menu_keyboard(),
+            reply_markup=get_profile_keyboard(send_results_as_files=user.send_results_as_files),
             parse_mode="HTML",
         )
         
@@ -78,3 +89,22 @@ async def back_to_menu(callback: CallbackQuery):
         reply_markup=get_main_menu_keyboard(),
     )
     await callback.answer()
+
+
+@router.callback_query(lambda cb: cb.data == "profile:toggle_delivery_mode")
+async def toggle_delivery_mode(callback: CallbackQuery, session: AsyncSession):
+    """Переключить способ отправки результатов и обновить экран профиля."""
+    user_repo = UserRepository(session)
+    await user_repo.get_or_create_user_from_telegram(callback.from_user)
+    new_value = await user_repo.toggle_user_delivery_preference(callback.from_user.id)
+    user = await user_repo.get_user_profile(callback.from_user.id)
+    if user is None:
+        await callback.answer("Пользователь не найден", show_alert=True)
+        return
+    user.send_results_as_files = new_value
+    await callback.message.edit_text(
+        build_profile_text(user),
+        reply_markup=get_profile_keyboard(send_results_as_files=new_value),
+        parse_mode="HTML",
+    )
+    await callback.answer("Настройка обновлена")

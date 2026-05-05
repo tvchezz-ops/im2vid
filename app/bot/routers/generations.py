@@ -975,11 +975,45 @@ async def send_document_with_retry(*, bot, chat_id: int, file_path: str, caption
             await asyncio.sleep(2 ** (attempt - 1))
 
 
-async def send_generation_outputs(bot, chat_id: int, output_urls: list[str]) -> OutputDeliveryResult:
-    """Отправить пользователю результаты генерации только как document через временный локальный файл."""
+def get_output_delivery_kind(content_type: Optional[str]) -> str:
+    normalized_content_type = (content_type or "").split(";", 1)[0].strip().lower()
+    if normalized_content_type.startswith("image/"):
+        return "photo"
+    if normalized_content_type.startswith("video/"):
+        return "video"
+    return "document"
+
+
+async def send_photo_output(*, bot, chat_id: int, file_path: str) -> None:
+    await bot.send_photo(chat_id, FSInputFile(file_path, filename=Path(file_path).name))
+
+
+async def send_video_output(*, bot, chat_id: int, file_path: str) -> None:
+    await bot.send_video(
+        chat_id,
+        FSInputFile(file_path, filename=Path(file_path).name),
+        request_timeout=DOCUMENT_SEND_REQUEST_TIMEOUT_SECONDS,
+    )
+
+
+async def get_user_send_results_as_files(user_id: int) -> bool:
+    async with db_manager.session_factory() as session:
+        return await UserRepository(session).get_user_delivery_preference(user_id)
+
+
+async def send_generation_outputs(
+    bot,
+    chat_id: int,
+    output_urls: list[str],
+    user_id: Optional[int] = None,
+) -> OutputDeliveryResult:
+    """Отправить пользователю результаты генерации с учётом пользовательского способа доставки."""
     delivered_successfully = True
     use_r2 = False
     r2_storage = R2StorageService()
+    send_results_as_files = False
+    if user_id is not None:
+        send_results_as_files = await get_user_send_results_as_files(user_id)
     for output_url in output_urls:
         temp_output_path: Optional[str] = None
         content_type: Optional[str] = None
@@ -1032,6 +1066,30 @@ async def send_generation_outputs(bot, chat_id: int, output_urls: list[str]) -> 
                     "❌ Не удалось загрузить файл. Попробуйте ещё раз позже",
                 )
                 continue
+            delivery_kind = "document" if send_results_as_files else get_output_delivery_kind(content_type)
+            if delivery_kind == "photo":
+                try:
+                    await send_photo_output(bot=bot, chat_id=chat_id, file_path=temp_output_path)
+                    log_generation_output_delivery(
+                        "telegram_photo",
+                        file_size_bytes=file_size_bytes,
+                        status="success",
+                    )
+                    continue
+                except Exception:
+                    logger.exception("Failed to deliver completed Wavespeed output as photo")
+            elif delivery_kind == "video":
+                try:
+                    await send_video_output(bot=bot, chat_id=chat_id, file_path=temp_output_path)
+                    log_generation_output_delivery(
+                        "telegram_video",
+                        file_size_bytes=file_size_bytes,
+                        status="success",
+                    )
+                    continue
+                except Exception:
+                    logger.exception("Failed to deliver completed Wavespeed output as video")
+
             await send_document_with_retry(
                 bot=bot,
                 chat_id=chat_id,
@@ -1039,7 +1097,7 @@ async def send_generation_outputs(bot, chat_id: int, output_urls: list[str]) -> 
                 caption=None,
             )
             log_generation_output_delivery(
-                "telegram",
+                "telegram_document",
                 file_size_bytes=file_size_bytes,
                 status="success",
             )
@@ -1339,7 +1397,7 @@ async def poll_generation_result(
             nsfw_flags=result.raw_response.get("nsfw_flags"),
             output_count=len(result.outputs),
         )
-        await send_generation_outputs(bot, chat_id, result.outputs)
+        await send_generation_outputs(bot, chat_id, result.outputs, user_id)
     except WavespeedTimeoutError as exc:
         logger.exception("Wavespeed timeout while polling generation result")
         log_generation_error(

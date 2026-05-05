@@ -53,6 +53,30 @@ class UserRepository:
         """Получить профиль пользователя."""
         return await self.get_by_id(user_id)
 
+    async def get_user_delivery_preference(self, user_id: int) -> bool:
+        """Получить флаг отправки результатов файлами."""
+        result = await self.session.execute(
+            select(User.send_results_as_files).where(User.id == user_id)
+        )
+        value = result.scalar_one_or_none()
+        return bool(value) if value is not None else False
+
+    async def set_user_delivery_preference(self, user_id: int, value: bool) -> bool:
+        """Установить способ отправки результатов пользователя."""
+        result = await self.session.execute(
+            update(User)
+            .where(User.id == user_id)
+            .values(send_results_as_files=value)
+        )
+        await self.session.commit()
+        return result.rowcount > 0
+
+    async def toggle_user_delivery_preference(self, user_id: int) -> bool:
+        """Переключить способ отправки результатов и вернуть новое значение."""
+        current_value = await self.get_user_delivery_preference(user_id)
+        await self.set_user_delivery_preference(user_id, not current_value)
+        return not current_value
+
     async def increment_user_generation_stats(
         self,
         user_id: int,

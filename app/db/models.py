@@ -37,6 +37,7 @@ class User(BaseModel):
     is_premium: Mapped[Optional[bool]] = mapped_column(Boolean, nullable=True)
     photo_url: Mapped[Optional[str]] = mapped_column(String(1024), nullable=True)
     balance: Mapped[int] = mapped_column(Integer, default=5, server_default="5")
+    send_results_as_files: Mapped[bool] = mapped_column(Boolean, default=False, server_default="0")
     total_generations: Mapped[int] = mapped_column(Integer, default=0, server_default="0")
     successful_generations: Mapped[int] = mapped_column(Integer, default=0, server_default="0")
     failed_generations: Mapped[int] = mapped_column(Integer, default=0, server_default="0")

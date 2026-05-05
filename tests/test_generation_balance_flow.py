@@ -106,6 +106,8 @@ class FakeCallback:
 class FakeBot:
     def __init__(self):
         self.documents: list[dict[str, object]] = []
+        self.photos: list[dict[str, object]] = []
+        self.videos: list[dict[str, object]] = []
         self.messages: list[str] = []
 
     async def send_document(self, chat_id, document, caption=None, request_timeout=None):
@@ -113,6 +115,25 @@ class FakeBot:
             {
                 "chat_id": chat_id,
                 "document": document,
+                "caption": caption,
+                "request_timeout": request_timeout,
+            }
+        )
+
+    async def send_photo(self, chat_id, photo, caption=None):
+        self.photos.append(
+            {
+                "chat_id": chat_id,
+                "photo": photo,
+                "caption": caption,
+            }
+        )
+
+    async def send_video(self, chat_id, video, caption=None, request_timeout=None):
+        self.videos.append(
+            {
+                "chat_id": chat_id,
+                "video": video,
                 "caption": caption,
                 "request_timeout": request_timeout,
             }
@@ -142,6 +163,12 @@ async def create_user(session, user_id: int, balance: int) -> User:
     await session.commit()
     await session.refresh(user)
     return user
+
+
+async def get_user_delivery_preference(session, user_id: int) -> bool:
+    result = await session.execute(select(User.send_results_as_files).where(User.id == user_id))
+    value = result.scalar_one()
+    return bool(value)
 
 
 async def get_user_balance(session, user_id: int) -> int:
@@ -1127,15 +1154,19 @@ async def test_send_generation_outputs_deletes_temp_file_only_after_document_sen
     async def fake_send_document_with_retry(*, bot, chat_id: int, file_path: str, caption=None):
         captured["exists_during_send"] = Path(file_path).exists()
 
+    async def fake_get_user_send_results_as_files(user_id: int) -> bool:
+        return True
+
     def fake_info(payload):
         payloads.append(payload)
 
     bot = FakeBot()
     monkeypatch.setattr(generations, "download_output_file_to_temp", fake_download_output_file_to_temp)
     monkeypatch.setattr(generations, "send_document_with_retry", fake_send_document_with_retry)
+    monkeypatch.setattr(generations, "get_user_send_results_as_files", fake_get_user_send_results_as_files)
     monkeypatch.setattr(generations.logger, "info", fake_info)
 
-    delivered = await generations.send_generation_outputs(bot, 1, ["https://example.com/output.jpg"])
+    delivered = await generations.send_generation_outputs(bot, 1, ["https://example.com/output.jpg"], user_id=1)
 
     assert delivered.delivered_successfully is True
     assert captured["exists_during_send"] is True
@@ -1209,6 +1240,9 @@ async def test_send_generation_outputs_uses_r2_after_telegram_delivery_failure(m
     async def fake_send_document_with_retry(*, bot, chat_id: int, file_path: str, caption=None):
         raise ConnectionResetError("delivery failed")
 
+    async def fake_send_photo_output(*, bot, chat_id: int, file_path: str):
+        raise TelegramBadRequest("photo failed")
+
     class FakeR2StorageService:
         def is_configured(self) -> bool:
             return True
@@ -1237,6 +1271,7 @@ async def test_send_generation_outputs_uses_r2_after_telegram_delivery_failure(m
 
     bot = FakeBot()
     monkeypatch.setattr(generations, "download_output_file_to_temp", fake_download_output_file_to_temp)
+    monkeypatch.setattr(generations, "send_photo_output", fake_send_photo_output)
     monkeypatch.setattr(generations, "send_document_with_retry", fake_send_document_with_retry)
     monkeypatch.setattr(generations, "R2StorageService", FakeR2StorageService)
     monkeypatch.setattr(generations, "DownloadLinkService", FakeDownloadLinkService)
@@ -1333,8 +1368,12 @@ async def test_send_generation_outputs_reports_plain_message_when_telegram_deliv
     async def fake_send_document_with_retry(*, bot, chat_id: int, file_path: str, caption=None):
         raise TimeoutError("delivery failed")
 
+    async def fake_send_photo_output(*, bot, chat_id: int, file_path: str):
+        raise TelegramBadRequest("photo failed")
+
     bot = FakeBot()
     monkeypatch.setattr(generations, "download_output_file_to_temp", fake_download_output_file_to_temp)
+    monkeypatch.setattr(generations, "send_photo_output", fake_send_photo_output)
     monkeypatch.setattr(generations, "send_document_with_retry", fake_send_document_with_retry)
 
     delivered = await generations.send_generation_outputs(bot, 1, ["https://example.com/output.jpg"])
@@ -1343,6 +1382,170 @@ async def test_send_generation_outputs_reports_plain_message_when_telegram_deliv
     assert delivered.use_r2 is False
     assert bot.documents == []
     assert bot.messages[-1] == "Файл готов, но Telegram не смог его доставить"
+
+
+@pytest.mark.asyncio
+async def test_new_user_has_send_results_as_files_disabled(session_factory) -> None:
+    async with session_factory() as session:
+        user = await create_user(session, user_id=501, balance=3)
+
+        assert user.send_results_as_files is False
+        assert await get_user_delivery_preference(session, 501) is False
+
+
+@pytest.mark.asyncio
+async def test_toggle_user_delivery_preference_changes_value(session_factory) -> None:
+    async with session_factory() as session:
+        await create_user(session, user_id=502, balance=3)
+        repo = UserRepository(session)
+
+        assert await repo.get_user_delivery_preference(502) is False
+        assert await repo.toggle_user_delivery_preference(502) is True
+        assert await repo.get_user_delivery_preference(502) is True
+        assert await repo.set_user_delivery_preference(502, False) is True
+        assert await repo.get_user_delivery_preference(502) is False
+
+
+@pytest.mark.asyncio
+async def test_send_generation_outputs_sends_image_as_photo_by_default(monkeypatch, tmp_path) -> None:
+    output_path = tmp_path / "imai-photo.jpg"
+    output_path.write_bytes(b"image")
+
+    async def fake_download_output_file_to_temp(output_url: str):
+        return str(output_path), "image/jpeg", 5
+
+    async def fake_get_user_send_results_as_files(user_id: int) -> bool:
+        return False
+
+    bot = FakeBot()
+    monkeypatch.setattr(generations, "download_output_file_to_temp", fake_download_output_file_to_temp)
+    monkeypatch.setattr(generations, "get_user_send_results_as_files", fake_get_user_send_results_as_files)
+
+    delivered = await generations.send_generation_outputs(bot, 1, ["https://example.com/output.jpg"])
+
+    assert delivered.delivered_successfully is True
+    assert bot.photos != []
+    assert bot.videos == []
+    assert bot.documents == []
+
+
+@pytest.mark.asyncio
+async def test_send_generation_outputs_sends_video_as_video_by_default(monkeypatch, tmp_path) -> None:
+    output_path = tmp_path / "imai-video.mp4"
+    output_path.write_bytes(b"video")
+
+    async def fake_download_output_file_to_temp(output_url: str):
+        return str(output_path), "video/mp4", 5
+
+    async def fake_get_user_send_results_as_files(user_id: int) -> bool:
+        return False
+
+    bot = FakeBot()
+    monkeypatch.setattr(generations, "download_output_file_to_temp", fake_download_output_file_to_temp)
+    monkeypatch.setattr(generations, "get_user_send_results_as_files", fake_get_user_send_results_as_files)
+
+    delivered = await generations.send_generation_outputs(bot, 1, ["https://example.com/output.mp4"])
+
+    assert delivered.delivered_successfully is True
+    assert bot.photos == []
+    assert bot.videos != []
+    assert bot.documents == []
+
+
+@pytest.mark.asyncio
+async def test_send_generation_outputs_sends_image_as_document_when_preference_enabled(monkeypatch, tmp_path) -> None:
+    output_path = tmp_path / "imai-image.jpg"
+    output_path.write_bytes(b"image")
+
+    async def fake_download_output_file_to_temp(output_url: str):
+        return str(output_path), "image/jpeg", 5
+
+    async def fake_get_user_send_results_as_files(user_id: int) -> bool:
+        return True
+
+    bot = FakeBot()
+    monkeypatch.setattr(generations, "download_output_file_to_temp", fake_download_output_file_to_temp)
+    monkeypatch.setattr(generations, "get_user_send_results_as_files", fake_get_user_send_results_as_files)
+
+    delivered = await generations.send_generation_outputs(bot, 1, ["https://example.com/output.jpg"], user_id=1)
+
+    assert delivered.delivered_successfully is True
+    assert bot.documents != []
+    assert bot.photos == []
+    assert bot.videos == []
+
+
+@pytest.mark.asyncio
+async def test_send_generation_outputs_sends_video_as_document_when_preference_enabled(monkeypatch, tmp_path) -> None:
+    output_path = tmp_path / "imai-video.mp4"
+    output_path.write_bytes(b"video")
+
+    async def fake_download_output_file_to_temp(output_url: str):
+        return str(output_path), "video/mp4", 5
+
+    async def fake_get_user_send_results_as_files(user_id: int) -> bool:
+        return True
+
+    bot = FakeBot()
+    monkeypatch.setattr(generations, "download_output_file_to_temp", fake_download_output_file_to_temp)
+    monkeypatch.setattr(generations, "get_user_send_results_as_files", fake_get_user_send_results_as_files)
+
+    delivered = await generations.send_generation_outputs(bot, 1, ["https://example.com/output.mp4"], user_id=1)
+
+    assert delivered.delivered_successfully is True
+    assert bot.documents != []
+    assert bot.photos == []
+    assert bot.videos == []
+
+
+@pytest.mark.asyncio
+async def test_send_generation_outputs_falls_back_from_photo_to_document(monkeypatch, tmp_path) -> None:
+    output_path = tmp_path / "imai-image.jpg"
+    output_path.write_bytes(b"image")
+
+    async def fake_download_output_file_to_temp(output_url: str):
+        return str(output_path), "image/jpeg", 5
+
+    async def fake_get_user_send_results_as_files(user_id: int) -> bool:
+        return False
+
+    async def failing_send_photo(chat_id, photo, caption=None):
+        raise TelegramBadRequest("photo failed")
+
+    bot = FakeBot()
+    monkeypatch.setattr(generations, "download_output_file_to_temp", fake_download_output_file_to_temp)
+    monkeypatch.setattr(generations, "get_user_send_results_as_files", fake_get_user_send_results_as_files)
+    monkeypatch.setattr(bot, "send_photo", failing_send_photo)
+
+    delivered = await generations.send_generation_outputs(bot, 1, ["https://example.com/output.jpg"])
+
+    assert delivered.delivered_successfully is True
+    assert bot.documents != []
+
+
+@pytest.mark.asyncio
+async def test_send_generation_outputs_falls_back_from_video_to_document(monkeypatch, tmp_path) -> None:
+    output_path = tmp_path / "imai-video.mp4"
+    output_path.write_bytes(b"video")
+
+    async def fake_download_output_file_to_temp(output_url: str):
+        return str(output_path), "video/mp4", 5
+
+    async def fake_get_user_send_results_as_files(user_id: int) -> bool:
+        return False
+
+    async def failing_send_video(chat_id, video, caption=None, request_timeout=None):
+        raise TelegramBadRequest("video failed")
+
+    bot = FakeBot()
+    monkeypatch.setattr(generations, "download_output_file_to_temp", fake_download_output_file_to_temp)
+    monkeypatch.setattr(generations, "get_user_send_results_as_files", fake_get_user_send_results_as_files)
+    monkeypatch.setattr(bot, "send_video", failing_send_video)
+
+    delivered = await generations.send_generation_outputs(bot, 1, ["https://example.com/output.mp4"])
+
+    assert delivered.delivered_successfully is True
+    assert bot.documents != []
 
 
 @pytest.mark.asyncio
@@ -1395,7 +1598,7 @@ async def test_poll_generation_result_keeps_completed_status_when_document_deliv
         async def close(self) -> None:
             return None
 
-    async def fake_send_generation_outputs(bot, chat_id: int, output_urls: list[str]) -> bool:
+    async def fake_send_generation_outputs(bot, chat_id: int, output_urls: list[str], user_id=None) -> bool:
         await generations.safe_send_bot_message(
             bot,
             chat_id,
