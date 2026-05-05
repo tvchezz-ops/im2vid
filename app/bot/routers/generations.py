@@ -51,6 +51,7 @@ from app.services.generation_service import (
     validate_model_settings,
     list_providers,
 )
+from app.services.download_links import DownloadLinkService
 from app.services.r2_storage import R2StorageService
 from app.services.telegram_files import TelegramFilesService
 from app.services.wavespeed import WavespeedResult, WavespeedService
@@ -909,34 +910,41 @@ def get_safe_telegram_document_size_bytes() -> int:
     return settings.telegram_safe_document_size_mb * 1024 * 1024
 
 
-def build_large_file_r2_message(signed_url: str) -> str:
+def build_large_file_r2_message(short_url: str) -> str:
     return (
-        "⚠️ Файл слишком большой для отправки через Telegram.\n\n"
-        "Мы загрузили его в защищённое облачное хранилище (Cloudflare R2).\n\n"
-        f"🔗 Скачать файл:\n{signed_url}\n\n"
-        "🔒 Ссылка временная и безопасная — файл доступен только по этой ссылке.\n\n"
-        "Если у вас есть сомнения, вы можете:\n"
-        "- открыть ссылку в браузере\n"
-        "- проверить её через любой AI или онлайн-анализатор ссылок"
+        "⚠️ Файл слишком большой для Telegram.\n\n"
+        "Мы загрузили его в защищённое облачное хранилище Cloudflare R2.\n\n"
+        f"🔗 Скачать файл:\n{short_url}\n\n"
+        "🔒 Ссылка временная и безопасная. Она действует 30 минут.\n\n"
+        "Если сомневаетесь, можете проверить ссылку через любой AI, онлайн-анализатор ссылок или открыть её в браузере."
     )
 
 
-async def upload_output_to_r2_and_get_signed_url(
+async def upload_output_to_r2_and_get_short_url(
     *,
     r2_storage: R2StorageService,
     file_path: str,
     content_type: Optional[str],
+    file_size_bytes: Optional[int],
 ) -> str:
-    """Загрузить output-файл в R2 без блокировки event loop и вернуть signed URL."""
-    signed_url = await asyncio.to_thread(
-        r2_storage.upload_and_get_signed_url,
+    """Загрузить output-файл в R2 без блокировки event loop и вернуть короткий URL."""
+    object_key = await asyncio.to_thread(
+        r2_storage.upload_and_get_object_key,
         file_path,
         Path(file_path).name,
         content_type,
     )
-    if not signed_url or not signed_url.strip():
-        raise RuntimeError("Cloudflare R2 returned an empty signed URL")
-    return signed_url
+    if not object_key or not object_key.strip():
+        raise RuntimeError("Cloudflare R2 returned an empty object key")
+    short_url = await DownloadLinkService().create_short_download_url(
+        object_key,
+        filename=Path(file_path).name,
+        file_size_bytes=file_size_bytes,
+        content_type=content_type,
+    )
+    if not short_url or not short_url.strip():
+        raise RuntimeError("Download link service returned an empty short URL")
+    return short_url
 
 
 async def send_document_with_retry(*, bot, chat_id: int, file_path: str, caption: Optional[str]) -> None:
@@ -982,10 +990,11 @@ async def send_generation_outputs(bot, chat_id: int, output_urls: list[str]) -> 
                 use_r2 = True
                 if r2_storage.is_configured():
                     try:
-                        signed_url = await upload_output_to_r2_and_get_signed_url(
+                        short_url = await upload_output_to_r2_and_get_short_url(
                             r2_storage=r2_storage,
                             file_path=temp_output_path,
                             content_type=content_type,
+                            file_size_bytes=file_size_bytes,
                         )
                     except Exception:
                         delivered_successfully = False
@@ -1003,7 +1012,7 @@ async def send_generation_outputs(bot, chat_id: int, output_urls: list[str]) -> 
                     await safe_send_bot_message(
                         bot,
                         chat_id,
-                        build_large_file_r2_message(signed_url),
+                        build_large_file_r2_message(short_url),
                     )
                     log_generation_output_delivery(
                         "r2",
@@ -1040,10 +1049,11 @@ async def send_generation_outputs(bot, chat_id: int, output_urls: list[str]) -> 
             if temp_output_path and r2_storage.is_configured():
                 use_r2 = True
                 try:
-                    signed_url = await upload_output_to_r2_and_get_signed_url(
+                    short_url = await upload_output_to_r2_and_get_short_url(
                         r2_storage=r2_storage,
                         file_path=temp_output_path,
                         content_type=content_type,
+                        file_size_bytes=file_size_bytes,
                     )
                 except Exception:
                     log_generation_output_delivery(
@@ -1057,7 +1067,7 @@ async def send_generation_outputs(bot, chat_id: int, output_urls: list[str]) -> 
                         "❌ Не удалось загрузить файл. Попробуйте ещё раз позже",
                     )
                     continue
-                await safe_send_bot_message(bot, chat_id, build_large_file_r2_message(signed_url))
+                await safe_send_bot_message(bot, chat_id, build_large_file_r2_message(short_url))
                 log_generation_output_delivery(
                     "r2",
                     file_size_bytes=file_size_bytes,
@@ -1081,10 +1091,11 @@ async def send_generation_outputs(bot, chat_id: int, output_urls: list[str]) -> 
             if temp_output_path and r2_storage.is_configured():
                 use_r2 = True
                 try:
-                    signed_url = await upload_output_to_r2_and_get_signed_url(
+                    short_url = await upload_output_to_r2_and_get_short_url(
                         r2_storage=r2_storage,
                         file_path=temp_output_path,
                         content_type=content_type,
+                        file_size_bytes=file_size_bytes,
                     )
                 except Exception:
                     delivered_successfully = False
@@ -1107,7 +1118,7 @@ async def send_generation_outputs(bot, chat_id: int, output_urls: list[str]) -> 
                 await safe_send_bot_message(
                     bot,
                     chat_id,
-                    build_large_file_r2_message(signed_url),
+                    build_large_file_r2_message(short_url),
                 )
                 continue
             delivered_successfully = False

@@ -120,6 +120,20 @@ def test_upload_and_get_signed_url_uses_temporary_outputs_prefix(tmp_path, monke
     assert client.presign_calls[0]["params"]["Key"] == upload_call["object_key"]
 
 
+def test_upload_and_get_object_key_returns_generated_object_key(tmp_path, monkeypatch) -> None:
+    monkeypatch.setattr(settings, "r2_bucket_name", "bucket")
+    local_file = tmp_path / "video.mp4"
+    local_file.write_bytes(b"video-data")
+    client = FakeR2Client()
+    service = R2StorageService(client=client)
+
+    object_key = service.upload_and_get_object_key(str(local_file), "wavespeed-output.mp4", "video/mp4")
+
+    assert object_key.startswith("temporary-outputs/")
+    assert object_key.endswith("/wavespeed-output.mp4")
+    assert client.upload_calls[0]["object_key"] == object_key
+
+
 def test_upload_and_get_signed_url_does_not_log_signed_url(tmp_path, monkeypatch) -> None:
     monkeypatch.setattr(settings, "r2_bucket_name", "bucket")
     monkeypatch.setattr(settings, "r2_signed_url_ttl_seconds", 1800)

@@ -64,8 +64,19 @@ def build_public_media_path(filename: str) -> str:
 
 def create_media_app() -> web.Application:
     """Создать aiohttp-приложение для публикации временных media-файлов."""
+    from app.services.download_links import (
+        DOWNLOAD_LINK_SERVICE_APP_KEY,
+        DOWNLOAD_ROUTE_PREFIX,
+        DownloadLinkService,
+        handle_download_landing,
+        handle_download_redirect,
+    )
+
     temp_media_dir = ensure_temp_media_dir()
     app = web.Application()
+    app[DOWNLOAD_LINK_SERVICE_APP_KEY] = DownloadLinkService()
+    app.router.add_get(f"{DOWNLOAD_ROUTE_PREFIX}/{{token}}", handle_download_landing)
+    app.router.add_get(f"{DOWNLOAD_ROUTE_PREFIX}/{{token}}/download", handle_download_redirect)
     app.router.add_static(f"{MEDIA_ROUTE_PREFIX}/", path=str(temp_media_dir), show_index=False)
     return app
 

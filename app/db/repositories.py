@@ -4,10 +4,10 @@ from __future__ import annotations
 from datetime import datetime, timezone
 from typing import Any, Optional
 
-from sqlalchemy import select, update
+from sqlalchemy import delete, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.db.models import GenerationRequest, GenerationRequestStatus, Payment, User, UserEvent
+from app.db.models import DownloadLink, GenerationRequest, GenerationRequestStatus, Payment, User, UserEvent
 from app.utils import logger
 
 
@@ -324,3 +324,54 @@ class PaymentRepository:
         await self.session.commit()
         await self.session.refresh(payment)
         return payment
+
+
+class DownloadLinkRepository:
+    """Репозиторий коротких временных ссылок на R2-объекты."""
+
+    def __init__(self, session: AsyncSession):
+        self.session = session
+
+    async def create_download_link(
+        self,
+        *,
+        token: str,
+        r2_object_key: str,
+        filename: Optional[str],
+        file_size_bytes: Optional[int],
+        content_type: Optional[str],
+        expires_at: datetime,
+    ) -> DownloadLink:
+        link = DownloadLink(
+            token=token,
+            r2_object_key=r2_object_key,
+            filename=filename,
+            file_size_bytes=file_size_bytes,
+            content_type=content_type,
+            expires_at=expires_at,
+        )
+        self.session.add(link)
+        await self.session.commit()
+        await self.session.refresh(link)
+        return link
+
+    async def get_by_token(self, token: str) -> Optional[DownloadLink]:
+        result = await self.session.execute(select(DownloadLink).where(DownloadLink.token == token))
+        return result.scalars().first()
+
+    async def increment_used_count(self, link_id: Any) -> bool:
+        result = await self.session.execute(
+            update(DownloadLink)
+            .where(DownloadLink.id == link_id)
+            .values(used_count=DownloadLink.used_count + 1)
+        )
+        await self.session.commit()
+        return result.rowcount > 0
+
+    async def delete_expired_download_links(self, now: Optional[datetime] = None) -> int:
+        cutoff = now or datetime.now(timezone.utc)
+        result = await self.session.execute(
+            delete(DownloadLink).where(DownloadLink.expires_at < cutoff)
+        )
+        await self.session.commit()
+        return result.rowcount or 0

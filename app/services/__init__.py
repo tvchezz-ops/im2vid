@@ -26,6 +26,7 @@ from app.services.generation_service import (
     build_model_registry,
 )
 from app.services.telegram_files import TelegramFilesService
+from app.services.download_links import DownloadLinkService
 from app.services.r2_storage import R2StorageService
 from app.services.wavespeed import (
     WavespeedResult,
@@ -46,6 +47,7 @@ __all__ = [
     "extract_output_urls",
     "extract_error_message",
     "TelegramFilesService",
+    "DownloadLinkService",
     "R2StorageService",
     "SettingOption",
     "GenerationSetting",

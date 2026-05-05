@@ -106,6 +106,11 @@ class R2StorageService:
         self.upload_file(local_path, object_name, content_type)
         return self.generate_signed_url(object_name)
 
+    def upload_and_get_object_key(self, local_path: str, filename: str, content_type: Optional[str]) -> str:
+        """Загрузить файл в R2 и вернуть object key без генерации signed URL."""
+        object_name = self._build_object_name(filename, local_path)
+        return self.upload_file(local_path, object_name, content_type or "application/octet-stream")
+
     def generate_presigned_url(self, object_key: str, expires_in: Optional[int] = None) -> str:
         """Backward-compatible alias for legacy call sites."""
         if expires_in is not None:

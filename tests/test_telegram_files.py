@@ -29,6 +29,8 @@ def test_create_media_app_serves_temp_media_dir_on_media_route() -> None:
         and Path(getattr(resource, "_directory", "")) == telegram_files.get_temp_media_dir()
         for resource in resources
     )
+    assert any(getattr(resource, "canonical", None) == "/d/{token}" for resource in resources)
+    assert any(getattr(resource, "canonical", None) == "/d/{token}/download" for resource in resources)
 
 
 @pytest.mark.asyncio

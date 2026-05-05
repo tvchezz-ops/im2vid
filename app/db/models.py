@@ -109,3 +109,23 @@ class Payment(Base):
         default=lambda: datetime.now(timezone.utc),
         server_default=func.now(),
     )
+
+
+class DownloadLink(Base):
+    """Короткая временная ссылка на R2-объект."""
+
+    __tablename__ = "download_links"
+
+    id: Mapped[uuid.UUID] = mapped_column(Uuid, primary_key=True, default=uuid.uuid4)
+    token: Mapped[str] = mapped_column(String(255), unique=True, index=True)
+    r2_object_key: Mapped[str] = mapped_column(String(1024), nullable=False)
+    filename: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
+    file_size_bytes: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
+    content_type: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
+    expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, index=True)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        default=lambda: datetime.now(timezone.utc),
+        server_default=func.now(),
+    )
+    used_count: Mapped[int] = mapped_column(Integer, default=0, server_default="0")

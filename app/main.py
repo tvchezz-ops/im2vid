@@ -25,6 +25,7 @@ from app.services.telegram_files import (
     create_media_app,
     ensure_public_base_url,
 )
+from app.services.download_links import DownloadLinkService
 from app.utils import logger
 
 
@@ -79,6 +80,9 @@ class TelegramBot:
         port = int(os.getenv("PORT", 8080))
         ensure_public_base_url()
         cleanup_old_temp_media_files()
+        deleted_links = await DownloadLinkService().delete_expired_download_links()
+        if deleted_links:
+            logger.info("Deleted expired download links: %s", deleted_links)
         app = create_media_app()
         self.media_runner = web.AppRunner(app)
         await self.media_runner.setup()

@@ -1046,15 +1046,32 @@ async def test_send_generation_outputs_uses_r2_fallback_when_configured(monkeypa
         def is_configured(self) -> bool:
             return True
 
-        def upload_and_get_signed_url(self, local_path: str, filename: str, content_type: str | None) -> str:
+        def upload_and_get_object_key(self, local_path: str, filename: str, content_type: str | None) -> str:
             assert local_path == str(safe_limit_path)
             assert filename == safe_limit_path.name
             assert content_type == "video/mp4"
-            return "https://signed.example.com/file"
+            return "temporary-outputs/test/file.mp4"
+
+    class FakeDownloadLinkService:
+        async def create_short_download_url(
+            self,
+            r2_object_key: str,
+            *,
+            filename=None,
+            file_size_bytes=None,
+            content_type=None,
+            expires_at=None,
+        ) -> str:
+            assert r2_object_key == "temporary-outputs/test/file.mp4"
+            assert filename == safe_limit_path.name
+            assert file_size_bytes == generations.get_safe_telegram_document_size_bytes() + 1
+            assert content_type == "video/mp4"
+            return "https://example.com/d/abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMN"
 
     bot = FakeBot()
     monkeypatch.setattr(generations, "download_output_file_to_temp", fake_download_output_file_to_temp)
     monkeypatch.setattr(generations, "R2StorageService", FakeR2StorageService)
+    monkeypatch.setattr(generations, "DownloadLinkService", FakeDownloadLinkService)
 
     delivered = await generations.send_generation_outputs(bot, 1, ["https://example.com/output.mp4"])
 
@@ -1062,13 +1079,11 @@ async def test_send_generation_outputs_uses_r2_fallback_when_configured(monkeypa
     assert delivered.use_r2 is True
     assert bot.documents == []
     assert bot.messages[-1] == (
-        "⚠️ Файл слишком большой для отправки через Telegram.\n\n"
-        "Мы загрузили его в защищённое облачное хранилище (Cloudflare R2).\n\n"
-        "🔗 Скачать файл:\nhttps://signed.example.com/file\n\n"
-        "🔒 Ссылка временная и безопасная — файл доступен только по этой ссылке.\n\n"
-        "Если у вас есть сомнения, вы можете:\n"
-        "- открыть ссылку в браузере\n"
-        "- проверить её через любой AI или онлайн-анализатор ссылок"
+        "⚠️ Файл слишком большой для Telegram.\n\n"
+        "Мы загрузили его в защищённое облачное хранилище Cloudflare R2.\n\n"
+        "🔗 Скачать файл:\nhttps://example.com/d/abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMN\n\n"
+        "🔒 Ссылка временная и безопасная. Она действует 30 минут.\n\n"
+        "Если сомневаетесь, можете проверить ссылку через любой AI, онлайн-анализатор ссылок или открыть её в браузере."
     )
 
 
@@ -1146,9 +1161,21 @@ async def test_send_generation_outputs_deletes_temp_file_only_after_r2_upload(mo
         def is_configured(self) -> bool:
             return True
 
-        def upload_and_get_signed_url(self, local_path: str, filename: str, content_type: str | None) -> str:
+        def upload_and_get_object_key(self, local_path: str, filename: str, content_type: str | None) -> str:
             captured["exists_during_r2_upload"] = Path(local_path).exists()
-            return "https://signed.example.com/file"
+            return "temporary-outputs/test/file.mp4"
+
+    class FakeDownloadLinkService:
+        async def create_short_download_url(
+            self,
+            r2_object_key: str,
+            *,
+            filename=None,
+            file_size_bytes=None,
+            content_type=None,
+            expires_at=None,
+        ) -> str:
+            return "https://example.com/d/token"
 
     def fake_info(payload):
         payloads.append(payload)
@@ -1156,6 +1183,7 @@ async def test_send_generation_outputs_deletes_temp_file_only_after_r2_upload(mo
     bot = FakeBot()
     monkeypatch.setattr(generations, "download_output_file_to_temp", fake_download_output_file_to_temp)
     monkeypatch.setattr(generations, "R2StorageService", FakeR2StorageService)
+    monkeypatch.setattr(generations, "DownloadLinkService", FakeDownloadLinkService)
     monkeypatch.setattr(generations.logger, "info", fake_info)
 
     delivered = await generations.send_generation_outputs(bot, 1, ["https://example.com/output.mp4"])
@@ -1185,16 +1213,33 @@ async def test_send_generation_outputs_uses_r2_after_telegram_delivery_failure(m
         def is_configured(self) -> bool:
             return True
 
-        def upload_and_get_signed_url(self, local_path: str, filename: str, content_type: str | None) -> str:
+        def upload_and_get_object_key(self, local_path: str, filename: str, content_type: str | None) -> str:
             assert local_path == str(output_path)
             assert filename == output_path.name
             assert content_type == "image/jpeg"
-            return "https://signed.example.com/retry-fallback"
+            return "temporary-outputs/test/retry-fallback.jpg"
+
+    class FakeDownloadLinkService:
+        async def create_short_download_url(
+            self,
+            r2_object_key: str,
+            *,
+            filename=None,
+            file_size_bytes=None,
+            content_type=None,
+            expires_at=None,
+        ) -> str:
+            assert r2_object_key == "temporary-outputs/test/retry-fallback.jpg"
+            assert filename == output_path.name
+            assert file_size_bytes == 5
+            assert content_type == "image/jpeg"
+            return "https://example.com/d/retry-fallback-token"
 
     bot = FakeBot()
     monkeypatch.setattr(generations, "download_output_file_to_temp", fake_download_output_file_to_temp)
     monkeypatch.setattr(generations, "send_document_with_retry", fake_send_document_with_retry)
     monkeypatch.setattr(generations, "R2StorageService", FakeR2StorageService)
+    monkeypatch.setattr(generations, "DownloadLinkService", FakeDownloadLinkService)
 
     delivered = await generations.send_generation_outputs(bot, 1, ["https://example.com/output.jpg"])
 
@@ -1202,13 +1247,11 @@ async def test_send_generation_outputs_uses_r2_after_telegram_delivery_failure(m
     assert delivered.use_r2 is True
     assert bot.documents == []
     assert bot.messages[-1] == (
-        "⚠️ Файл слишком большой для отправки через Telegram.\n\n"
-        "Мы загрузили его в защищённое облачное хранилище (Cloudflare R2).\n\n"
-        "🔗 Скачать файл:\nhttps://signed.example.com/retry-fallback\n\n"
-        "🔒 Ссылка временная и безопасная — файл доступен только по этой ссылке.\n\n"
-        "Если у вас есть сомнения, вы можете:\n"
-        "- открыть ссылку в браузере\n"
-        "- проверить её через любой AI или онлайн-анализатор ссылок"
+        "⚠️ Файл слишком большой для Telegram.\n\n"
+        "Мы загрузили его в защищённое облачное хранилище Cloudflare R2.\n\n"
+        "🔗 Скачать файл:\nhttps://example.com/d/retry-fallback-token\n\n"
+        "🔒 Ссылка временная и безопасная. Она действует 30 минут.\n\n"
+        "Если сомневаетесь, можете проверить ссылку через любой AI, онлайн-анализатор ссылок или открыть её в браузере."
     )
 
 
@@ -1224,7 +1267,7 @@ async def test_send_generation_outputs_reports_error_when_r2_upload_fails(monkey
         def is_configured(self) -> bool:
             return True
 
-        def upload_and_get_signed_url(self, local_path: str, filename: str, content_type: str | None) -> str:
+        def upload_and_get_object_key(self, local_path: str, filename: str, content_type: str | None) -> str:
             raise RuntimeError("upload failed")
 
     bot = FakeBot()
@@ -1251,12 +1294,25 @@ async def test_send_generation_outputs_reports_error_when_r2_returns_empty_url(m
         def is_configured(self) -> bool:
             return True
 
-        def upload_and_get_signed_url(self, local_path: str, filename: str, content_type: str | None) -> str:
+        def upload_and_get_object_key(self, local_path: str, filename: str, content_type: str | None) -> str:
+            return "temporary-outputs/test/file.mp4"
+
+    class FakeDownloadLinkService:
+        async def create_short_download_url(
+            self,
+            r2_object_key: str,
+            *,
+            filename=None,
+            file_size_bytes=None,
+            content_type=None,
+            expires_at=None,
+        ) -> str:
             return ""
 
     bot = FakeBot()
     monkeypatch.setattr(generations, "download_output_file_to_temp", fake_download_output_file_to_temp)
     monkeypatch.setattr(generations, "R2StorageService", FakeR2StorageService)
+    monkeypatch.setattr(generations, "DownloadLinkService", FakeDownloadLinkService)
 
     delivered = await generations.send_generation_outputs(bot, 1, ["https://example.com/output.mp4"])
 
