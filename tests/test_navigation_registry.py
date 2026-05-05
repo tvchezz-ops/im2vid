@@ -167,7 +167,7 @@ def test_navigation_keyboards_include_back_buttons() -> None:
         build_setting_options_keyboard(sample_model, sample_setting_key, sample_current_settings[sample_setting_key])
     )
 
-    assert "gen:back:main" in sections_callbacks
+    assert "gen:back:main" not in sections_callbacks
     assert "gen:back:sections" in provider_callbacks
     assert "gen:back:providers" in model_callbacks
     assert "gen:back:models" in settings_callbacks

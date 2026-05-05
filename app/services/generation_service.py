@@ -2,7 +2,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field, replace
-from typing import Any, Mapping, Optional, TYPE_CHECKING
+from typing import Any, Literal, Mapping, Optional, TYPE_CHECKING
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -56,6 +56,9 @@ class GenerationModel:
     requires_video: bool
     requires_audio: bool
     outputs: str
+    input_media_field: str | None = None
+    min_images: int = 0
+    supports_multiple_images: bool = False
     is_enabled: bool = True
     warning: str = ""
     required_payload_fields: tuple[str, ...] = ()
@@ -111,6 +114,35 @@ PROVIDERS = [
     "google",
     "midjourney",
 ]
+
+
+def get_required_input_type(generation_type: str) -> Literal["text", "image", "video", "lipsync"]:
+    """Вернуть тип обязательного пользовательского ввода для generation_type."""
+    normalized_generation_type = normalize_generation_type(generation_type)
+    if normalized_generation_type in {"text_to_image", "text_to_video"}:
+        return "text"
+    if normalized_generation_type in {"image_edit", "image_to_video"}:
+        return "image"
+    if normalized_generation_type == "video_edit":
+        return "video"
+    if normalized_generation_type == "lipsync":
+        return "lipsync"
+    raise ValueError(f"Unsupported generation type: {generation_type}")
+
+
+def model_requires_media(model: GenerationModel) -> bool:
+    """Проверить, что модели нужен media-вход."""
+    return model.input_media_field is not None or get_required_input_type(model.generation_type) == "lipsync"
+
+
+def model_requires_image(model: GenerationModel) -> bool:
+    """Проверить, что модели нужен image-вход."""
+    return model.input_media_field in {"image", "images"}
+
+
+def model_requires_video(model: GenerationModel) -> bool:
+    """Проверить, что модели нужен video-вход."""
+    return model.input_media_field == "video"
 
 
 def normalize_generation_type(generation_type: str) -> str:
@@ -236,10 +268,13 @@ def _model(
     description: str,
     outputs: str,
     requires_prompt: bool,
+    input_media_field: str | None = None,
+    min_images: int = 0,
     requires_image: bool = False,
     requires_video: bool = False,
     requires_audio: bool = False,
-    max_images: int = 1,
+    max_images: int = 0,
+    supports_multiple_images: bool = False,
     is_enabled: bool = True,
     warning: str = "",
     required_payload_fields: tuple[str, ...] = (),
@@ -256,7 +291,10 @@ def _model(
         endpoint=_api_endpoint(provider, path),
         docs_url=_docs_url(provider, slug),
         description=description,
+        input_media_field=input_media_field,
+        min_images=min_images,
         max_images=max_images,
+        supports_multiple_images=supports_multiple_images,
         requires_prompt=requires_prompt,
         requires_image=requires_image,
         requires_video=requires_video,
@@ -331,10 +369,8 @@ def get_default_allowed_payload_fields(model: GenerationModel) -> tuple[str, ...
     else:
         if model.requires_prompt:
             fields.append("prompt")
-        if model.requires_video:
-            fields.append("video")
-        if model.requires_image:
-            fields.append("image" if model.outputs == "video" else "images")
+        if model.input_media_field:
+            fields.append(model.input_media_field)
     fields.extend(str(key) for key in model.system_settings.keys())
     return tuple(dict.fromkeys(fields))
 
@@ -347,6 +383,10 @@ def get_default_required_payload_fields(model: GenerationModel) -> tuple[str, ..
 def build_input_schema(model: GenerationModel) -> dict[str, Any]:
     """Собрать декларативное описание допустимых параметров модели."""
     return {
+        "input_media_field": model.input_media_field,
+        "min_images": model.min_images,
+        "max_images": model.max_images,
+        "supports_multiple_images": model.supports_multiple_images,
         "required_payload_fields": list(model.required_payload_fields),
         "allowed_payload_fields": list(model.allowed_payload_fields),
         "user_settings": {
@@ -385,6 +425,7 @@ MODEL_REGISTRY = build_model_registry((
         description="Alibaba Wan 2.6 text-to-image model from Wavespeed docs.",
         outputs="image",
         requires_prompt=True,
+        input_media_field=None,
         required_payload_fields=("prompt",),
         allowed_payload_fields=("prompt", "width", "height", "enable_prompt_expansion", "seed"),
         user_settings={
@@ -404,6 +445,7 @@ MODEL_REGISTRY = build_model_registry((
         description="Alibaba Wan 2.6 text-to-video model from Wavespeed docs.",
         outputs="video",
         requires_prompt=True,
+        input_media_field=None,
         required_payload_fields=("prompt",),
         allowed_payload_fields=("prompt", "negative_prompt", "audio", "size"),
         user_settings={
@@ -421,7 +463,10 @@ MODEL_REGISTRY = build_model_registry((
         description="Alibaba Wan 2.6 image-to-video model from Wavespeed docs.",
         outputs="video",
         requires_prompt=True,
+        input_media_field="image",
+        min_images=1,
         requires_image=True,
+        max_images=1,
         is_enabled=False,
         warning="Parameters need verification",
     ),
@@ -435,7 +480,10 @@ MODEL_REGISTRY = build_model_registry((
         description="Alibaba Wan 2.6 Image To Video Pro model from Wavespeed docs.",
         outputs="video",
         requires_prompt=True,
+        input_media_field="image",
+        min_images=1,
         requires_image=True,
+        max_images=1,
         required_payload_fields=("image", "prompt"),
         allowed_payload_fields=("image", "prompt", "audio", "negative_prompt", "resolution", "duration", "shot_type"),
         user_settings={
@@ -455,7 +503,10 @@ MODEL_REGISTRY = build_model_registry((
         description="Alibaba Wan 2.6 Image To Video Flash model from Wavespeed docs.",
         outputs="video",
         requires_prompt=True,
+        input_media_field="image",
+        min_images=1,
         requires_image=True,
+        max_images=1,
         required_payload_fields=("image", "prompt"),
         allowed_payload_fields=("image", "prompt", "audio", "negative_prompt", "resolution", "duration", "shot_type"),
         user_settings={
@@ -475,7 +526,10 @@ MODEL_REGISTRY = build_model_registry((
         description="Alibaba Happyhorse 1.0 image-to-video model from Wavespeed docs.",
         outputs="video",
         requires_prompt=True,
+        input_media_field="image",
+        min_images=1,
         requires_image=True,
+        max_images=1,
         is_enabled=False,
         warning="Parameters need verification",
     ),
@@ -489,6 +543,7 @@ MODEL_REGISTRY = build_model_registry((
         description="Alibaba Happyhorse 1.0 text-to-video model from Wavespeed docs.",
         outputs="video",
         requires_prompt=True,
+        input_media_field=None,
         required_payload_fields=("prompt",),
         allowed_payload_fields=("prompt", "aspect_ratio", "resolution", "duration", "seed"),
         user_settings={
@@ -508,6 +563,7 @@ MODEL_REGISTRY = build_model_registry((
         description="OpenAI GPT Image 2 text-to-image model from Wavespeed docs.",
         outputs="image",
         requires_prompt=True,
+        input_media_field=None,
         is_enabled=False,
         warning="Parameters need verification from docs",
     ),
@@ -521,8 +577,11 @@ MODEL_REGISTRY = build_model_registry((
         description="OpenAI GPT Image 2 edit model from Wavespeed docs.",
         outputs="image",
         requires_prompt=True,
+        input_media_field="images",
+        min_images=1,
         requires_image=True,
         max_images=10,
+        supports_multiple_images=True,
         is_enabled=False,
         warning="Parameters need verification from docs",
         system_settings=COMMON_IMAGE_SYSTEM_SETTINGS,
@@ -537,6 +596,7 @@ MODEL_REGISTRY = build_model_registry((
         description="OpenAI GPT Image 1 text-to-image model from Wavespeed docs.",
         outputs="image",
         requires_prompt=True,
+        input_media_field=None,
         is_enabled=False,
         warning="Parameters need verification from docs",
     ),
@@ -550,6 +610,7 @@ MODEL_REGISTRY = build_model_registry((
         description="OpenAI GPT Image 1.5 text-to-image model from Wavespeed docs.",
         outputs="image",
         requires_prompt=True,
+        input_media_field=None,
         is_enabled=False,
         warning="Parameters need verification from docs",
     ),
@@ -563,6 +624,7 @@ MODEL_REGISTRY = build_model_registry((
         description="OpenAI GPT Image 1 Mini text-to-image model from Wavespeed docs.",
         outputs="image",
         requires_prompt=True,
+        input_media_field=None,
         is_enabled=False,
         warning="Parameters need verification from docs",
     ),
@@ -576,6 +638,7 @@ MODEL_REGISTRY = build_model_registry((
         description="ByteDance Seedream V5.0 Lite text-to-image model from Wavespeed docs.",
         outputs="image",
         requires_prompt=True,
+        input_media_field=None,
         is_enabled=False,
         warning="Parameters need verification",
     ),
@@ -589,6 +652,7 @@ MODEL_REGISTRY = build_model_registry((
         description="ByteDance Seedream V5.0 Lite Sequential model from Wavespeed docs.",
         outputs="image",
         requires_prompt=True,
+        input_media_field=None,
         required_payload_fields=("prompt",),
         allowed_payload_fields=("prompt", "output_format", "enable_base64_output", "enable_sync_mode"),
         user_settings={
@@ -606,6 +670,7 @@ MODEL_REGISTRY = build_model_registry((
         description="ByteDance Seedream V4 Sequential text-to-image model from Wavespeed docs.",
         outputs="image",
         requires_prompt=True,
+        input_media_field=None,
         required_payload_fields=("prompt",),
         allowed_payload_fields=("prompt", "size", "max_images", "enable_sync_mode", "enable_base64_output"),
         user_settings={
@@ -624,6 +689,7 @@ MODEL_REGISTRY = build_model_registry((
         description="ByteDance Seedream V4.5 text-to-image model from Wavespeed docs.",
         outputs="image",
         requires_prompt=True,
+        input_media_field=None,
         is_enabled=False,
         warning="Parameters need verification",
     ),
@@ -637,8 +703,11 @@ MODEL_REGISTRY = build_model_registry((
         description="ByteDance Seedream V4.5 edit model from Wavespeed docs.",
         outputs="image",
         requires_prompt=True,
+        input_media_field="images",
+        min_images=1,
         requires_image=True,
         max_images=10,
+        supports_multiple_images=True,
         required_payload_fields=("images", "prompt"),
         allowed_payload_fields=("images", "prompt", "size", "enable_sync_mode", "enable_base64_output"),
         user_settings=SEEDREAM_EDIT_SETTINGS,
@@ -654,6 +723,7 @@ MODEL_REGISTRY = build_model_registry((
         description="ByteDance Seedream V3.1 text-to-image model from Wavespeed docs.",
         outputs="image",
         requires_prompt=True,
+        input_media_field=None,
         required_payload_fields=("prompt",),
         allowed_payload_fields=("prompt", "size", "seed", "enable_prompt_expansion", "enable_sync_mode", "enable_base64_output"),
         user_settings={
@@ -673,6 +743,7 @@ MODEL_REGISTRY = build_model_registry((
         description="ByteDance Seedream V3 text-to-image model from Wavespeed docs.",
         outputs="image",
         requires_prompt=True,
+        input_media_field=None,
         is_enabled=False,
         warning="Parameters need verification",
     ),
@@ -686,6 +757,7 @@ MODEL_REGISTRY = build_model_registry((
         description="ByteDance lipsync avatar model from Wavespeed docs.",
         outputs="video",
         requires_prompt=False,
+        input_media_field=None,
         max_images=1,
         is_enabled=False,
         warning="Parameters need verification",
@@ -700,6 +772,7 @@ MODEL_REGISTRY = build_model_registry((
         description="ByteDance talking avatar model from Wavespeed docs.",
         outputs="video",
         requires_prompt=False,
+        input_media_field=None,
         max_images=1,
         is_enabled=False,
         warning="Parameters need verification",
@@ -714,8 +787,11 @@ MODEL_REGISTRY = build_model_registry((
         description="Google Nano Banana Pro Edit Ultra model from Wavespeed docs.",
         outputs="image",
         requires_prompt=True,
+        input_media_field="images",
+        min_images=1,
         requires_image=True,
         max_images=14,
+        supports_multiple_images=True,
         required_payload_fields=("images", "prompt"),
         allowed_payload_fields=("images", "prompt", "aspect_ratio", "resolution", "output_format", "enable_sync_mode", "enable_base64_output"),
         user_settings=NANO_BANANA_SETTINGS,
@@ -731,6 +807,7 @@ MODEL_REGISTRY = build_model_registry((
         description="Google Veo3 text-to-video model from Wavespeed docs.",
         outputs="video",
         requires_prompt=True,
+        input_media_field=None,
         required_payload_fields=("prompt",),
         allowed_payload_fields=("prompt", "duration", "resolution", "aspect_ratio", "enable_sync_mode", "enable_base64_output"),
         user_settings={
@@ -750,6 +827,7 @@ MODEL_REGISTRY = build_model_registry((
         description="Google Veo3 Fast text-to-video model from Wavespeed docs.",
         outputs="video",
         requires_prompt=True,
+        input_media_field=None,
         required_payload_fields=("prompt",),
         allowed_payload_fields=("prompt", "duration", "resolution", "aspect_ratio", "enable_sync_mode", "enable_base64_output"),
         user_settings={
@@ -769,7 +847,10 @@ MODEL_REGISTRY = build_model_registry((
         description="Google Veo3.1 Fast video extend model from Wavespeed docs.",
         outputs="video",
         requires_prompt=False,
+        input_media_field="video",
         requires_video=True,
+        min_images=1,
+        max_images=1,
         required_payload_fields=("video",),
         allowed_payload_fields=("video", "prompt", "enable_sync_mode", "enable_base64_output"),
         user_settings={
@@ -984,24 +1065,34 @@ def build_payload(
     if model.requires_prompt and not cleaned_prompt:
         raise ValueError("Prompt must not be empty")
 
-    if model.requires_image:
+    if model.input_media_field == "images":
         if not valid_inputs:
             raise ValueError("At least one image URL is required")
-        if len(valid_inputs) > model.max_images:
+        if len(valid_inputs) < model.min_images:
+            raise ValueError(f"Model {model.key} requires at least {model.min_images} images")
+        if model.max_images and len(valid_inputs) > model.max_images:
             raise ValueError(
                 f"Model {model.key} supports at most {model.max_images} images, got {len(valid_inputs)}"
             )
-    if model.requires_video and not valid_inputs:
-        raise ValueError("At least one video URL is required")
+    elif model.input_media_field == "image":
+        if not valid_inputs:
+            raise ValueError("At least one image URL is required")
+        if len(valid_inputs) > 1:
+            raise ValueError(f"Model {model.key} supports exactly one image input")
+    elif model.input_media_field == "video":
+        if not valid_inputs:
+            raise ValueError("At least one video URL is required")
+        if len(valid_inputs) > 1:
+            raise ValueError(f"Model {model.key} supports exactly one video input")
 
     payload: dict[str, Any] = {**validated_settings, **model.system_settings}
     if model.requires_prompt and cleaned_prompt:
         payload["prompt"] = cleaned_prompt
-    if model.requires_video:
+    if model.input_media_field == "video":
         payload["video"] = valid_inputs[0]
-    elif model.requires_image and model.outputs == "video":
+    elif model.input_media_field == "image":
         payload["image"] = valid_inputs[0]
-    elif model.requires_image:
+    elif model.input_media_field == "images":
         payload["images"] = valid_inputs
     _apply_supported_system_flags(payload, allowed_payload_fields)
     filtered_payload = {

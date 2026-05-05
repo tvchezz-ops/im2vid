@@ -134,6 +134,18 @@ def build_back_to_settings_reply_keyboard() -> ReplyKeyboardMarkup:
     )
 
 
+def build_media_upload_reply_keyboard(*, show_continue: bool) -> ReplyKeyboardMarkup:
+    """Reply keyboard для этапа загрузки media с optional continue action."""
+    keyboard = [[KeyboardButton(text="⬅️ Назад к настройкам")]]
+    if show_continue:
+        keyboard.insert(0, [KeyboardButton(text="✅ Продолжить")])
+    return ReplyKeyboardMarkup(
+        keyboard=keyboard,
+        resize_keyboard=True,
+        one_time_keyboard=False,
+    )
+
+
 def build_generation_sections_keyboard() -> InlineKeyboardMarkup:
     """Построить клавиатуру разделов генерации по enabled registry."""
     rows = [
@@ -147,7 +159,6 @@ def build_generation_sections_keyboard() -> InlineKeyboardMarkup:
         if generation_type in SECTION_LABELS
     ]
     rows.append([InlineKeyboardButton(text="📚 All List", callback_data="gen:all")])
-    rows.append([InlineKeyboardButton(text="⬅️ В главное меню", callback_data="gen:back:main")])
     return InlineKeyboardMarkup(inline_keyboard=rows)
 
 
@@ -244,7 +255,6 @@ def build_generation_type_keyboard(options: Iterable[tuple[str, str]] | None = N
     for generation_type, label in options:
         callback_data = "gen:all" if generation_type == "all" else f"gen:section:{generation_type}"
         rows.append([InlineKeyboardButton(text=label, callback_data=validate_callback_length(callback_data))])
-    rows.append([InlineKeyboardButton(text="⬅️ В главное меню", callback_data="gen:back:main")])
     return InlineKeyboardMarkup(inline_keyboard=rows)
 
 

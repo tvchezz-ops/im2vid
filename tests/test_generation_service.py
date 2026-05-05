@@ -29,6 +29,10 @@ from app.services.generation_service import (
     list_models_by_type,
     list_models_by_type_and_provider,
     list_providers,
+    get_required_input_type,
+    model_requires_image,
+    model_requires_media,
+    model_requires_video,
 )
 
 
@@ -96,6 +100,22 @@ def test_build_payload_seedream_custom_settings() -> None:
     assert payload["size"] == "2048*2048"
     assert payload["enable_sync_mode"] is False
     assert payload["enable_base64_output"] is False
+
+
+def test_build_payload_multi_image_models_keep_all_uploaded_images() -> None:
+    payload = build_payload(
+        "nano_banana",
+        [
+            "https://example.com/input-1.png",
+            "https://example.com/input-2.png",
+        ],
+        "Blend both shots into one scene",
+    )
+
+    assert payload["images"] == [
+        "https://example.com/input-1.png",
+        "https://example.com/input-2.png",
+    ]
 
 
 def test_build_payload_invalid_model_key_raises_clear_error() -> None:
@@ -265,6 +285,10 @@ def test_generation_model_exposes_new_fields_and_legacy_aliases() -> None:
     assert "prompt" in model.allowed_payload_fields
     assert model.input_schema["required_payload_fields"] == ["images", "prompt"]
     assert model.required_fields == ("images", "prompt")
+    assert model.input_media_field == "images"
+    assert model.supports_multiple_images is True
+    assert model.min_images == 1
+    assert model.max_images == 14
 
 
 def test_generation_registry_constants_include_supported_values() -> None:
@@ -283,6 +307,21 @@ def test_generation_registry_constants_include_supported_values() -> None:
         "google",
         "midjourney",
     ]
+
+def test_required_input_type_helpers_follow_generation_type() -> None:
+    assert get_required_input_type("text_to_image") == "text"
+    assert get_required_input_type("text_to_video") == "text"
+    assert get_required_input_type("image_edit") == "image"
+    assert get_required_input_type("image_to_video") == "image"
+    assert get_required_input_type("video_edit") == "video"
+    assert get_required_input_type("video_to_video") == "video"
+    assert get_required_input_type("lipsync") == "lipsync"
+
+    assert model_requires_media(get_generation_model("nano_banana")) is True
+    assert model_requires_image(get_generation_model("nano_banana")) is True
+    assert model_requires_video(get_generation_model("nano_banana")) is False
+    assert model_requires_media(get_generation_model("google_veo3")) is False
+    assert model_requires_video(get_generation_model("google_veo3_1_fast_video_extend")) is True
 
 
 def test_model_registry_is_canonical_and_compatible() -> None:
@@ -336,6 +375,18 @@ def test_build_model_registry_rejects_invalid_metadata() -> None:
 )
 def test_infer_generation_type_from_endpoint(endpoint: str, expected_generation_type: str) -> None:
     assert infer_generation_type_from_endpoint(endpoint) == expected_generation_type
+
+
+def test_build_payload_text_to_video_does_not_require_media() -> None:
+    payload = build_payload(
+        "google_veo3",
+        [],
+        "Create a smooth cinematic flythrough of a modern apartment",
+    )
+
+    assert payload["prompt"] == "Create a smooth cinematic flythrough of a modern apartment"
+    assert "video" not in payload
+    assert "image" not in payload
 
 
 def test_build_model_registry_infers_generation_type_from_endpoint() -> None:

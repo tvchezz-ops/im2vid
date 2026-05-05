@@ -50,6 +50,7 @@ class FakeState:
 class FakeMessage:
     def __init__(self, chat_id: int = 1):
         self.chat = SimpleNamespace(id=chat_id)
+        self.bot = object()
         self.from_user = SimpleNamespace(
             id=chat_id,
             username="tester",
@@ -248,18 +249,6 @@ async def test_back_to_generation_types_from_provider_screen() -> None:
 
 
 @pytest.mark.asyncio
-async def test_back_to_main_from_sections_restores_reply_keyboard() -> None:
-    state = FakeState({"selected_generation_type": "image_edit"})
-    message = FakeMessage(chat_id=406)
-    callback = FakeCallback(user_id=406, message=message, data="gen:back:main")
-
-    await generations.back_to_generation_main_menu(callback, state)
-
-    assert message.edits[-1] == "🏠 Главное меню"
-    assert message.answers[-1] == "Выбери нужный раздел."
-
-
-@pytest.mark.asyncio
 async def test_unknown_generation_callback_shows_fallback_alert_screen() -> None:
     state = FakeState()
     message = FakeMessage(chat_id=406)
@@ -305,6 +294,85 @@ async def test_continue_after_settings_shows_lipsync_media_prompt() -> None:
     assert "Вы выбрали Lipsync." in message.edits[-1]
     assert "Отправьте фото или видео, затем текст или голос для озвучки." in message.edits[-1]
 
+@pytest.mark.asyncio
+async def test_continue_after_settings_for_text_to_image_goes_to_prompt() -> None:
+    state = FakeState({"model_key": "alibaba_wan_2_6_text_to_image", "model_generation_type": "text_to_image"})
+    message = FakeMessage(chat_id=470)
+    callback = FakeCallback(user_id=470, message=message, data="gen:continue")
+
+    await generations.continue_after_settings(callback, state)
+
+    assert state.state == GenerationStates.waiting_for_prompt
+    assert message.edits[-1] == "Опишите изображение, которое хотите создать."
+
+@pytest.mark.asyncio
+async def test_continue_after_settings_for_video_edit_goes_to_video_step() -> None:
+    state = FakeState({"model_key": "google_veo3_1_fast_video_extend", "model_generation_type": "video_edit"})
+    message = FakeMessage(chat_id=471)
+    callback = FakeCallback(user_id=471, message=message, data="gen:continue")
+
+    await generations.continue_after_settings(callback, state)
+
+    assert state.state == GenerationStates.waiting_for_video
+    assert message.edits[-1] == "Отправьте видео для модели Google Veo3.1 Fast Video Extend."
+
+
+@pytest.mark.asyncio
+async def test_continue_after_settings_for_multi_image_model_goes_to_images_step() -> None:
+    state = FakeState({"model_key": "nano_banana", "model_generation_type": "image_edit"})
+    message = FakeMessage(chat_id=476)
+    callback = FakeCallback(user_id=476, message=message, data="gen:continue")
+
+    await generations.continue_after_settings(callback, state)
+
+    assert state.state == GenerationStates.waiting_for_images
+    assert message.edits[-1] == (
+        "Отправьте изображения для модели Google Nano Banana Pro Edit Ultra.\n"
+        "Можно загрузить от 1 до 14 файлов.\n"
+        "После загрузки нажмите ✅ Продолжить."
+    )
+
+
+@pytest.mark.asyncio
+async def test_continue_after_multi_image_upload_requires_minimum_images() -> None:
+    state = FakeState(
+        {
+            "model_key": "nano_banana",
+            "model_generation_type": "image_edit",
+            "input_media_items": [],
+        }
+    )
+    message = FakeMessage(chat_id=477)
+
+    await generations.continue_after_multi_image_upload(message, state)
+
+    assert state.state is None
+    assert message.answers[-1] == "❌ Ошибка E003: нужно загрузить минимум 1 изображение."
+
+
+@pytest.mark.asyncio
+async def test_process_generation_images_appends_uploaded_media(monkeypatch) -> None:
+    async def fake_upload_message_media_item(message):
+        return {
+            "type": "photo",
+            "file_id": "photo-file-id",
+            "local_path": "/tmp/photo-file-id.png",
+            "public_url": "https://example.com/photo-file-id.png",
+        }
+
+    monkeypatch.setattr(generations, "upload_message_media_item", fake_upload_message_media_item)
+
+    state = FakeState({"model_key": "nano_banana", "model_generation_type": "image_edit", "input_media_items": []})
+    message = FakeMessage(chat_id=478)
+    message.photo = [SimpleNamespace(file_id="photo-file-id")]
+
+    await generations.process_generation_images(message, state)
+
+    assert state.data["input_media"] == {"type": "images", "count": 1}
+    assert state.data["input_image_file_id"] == "photo-file-id"
+    assert state.data["input_media_items"][0]["public_url"] == "https://example.com/photo-file-id.png"
+    assert "Загружено 1 из 14." in message.answers[-1]
+
 
 @pytest.mark.asyncio
 async def test_send_confirmation_screen_shows_lipsync_incomplete_error(session_factory) -> None:
@@ -335,6 +403,67 @@ async def test_process_generation_image_saves_lipsync_video_as_input_media() -> 
     assert state.data["input_media"] == {"type": "video", "file_id": "video-file-id"}
     assert state.data["input_image_file_id"] is None
     assert "текст или голосовое сообщение" in message.answers[-1]
+
+@pytest.mark.asyncio
+async def test_process_generation_image_rejects_video_for_image_flow() -> None:
+    state = FakeState({"model_generation_type": "image_edit"})
+    message = FakeMessage(chat_id=472)
+    message.video = SimpleNamespace(file_id="video-file-id")
+
+    await generations.process_generation_image(message, state)
+
+    assert message.answers[-1] == "❌ Ошибка E001: Нужно отправить изображение, не видео."
+
+@pytest.mark.asyncio
+async def test_process_generation_video_accepts_video_document(monkeypatch) -> None:
+    async def fake_upload_message_media_item(message):
+        return {
+            "type": "video",
+            "file_id": "video-doc-id",
+            "local_path": "/tmp/video-doc-id.mp4",
+            "public_url": "https://example.com/video-doc-id.mp4",
+        }
+
+    monkeypatch.setattr(generations, "upload_message_media_item", fake_upload_message_media_item)
+
+    state = FakeState({"model_generation_type": "video_edit"})
+    message = FakeMessage(chat_id=473)
+    message.document = SimpleNamespace(file_id="video-doc-id", mime_type="video/mp4")
+
+    await generations.process_generation_video(message, state)
+
+    assert state.state == GenerationStates.waiting_for_prompt
+    assert state.data["input_media"] == {"type": "video", "count": 1}
+    assert state.data["input_media_items"][0]["public_url"] == "https://example.com/video-doc-id.mp4"
+
+@pytest.mark.asyncio
+async def test_process_generation_video_rejects_photo_for_video_flow() -> None:
+    state = FakeState({"model_generation_type": "video_edit"})
+    message = FakeMessage(chat_id=474)
+    message.photo = [SimpleNamespace(file_id="photo-file-id")]
+
+    await generations.process_generation_video(message, state)
+
+    assert message.answers[-1] == "❌ Ошибка E001: Нужно отправить видео, не изображение."
+
+@pytest.mark.asyncio
+async def test_process_prompt_rejects_file_when_text_prompt_expected(session_factory) -> None:
+    async with session_factory() as session:
+        await create_user(session, user_id=475, balance=2)
+        state = FakeState(
+            {
+                "model_key": "alibaba_wan_2_6_text_to_image",
+                "model_generation_type": "text_to_image",
+                "model_title": "Alibaba Wan 2.6 Text To Image",
+                "user_settings": {},
+            }
+        )
+        message = FakeMessage(chat_id=475)
+        message.photo = [SimpleNamespace(file_id="photo-file-id")]
+
+        await generations.process_prompt(message, state, session)
+
+        assert message.answers[-1] == "❌ Ошибка E001: на этом этапе нужен только текстовый prompt."
 
 
 @pytest.mark.asyncio
@@ -422,11 +551,84 @@ async def test_confirm_generation_debits_one_credit(session_factory, monkeypatch
 
         try:
             await generations.confirm_generation(callback, state, session)
-            await generations.ACTIVE_GENERATIONS[101]["task"]
+            if 101 in generations.ACTIVE_GENERATIONS:
+                await generations.ACTIVE_GENERATIONS[101]["task"]
             assert await get_user_balance(session, 101) == 2
         finally:
             generations.ACTIVE_GENERATIONS.clear()
             Path(temp_input_path).unlink(missing_ok=True)
+
+
+@pytest.mark.asyncio
+async def test_confirm_generation_reuses_uploaded_multi_image_items(session_factory, monkeypatch, tmp_path) -> None:
+    async with session_factory() as session:
+        await create_user(session, user_id=102, balance=3)
+
+        first_path = tmp_path / "input-1.png"
+        second_path = tmp_path / "input-2.png"
+        first_path.write_bytes(b"input-1")
+        second_path.write_bytes(b"input-2")
+        captured: dict[str, object] = {}
+
+        async def fake_poll_generation_result(**kwargs) -> None:
+            captured.update(kwargs)
+
+        class ForbiddenTelegramFilesService:
+            def __init__(self, bot):
+                raise AssertionError("TelegramFilesService should not be called when input_media_items already exist")
+
+        monkeypatch.setattr(generations, "TelegramFilesService", ForbiddenTelegramFilesService)
+        monkeypatch.setattr(generations, "poll_generation_result", fake_poll_generation_result)
+
+        state = FakeState(
+            {
+                "model_key": "nano_banana",
+                "model_title": "Nano Banana",
+                "model_endpoint": "/api/v3/nano-banana",
+                "prompt": "Blend both inputs",
+                "input_media": {"type": "images", "count": 2},
+                "input_media_items": [
+                    {
+                        "type": "photo",
+                        "file_id": "file-1",
+                        "local_path": str(first_path),
+                        "public_url": "https://example.com/input-1.png",
+                    },
+                    {
+                        "type": "photo",
+                        "file_id": "file-2",
+                        "local_path": str(second_path),
+                        "public_url": "https://example.com/input-2.png",
+                    },
+                ],
+                "user_settings": {"aspect_ratio": "1:1", "resolution": "4k", "output_format": "png"},
+            }
+        )
+        callback = FakeCallback(user_id=102)
+
+        try:
+            await generations.confirm_generation(callback, state, session)
+            if 102 in generations.ACTIVE_GENERATIONS:
+                await generations.ACTIVE_GENERATIONS[102]["task"]
+
+            assert captured["payload"] == {
+                "images": [
+                    "https://example.com/input-1.png",
+                    "https://example.com/input-2.png",
+                ],
+                "prompt": "Blend both inputs",
+                "aspect_ratio": "1:1",
+                "resolution": "4k",
+                "output_format": "png",
+                "enable_sync_mode": False,
+                "enable_base64_output": False,
+            }
+            assert captured["temp_input_path"] == [str(first_path), str(second_path)]
+            assert await get_user_balance(session, 102) == 2
+        finally:
+            generations.ACTIVE_GENERATIONS.clear()
+            first_path.unlink(missing_ok=True)
+            second_path.unlink(missing_ok=True)
 
 
 @pytest.mark.asyncio
@@ -534,6 +736,19 @@ async def test_timeout_generation_refunds_credit(session_factory, monkeypatch, t
 
 
 @pytest.mark.asyncio
+async def test_cleanup_generation_file_removes_multiple_paths(tmp_path) -> None:
+    first_path = tmp_path / "cleanup-1.png"
+    second_path = tmp_path / "cleanup-2.png"
+    first_path.write_bytes(b"one")
+    second_path.write_bytes(b"two")
+
+    await generations.cleanup_generation_file([str(first_path), str(second_path)])
+
+    assert first_path.exists() is False
+    assert second_path.exists() is False
+
+
+@pytest.mark.asyncio
 async def test_insufficient_balance_does_not_start_submit(session_factory, monkeypatch) -> None:
     async with session_factory() as session:
         await create_user(session, user_id=401, balance=0)
@@ -561,7 +776,7 @@ async def test_insufficient_balance_does_not_start_submit(session_factory, monke
         await generations.confirm_generation(callback, state, session)
 
         assert called is False
-        assert callback.message.answers[-1] == "Недостаточно кредитов. Пополните баланс в магазине."
+        assert callback.message.answers[-1] == "❌ Ошибка E006: недостаточно кредитов."
         assert await get_user_balance(session, 401) == 0
 
 
