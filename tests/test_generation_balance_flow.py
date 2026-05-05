@@ -30,6 +30,9 @@ class FakeState:
         self.data = data or {}
         self.state = None
 
+    async def get_state(self):
+        return self.state
+
     async def get_data(self) -> dict[str, object]:
         return dict(self.data)
 
@@ -47,21 +50,40 @@ class FakeState:
 class FakeMessage:
     def __init__(self, chat_id: int = 1):
         self.chat = SimpleNamespace(id=chat_id)
+        self.from_user = SimpleNamespace(
+            id=chat_id,
+            username="tester",
+            first_name="Test",
+            last_name=None,
+            language_code="ru",
+            is_bot=False,
+            is_premium=False,
+        )
+        self.text = None
+        self.photo = []
+        self.document = None
+        self.video = None
+        self.voice = None
+        self.audio = None
         self.answers: list[str] = []
         self.edits: list[str] = []
+        self.answer_markups: list[object] = []
+        self.edit_markups: list[object] = []
 
     async def answer(self, text: str, reply_markup=None, parse_mode=None) -> None:
         self.answers.append(text)
+        self.answer_markups.append(reply_markup)
 
     async def edit_text(self, text: str, reply_markup=None, parse_mode=None) -> None:
         self.edits.append(text)
+        self.edit_markups.append(reply_markup)
 
     async def edit_reply_markup(self, reply_markup=None) -> None:
         return None
 
 
 class FakeCallback:
-    def __init__(self, user_id: int = 1, message: FakeMessage | None = None):
+    def __init__(self, user_id: int = 1, message: FakeMessage | None = None, data: str = ""):
         self.from_user = SimpleNamespace(
             id=user_id,
             username="tester",
@@ -73,6 +95,7 @@ class FakeCallback:
         )
         self.message = message or FakeMessage(chat_id=user_id)
         self.bot = object()
+        self.data = data
         self.answered = False
 
     async def answer(self, text: str | None = None, show_alert: bool = False) -> None:
@@ -111,6 +134,199 @@ async def get_generation_status(session, generation_id) -> GenerationRequestStat
         select(GenerationRequest.status).where(GenerationRequest.id == generation_id)
     )
     return result.scalar_one()
+
+
+@pytest.mark.asyncio
+async def test_show_generation_menu_starts_with_generation_type_selection() -> None:
+    message = FakeMessage(chat_id=401)
+    state = FakeState()
+    message.from_user = SimpleNamespace(id=401)
+
+    await generations.show_generation_menu(message, state)
+
+    assert state.state == GenerationStates.choosing_generation_type
+    assert "Выберите тип генерации:" in message.answers[-1]
+    assert "Lipsync (озвучка лица)" in message.answers[-1]
+    assert "Анимация лица под аудио или текст" in message.answers[-1]
+    keyboard = message.answer_markups[-1]
+    callback_data = [row[0].callback_data for row in keyboard.inline_keyboard[:-1]]
+    assert "gen:type:lipsync" in callback_data
+
+
+@pytest.mark.asyncio
+async def test_choose_generation_type_shows_models_for_type() -> None:
+    state = FakeState()
+    message = FakeMessage(chat_id=402)
+    callback = FakeCallback(user_id=402, message=message, data="gen:type:image_to_image")
+
+    await generations.choose_generation_type(callback, state)
+
+    assert state.state == GenerationStates.choosing_generation_type
+    assert state.data["selected_generation_type"] == "image_to_image"
+    assert state.data["selected_provider"] is None
+    assert message.edits[-1] == "Выберите модель:"
+
+
+@pytest.mark.asyncio
+async def test_choose_all_models_shows_provider_list() -> None:
+    state = FakeState()
+    message = FakeMessage(chat_id=403)
+    callback = FakeCallback(user_id=403, message=message, data="gen:type:all")
+
+    await generations.choose_generation_type(callback, state)
+
+    assert state.state == GenerationStates.choosing_provider
+    assert state.data["selected_generation_type"] == "all"
+    assert state.data["selected_provider"] is None
+    assert message.edits[-1] == "Выберите провайдера:"
+
+
+@pytest.mark.asyncio
+async def test_choose_provider_shows_provider_models() -> None:
+    state = FakeState({"selected_generation_type": "all"})
+    message = FakeMessage(chat_id=404)
+    callback = FakeCallback(user_id=404, message=message, data="gen:provider:google")
+
+    await generations.choose_provider(callback, state)
+
+    assert state.state == GenerationStates.choosing_provider
+    assert state.data["selected_provider"] == "google"
+    assert message.edits[-1] == "Выберите модель:"
+
+
+@pytest.mark.asyncio
+async def test_back_to_generation_models_returns_to_provider_filtered_models() -> None:
+    state = FakeState(
+        {
+            "selected_generation_type": "all",
+            "selected_provider": "google",
+            "model_key": "nano_banana",
+            "model_title": "Nano Banana",
+            "model_endpoint": "/api/v3/nano-banana",
+            "user_settings": {"aspect_ratio": "1:1"},
+            "current_setting_key": "aspect_ratio",
+            "input_image_file_id": "file-id",
+            "prompt": "Prompt text",
+        }
+    )
+    message = FakeMessage(chat_id=405)
+    callback = FakeCallback(user_id=405, message=message, data="gen:back_models")
+
+    await generations.back_to_generation_models(callback, state)
+
+    assert state.state == GenerationStates.choosing_provider
+    assert message.edits[-1] == "Выберите модель:"
+    assert state.data["model_key"] is None
+    assert state.data["prompt"] is None
+
+
+@pytest.mark.asyncio
+async def test_back_to_generation_types_from_provider_screen() -> None:
+    state = FakeState({"selected_generation_type": "all", "selected_provider": "google"})
+    message = FakeMessage(chat_id=406)
+    callback = FakeCallback(user_id=406, message=message, data="gen:back_types")
+
+    await generations.back_to_generation_types(callback, state)
+
+    assert state.state == GenerationStates.choosing_generation_type
+    assert state.data["selected_generation_type"] is None
+    assert state.data["selected_provider"] is None
+    assert "Выберите тип генерации:" in message.edits[-1]
+    assert "Lipsync (озвучка лица)" in message.edits[-1]
+
+
+@pytest.mark.asyncio
+async def test_continue_after_settings_shows_lipsync_media_prompt() -> None:
+    state = FakeState({"model_generation_type": "lipsync"})
+    message = FakeMessage(chat_id=407)
+    callback = FakeCallback(user_id=407, message=message, data="gen:continue")
+
+    await generations.continue_after_settings(callback, state)
+
+    assert state.state == GenerationStates.waiting_for_image
+    assert "Вы выбрали Lipsync." in message.edits[-1]
+    assert "Отправьте фото или видео, затем текст или голос для озвучки." in message.edits[-1]
+
+
+@pytest.mark.asyncio
+async def test_send_confirmation_screen_shows_lipsync_incomplete_error(session_factory) -> None:
+    async with session_factory() as session:
+        state = FakeState({"model_key": "nano_banana", "model_generation_type": "lipsync"})
+        message = FakeMessage(chat_id=411)
+
+        await generations.send_confirmation_screen(
+            message=message,
+            state=state,
+            session=session,
+            telegram_user=message.from_user,
+            edit=False,
+        )
+
+        assert message.answers[-1] == "❌ Для lipsync нужно изображение/видео и текст или аудио."
+
+
+@pytest.mark.asyncio
+async def test_process_generation_image_saves_lipsync_video_as_input_media() -> None:
+    state = FakeState({"model_generation_type": "lipsync"})
+    message = FakeMessage(chat_id=408)
+    message.video = SimpleNamespace(file_id="video-file-id")
+
+    await generations.process_generation_image(message, state)
+
+    assert state.state == GenerationStates.waiting_for_prompt
+    assert state.data["input_media"] == {"type": "video", "file_id": "video-file-id"}
+    assert state.data["input_image_file_id"] is None
+    assert "текст или голосовое сообщение" in message.answers[-1]
+
+
+@pytest.mark.asyncio
+async def test_process_prompt_saves_lipsync_text_input(session_factory) -> None:
+    async with session_factory() as session:
+        await create_user(session, user_id=409, balance=2)
+        state = FakeState(
+            {
+                "model_key": "nano_banana",
+                "model_generation_type": "lipsync",
+                "model_title": "Lip Model",
+                "input_media": {"type": "photo", "file_id": "photo-file-id"},
+                "user_settings": {},
+            }
+        )
+        message = FakeMessage(chat_id=409)
+        message.text = "Озвучь это спокойным голосом"
+
+        await generations.process_prompt(message, state, session)
+
+        assert state.data["input_audio_or_text"] == {
+            "type": "text",
+            "text": "Озвучь это спокойным голосом",
+        }
+        assert state.data["prompt"] == "Озвучь это спокойным голосом"
+
+
+@pytest.mark.asyncio
+async def test_process_prompt_saves_lipsync_voice_input(session_factory) -> None:
+    async with session_factory() as session:
+        await create_user(session, user_id=410, balance=2)
+        state = FakeState(
+            {
+                "model_key": "nano_banana",
+                "model_generation_type": "lipsync",
+                "model_title": "Lip Model",
+                "input_media": {"type": "photo", "file_id": "photo-file-id"},
+                "user_settings": {},
+            }
+        )
+        message = FakeMessage(chat_id=410)
+        message.voice = SimpleNamespace(file_id="voice-file-id")
+
+        await generations.process_prompt(message, state, session)
+
+        assert state.data["input_audio_or_text"] == {
+            "type": "voice",
+            "file_id": "voice-file-id",
+        }
+        assert state.data["prompt"] == "Голосовое сообщение"
 
 
 @pytest.mark.asyncio

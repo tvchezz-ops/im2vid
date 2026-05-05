@@ -12,6 +12,8 @@ class UserStates(StatesGroup):
 class GenerationStates(StatesGroup):
     """Состояния для генерации."""
     
+    choosing_generation_type = State()
+    choosing_provider = State()
     choosing_settings = State()
     choosing_setting_value = State()
     waiting_for_image = State()

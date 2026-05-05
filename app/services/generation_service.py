@@ -1,7 +1,7 @@
 """Сервис для управления генерациями."""
 from __future__ import annotations
 
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from typing import Any, Mapping, Optional, TYPE_CHECKING
 
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -45,24 +45,103 @@ class GenerationModel:
     key: str
     title: str
     endpoint: str
-    type: str
+    provider: str
+    # lipsync = audio/text driven face animation (talking avatar)
+    generation_type: str
     max_images: int
     required_fields: tuple[str, ...]
     user_settings: dict[str, GenerationSetting] = field(default_factory=dict)
     system_settings: dict[str, Any] = field(default_factory=dict)
 
     @property
+    def type(self) -> str:
+        """Совместимость со старым именем поля."""
+        return self.generation_type
+
+    @property
     def model_type(self) -> str:
         """Совместимость со старым именем поля."""
-        return self.type
+        return self.generation_type
 
 
-GENERATION_MODELS: dict[str, GenerationModel] = {
-    "nano_banana": GenerationModel(
+GENERATION_TYPES = [
+    "text_to_image",
+    "text_to_video",
+    "image_to_image",
+    "image_to_video",
+    "video_to_video",
+    "lipsync",
+]
+
+PROVIDERS = [
+    "alibaba",
+    "openai",
+    "bytedance",
+    "google",
+    "midjourney",
+]
+
+
+def infer_generation_type_from_endpoint(endpoint: str) -> str:
+    """Определить тип генерации по endpoint Wavespeed docs/API."""
+    normalized_endpoint = endpoint.strip().lower()
+    endpoint_type_map = (
+        ("lipsync", "lipsync"),
+        ("talking", "lipsync"),
+        ("avatar", "lipsync"),
+        ("speech-to-video", "lipsync"),
+        ("voice-to-video", "lipsync"),
+        ("audio-to-video", "lipsync"),
+        ("text-to-image", "text_to_image"),
+        ("text-to-video", "text_to_video"),
+        ("image-to-image", "image_to_image"),
+        ("image-to-video", "image_to_video"),
+        ("video-to-video", "video_to_video"),
+    )
+
+    for endpoint_marker, generation_type in endpoint_type_map:
+        if endpoint_marker in normalized_endpoint:
+            return generation_type
+
+    return ""
+
+
+def build_model_registry(models: tuple[GenerationModel, ...]) -> dict[str, GenerationModel]:
+    """Собрать и провалидировать реестр моделей для будущей синхронизации с docs."""
+    registry: dict[str, GenerationModel] = {}
+
+    for model in models:
+        generation_type = model.generation_type or infer_generation_type_from_endpoint(model.endpoint)
+        if not generation_type:
+            logger.warning(
+                "Skipping generation model with unsupported endpoint pattern: %s (%s)",
+                model.key,
+                model.endpoint,
+            )
+            continue
+        if generation_type != model.generation_type:
+            model = replace(model, generation_type=generation_type)
+        if model.provider not in PROVIDERS:
+            raise ValueError(f"Unsupported provider '{model.provider}' for model '{model.key}'")
+        if model.generation_type not in GENERATION_TYPES:
+            raise ValueError(
+                f"Unsupported generation type '{model.generation_type}' for model '{model.key}'"
+            )
+        if model.key in registry:
+            raise ValueError(f"Duplicate generation model key: {model.key}")
+        registry[model.key] = model
+
+    return registry
+
+
+# TODO: auto-sync models from Wavespeed docs.
+MODEL_REGISTRY = build_model_registry((
+    GenerationModel(
         key="nano_banana",
         title="Nano Banana Pro Edit Ultra",
         endpoint="https://api.wavespeed.ai/api/v3/google/nano-banana-pro/edit-ultra",
-        type="image_edit",
+        provider="google",
+        generation_type="image_to_image",
         max_images=14,
         required_fields=("images", "prompt"),
         user_settings={
@@ -110,11 +189,12 @@ GENERATION_MODELS: dict[str, GenerationModel] = {
             "enable_base64_output": False,
         },
     ),
-    "seedream": GenerationModel(
+    GenerationModel(
         key="seedream",
         title="Seedream V4.5 Edit",
         endpoint="https://api.wavespeed.ai/api/v3/bytedance/seedream-v4.5/edit",
-        type="image_edit",
+        provider="bytedance",
+        generation_type="image_to_image",
         max_images=10,
         required_fields=("images", "prompt"),
         user_settings={
@@ -140,20 +220,71 @@ GENERATION_MODELS: dict[str, GenerationModel] = {
             "enable_base64_output": False,
         },
     ),
-}
+))
+
+# Backward-compatible alias for existing imports.
+GENERATION_MODELS = MODEL_REGISTRY
 
 
 def get_generation_model(model_key: str) -> GenerationModel:
     """Получить конфигурацию модели по ключу."""
     try:
-        return GENERATION_MODELS[model_key]
+        return MODEL_REGISTRY[model_key]
     except KeyError as exc:
         raise ValueError(f"Unsupported generation model: {model_key}") from exc
 
 
 def list_generation_models() -> list[GenerationModel]:
     """Получить список доступных моделей."""
-    return list(GENERATION_MODELS.values())
+    return list(MODEL_REGISTRY.values())
+
+
+def _filter_models(
+    *,
+    generation_type: Optional[str] = None,
+    provider: Optional[str] = None,
+) -> list[GenerationModel]:
+    """Отфильтровать валидные модели из реестра по типу и/или провайдеру."""
+    models = list_generation_models()
+
+    if generation_type is not None:
+        models = [model for model in models if model.generation_type == generation_type]
+    if provider is not None:
+        models = [model for model in models if model.provider == provider]
+
+    return models
+
+
+def list_generation_types() -> list[str]:
+    """Получить типы генерации, для которых есть валидные модели в реестре."""
+    return [
+        generation_type
+        for generation_type in GENERATION_TYPES
+        if _filter_models(generation_type=generation_type)
+    ]
+
+
+def list_providers() -> list[str]:
+    """Получить провайдеров, для которых есть валидные модели в реестре."""
+    return [provider for provider in PROVIDERS if _filter_models(provider=provider)]
+
+
+def list_models_by_type(generation_type: str) -> list[GenerationModel]:
+    """Получить валидные модели по типу генерации."""
+    return _filter_models(generation_type=generation_type)
+
+
+def list_models_by_provider(provider: str) -> list[GenerationModel]:
+    """Получить валидные модели по провайдеру."""
+    return _filter_models(provider=provider)
+
+
+def list_models_by_type_and_provider(
+    generation_type: str,
+    provider: str,
+) -> list[GenerationModel]:
+    """Получить валидные модели по типу генерации и провайдеру."""
+    return _filter_models(generation_type=generation_type, provider=provider)
 
 
 def get_default_settings(model_key: str) -> dict[str, Any]:
@@ -201,6 +332,7 @@ def build_payload(
 ) -> dict[str, Any]:
     """Собрать валидный payload для выбранной модели."""
     model = get_generation_model(model_key)
+    raw_user_settings = dict(user_settings or {})
     if not isinstance(prompt, str):
         raise ValueError("Prompt must be a string")
 
@@ -211,6 +343,33 @@ def build_payload(
     cleaned_prompt = prompt.strip()
     valid_images = [image_url.strip() for image_url in image_urls if image_url.strip()]
     validated_settings = validate_model_settings(model_key, user_settings)
+
+    if model.generation_type == "lipsync":
+        media_url = valid_images[0] if valid_images else ""
+        audio_value = raw_user_settings.get("audio") or raw_user_settings.get("audio_url")
+        if audio_value is not None and not isinstance(audio_value, str):
+            raise ValueError("Audio for lipsync models must be a string value")
+        cleaned_audio = audio_value.strip() if isinstance(audio_value, str) else ""
+
+        if not media_url:
+            raise ValueError("Lipsync models require an image or video input")
+        if not cleaned_prompt and not cleaned_audio:
+            raise ValueError("Lipsync models require audio or text input")
+
+        media_field = "video" if media_url.lower().split("?", 1)[0].endswith((
+            ".mp4", ".mov", ".webm", ".avi", ".mkv", ".m4v", ".mpg", ".mpeg",
+        )) else "image"
+
+        payload: dict[str, Any] = {
+            media_field: media_url,
+            **validated_settings,
+            **model.system_settings,
+        }
+        if cleaned_audio:
+            payload["audio"] = cleaned_audio
+        if cleaned_prompt:
+            payload["text"] = cleaned_prompt
+        return payload
 
     if any(not isinstance(value, str) for value in validated_settings.values()):
         raise ValueError("All validated settings must be string values")

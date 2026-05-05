@@ -78,8 +78,38 @@ def build_back_to_settings_keyboard() -> ReplyKeyboardMarkup:
     )
 
 
+def build_generation_type_keyboard(options: Iterable[tuple[str, str]]) -> InlineKeyboardMarkup:
+    """Построить клавиатуру выбора типа генерации."""
+    rows = [
+        [
+            InlineKeyboardButton(
+                text=label,
+                callback_data=_ensure_callback_data(f"gen:type:{generation_type}"),
+            )
+        ]
+        for generation_type, label in options
+    ]
+    rows.append([InlineKeyboardButton(text="⬅️ Назад", callback_data="back_to_menu")])
+    return InlineKeyboardMarkup(inline_keyboard=rows)
+
+
+def build_provider_keyboard(providers: Iterable[tuple[str, str]]) -> InlineKeyboardMarkup:
+    """Построить клавиатуру выбора провайдера."""
+    rows = [
+        [
+            InlineKeyboardButton(
+                text=label,
+                callback_data=_ensure_callback_data(f"gen:provider:{provider}"),
+            )
+        ]
+        for provider, label in providers
+    ]
+    rows.append([InlineKeyboardButton(text="⬅️ Назад к типам", callback_data="gen:back_types")])
+    return InlineKeyboardMarkup(inline_keyboard=rows)
+
+
 def build_model_selection_keyboard(models: Iterable[Any]) -> InlineKeyboardMarkup:
-    """Построить клавиатуру выбора модели из реестра."""
+    """Построить клавиатуру выбора моделей из переданного списка."""
     rows = [
         [
             InlineKeyboardButton(
@@ -91,6 +121,16 @@ def build_model_selection_keyboard(models: Iterable[Any]) -> InlineKeyboardMarku
     ]
     rows.append([InlineKeyboardButton(text="⬅️ Назад", callback_data="back_to_menu")])
     return InlineKeyboardMarkup(inline_keyboard=rows)
+
+
+def build_generation_type_selection_keyboard(options: Iterable[tuple[str, str]]) -> InlineKeyboardMarkup:
+    """Совместимость со старым именем клавиатуры выбора типа генерации."""
+    return build_generation_type_keyboard(options)
+
+
+def build_provider_selection_keyboard(providers: Iterable[tuple[str, str]]) -> InlineKeyboardMarkup:
+    """Совместимость со старым именем клавиатуры выбора провайдера."""
+    return build_provider_keyboard(providers)
 
 
 def build_model_settings_keyboard(model: Any, current_settings: dict[str, Any]) -> InlineKeyboardMarkup:

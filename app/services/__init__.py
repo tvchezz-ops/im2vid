@@ -1,6 +1,9 @@
 """Инициализация пакета services."""
 from app.services.generation_service import (
+    MODEL_REGISTRY,
     GENERATION_MODELS,
+    GENERATION_TYPES,
+    PROVIDERS,
     GenerationModel,
     GenerationSetting,
     GenerationService,
@@ -8,8 +11,15 @@ from app.services.generation_service import (
     build_payload,
     get_default_settings,
     get_generation_model,
+    infer_generation_type_from_endpoint,
+    list_generation_types,
+    list_models_by_provider,
+    list_models_by_type,
+    list_models_by_type_and_provider,
     list_generation_models,
+    list_providers,
     validate_model_settings,
+    build_model_registry,
 )
 from app.services.telegram_files import TelegramFilesService
 from app.services.wavespeed import (
@@ -35,10 +45,20 @@ __all__ = [
     "GenerationSetting",
     "GenerationModel",
     "GenerationService",
+    "MODEL_REGISTRY",
     "GENERATION_MODELS",
+    "GENERATION_TYPES",
+    "PROVIDERS",
     "get_generation_model",
+    "infer_generation_type_from_endpoint",
     "list_generation_models",
+    "list_generation_types",
+    "list_providers",
+    "list_models_by_type",
+    "list_models_by_provider",
+    "list_models_by_type_and_provider",
     "get_default_settings",
     "validate_model_settings",
     "build_payload",
+    "build_model_registry",
 ]

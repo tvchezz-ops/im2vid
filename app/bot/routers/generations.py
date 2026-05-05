@@ -15,8 +15,10 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.bot.keyboards import (
     build_back_to_settings_keyboard,
     build_generation_confirm_keyboard,
+    build_generation_type_keyboard,
     build_model_selection_keyboard,
     build_model_settings_keyboard,
+    build_provider_keyboard,
     build_setting_options_keyboard,
     get_option_value_by_index,
     get_setting_key_by_index,
@@ -30,8 +32,12 @@ from app.services.generation_service import (
     build_payload,
     get_default_settings,
     get_generation_model,
+    list_generation_types,
     list_generation_models,
+    list_models_by_provider,
+    list_models_by_type,
     validate_model_settings,
+    list_providers,
 )
 from app.services.telegram_files import TelegramFilesService
 from app.services.wavespeed import WavespeedResult, WavespeedService
@@ -56,13 +62,52 @@ DOCUMENT_SEND_RETRY_DELAY_SECONDS = 5
 MAX_TELEGRAM_DOCUMENT_SIZE_BYTES = 50 * 1024 * 1024
 
 MODEL_PREFIX = "gen:model:"
+GENERATION_TYPE_PREFIX = "gen:type:"
+PROVIDER_PREFIX = "gen:provider:"
 SETTINGS_OPEN_PREFIX = "gen:setting:"
 SETTINGS_VALUE_PREFIX = "gen:set:"
 SETTINGS_BACK_PREFIX = "gen:back_settings"
 SETTINGS_BACK_MODELS = "gen:back_models"
+PROVIDERS_BACK_TYPES = "gen:back_types"
 SETTINGS_CONTINUE = "gen:continue"
 SETTINGS_EDIT = "gen:edit"
 GENERATION_CONFIRM = "gen:confirm"
+
+GENERATION_TYPE_LABELS = {
+    "text_to_image": "🖼 Text → Image",
+    "text_to_video": "🎬 Text → Video",
+    "image_to_image": "🧩 Image → Image",
+    "image_to_video": "🎥 Image → Video",
+    "video_to_video": "🎞 Video → Video",
+    "lipsync": "🗣 Lipsync",
+    "all": "📚 All models",
+}
+
+GENERATION_TYPE_TITLES = {
+    "text_to_image": "Text → Image",
+    "text_to_video": "Text → Video",
+    "image_to_image": "Image → Image",
+    "image_to_video": "Image → Video",
+    "video_to_video": "Video → Video",
+    "lipsync": "Lipsync (озвучка лица)",
+}
+
+GENERATION_TYPE_DESCRIPTIONS = {
+    "text_to_image": "Создание изображения по тексту",
+    "text_to_video": "Создание видео по тексту",
+    "image_to_image": "Редактирование или преобразование изображения",
+    "image_to_video": "Анимация изображения в видео",
+    "video_to_video": "Преобразование или стилизация видео",
+    "lipsync": "Анимация лица под аудио или текст",
+}
+
+PROVIDER_LABELS = {
+    "alibaba": "Alibaba",
+    "openai": "OpenAI",
+    "bytedance": "ByteDance",
+    "google": "Google",
+    "midjourney": "Midjourney",
+}
 
 
 def extract_prediction_id(payload: Dict[str, Any]) -> Optional[str]:
@@ -137,11 +182,14 @@ def build_confirmation_text(
 ) -> str:
     """Собрать экран подтверждения генерации."""
     balance_after_launch = max(balance - GENERATION_COST, 0)
+    prompt_label = "Prompt"
+    if model.generation_type == "lipsync":
+        prompt_label = "Озвучка"
     return (
         f"Проверьте генерацию:\n\n"
         f"Модель: <b>{escape(model.title)}</b>\n"
         f"Настройки:\n{format_generation_settings(model, user_settings)}\n\n"
-        f"Prompt: <i>{escape(prompt)}</i>\n\n"
+        f"{prompt_label}: <i>{escape(prompt)}</i>\n\n"
         f"Стоимость: 1 кредит\n"
         f"Баланс после запуска: <code>{balance_after_launch}</code>"
     )
@@ -180,12 +228,169 @@ def get_model_state_settings(state_data: dict[str, Any], model_key: str) -> dict
     return validate_model_settings(model_key, state_data.get("user_settings"))
 
 
-async def render_models_screen(message: Message) -> None:
-    """Показать список моделей генерации."""
-    generation_text = "Выберите модель для генерации/редактирования изображения:"
+def is_lipsync_generation_state(state_data: dict[str, Any]) -> bool:
+    """Определить, что текущий сценарий относится к lipsync."""
+    return state_data.get("model_generation_type") == "lipsync"
+
+
+def get_input_audio_or_text_display(value: Any) -> str:
+    """Вернуть пользовательское описание текстового или аудио-входа."""
+    if not isinstance(value, dict):
+        return ""
+    source_type = value.get("type")
+    if source_type == "text":
+        return str(value.get("text") or "")
+    if source_type == "voice":
+        return "Голосовое сообщение"
+    if source_type == "audio":
+        return "Аудиофайл"
+    return ""
+
+
+def get_media_input_prompt_text(*, is_lipsync: bool) -> str:
+    """Вернуть текст шага загрузки media-входа."""
+    if is_lipsync:
+        return (
+            "Вы выбрали Lipsync.\n"
+            "Отправьте фото или видео, затем текст или голос для озвучки."
+        )
+    return "Отправьте изображение как фото или файлом."
+
+
+def get_lipsync_incomplete_error_text() -> str:
+    """Вернуть единое сообщение о неполных входных данных lipsync."""
+    return "❌ Для lipsync нужно изображение/видео и текст или аудио."
+
+
+def get_second_step_prompt_text(*, is_lipsync: bool) -> str:
+    """Вернуть текст второго шага после загрузки media."""
+    if is_lipsync:
+        return "Теперь отправьте текст или голосовое сообщение для озвучки."
+    return "Опишите, что нужно изменить на изображении."
+
+
+def build_input_media_payload(message: Message) -> dict[str, str]:
+    """Собрать метаданные входного media-файла из Telegram message."""
+    if message.photo:
+        return {"type": "photo", "file_id": message.photo[-1].file_id}
+    if message.video:
+        return {"type": "video", "file_id": message.video.file_id}
+    if message.document:
+        mime_type = (message.document.mime_type or "").lower()
+        media_type = "video" if mime_type.startswith("video/") else "image"
+        return {"type": media_type, "file_id": message.document.file_id}
+    return {}
+
+
+def build_input_audio_or_text_payload(message: Message) -> dict[str, str]:
+    """Собрать текстовый или аудио-вход для озвучки."""
+    text = (message.text or "").strip()
+    if text:
+        return {"type": "text", "text": text}
+    if message.voice:
+        return {"type": "voice", "file_id": message.voice.file_id}
+    if message.audio:
+        return {"type": "audio", "file_id": message.audio.file_id}
+    if message.document and ((message.document.mime_type or "").lower().startswith("audio/")):
+        return {"type": "audio", "file_id": message.document.file_id}
+    return {}
+
+
+def is_supported_media_document(document: Any, *, is_lipsync: bool) -> bool:
+    """Проверить, что document подходит для текущего сценария генерации."""
+    mime_type = (getattr(document, "mime_type", "") or "").lower()
+    if is_lipsync:
+        return mime_type.startswith("image/") or mime_type.startswith("video/")
+    return mime_type.startswith("image/")
+
+
+async def prompt_for_generation_input(message: Message, *, edit: bool, is_lipsync: bool) -> None:
+    """Показать шаг загрузки media-входа с reply keyboard возврата к настройкам."""
+    prompt_text = get_media_input_prompt_text(is_lipsync=is_lipsync)
+    if edit:
+        await message.edit_text(prompt_text, reply_markup=None)
+    else:
+        await message.answer(prompt_text)
+
     await message.answer(
-        generation_text,
-        reply_markup=build_model_selection_keyboard(list_generation_models()),
+        "Если передумали, можно вернуться к настройкам.",
+        reply_markup=build_back_to_settings_keyboard(),
+    )
+
+
+def build_generation_types_screen_text() -> str:
+    """Собрать текст экрана выбора типа генерации."""
+    details = "\n".join(
+        f"• <b>{escape(GENERATION_TYPE_TITLES[generation_type])}</b> — {escape(GENERATION_TYPE_DESCRIPTIONS[generation_type])}"
+        for generation_type in ("text_to_image", "text_to_video", "image_to_image", "image_to_video", "video_to_video", "lipsync")
+    )
+    return f"Выберите тип генерации:\n\n{details}"
+
+
+def build_generation_type_options() -> list[tuple[str, str]]:
+    """Собрать опции клавиатуры выбора типа генерации."""
+    available_generation_types = set(list_generation_types())
+    if "lipsync" in GENERATION_TYPE_LABELS:
+        available_generation_types.add("lipsync")
+
+    ordered_generation_types = [
+        generation_type
+        for generation_type in ("text_to_image", "text_to_video", "image_to_image", "image_to_video", "video_to_video", "lipsync")
+        if generation_type in available_generation_types
+    ]
+    options = [
+        (generation_type, GENERATION_TYPE_LABELS[generation_type])
+        for generation_type in ordered_generation_types
+    ]
+    options.append(("all", GENERATION_TYPE_LABELS["all"]))
+    return options
+
+
+async def render_models_screen(message: Message) -> None:
+    """Показать список типов генерации."""
+    await message.answer(
+        build_generation_types_screen_text(),
+        reply_markup=build_generation_type_keyboard(build_generation_type_options()),
+        parse_mode="HTML",
+    )
+
+
+async def render_provider_screen(message: Message, *, edit: bool) -> None:
+    """Показать список провайдеров для выбора моделей."""
+    provider_options = [(provider, PROVIDER_LABELS[provider]) for provider in list_providers()]
+    text = "Выберите провайдера:"
+    if edit:
+        await message.edit_text(
+            text,
+            reply_markup=build_provider_keyboard(provider_options),
+            parse_mode="HTML",
+        )
+        return
+    await message.answer(
+        text,
+        reply_markup=build_provider_keyboard(provider_options),
+        parse_mode="HTML",
+    )
+
+
+async def render_model_list_screen(
+    message: Message,
+    *,
+    models: list[GenerationModel],
+    edit: bool,
+    heading: str,
+) -> None:
+    """Показать список моделей для выбранного типа или провайдера."""
+    if edit:
+        await message.edit_text(
+            heading,
+            reply_markup=build_model_selection_keyboard(models),
+            parse_mode="HTML",
+        )
+        return
+    await message.answer(
+        heading,
+        reply_markup=build_model_selection_keyboard(models),
         parse_mode="HTML",
     )
 
@@ -226,18 +431,7 @@ async def render_settings_screen_message(message: Message, state: FSMContext, *,
 
 async def prompt_for_generation_image(message: Message, *, edit: bool) -> None:
     """Показать шаг загрузки изображения с reply keyboard возврата к настройкам."""
-    if edit:
-        await message.edit_text(
-            "Отправьте изображение как фото или файлом.",
-            reply_markup=None,
-        )
-    else:
-        await message.answer("Отправьте изображение как фото или файлом.")
-
-    await message.answer(
-        "Если передумали, можно вернуться к настройкам.",
-        reply_markup=build_back_to_settings_keyboard(),
-    )
+    await prompt_for_generation_input(message, edit=edit, is_lipsync=False)
 
 
 async def show_setting_options(message: Message, state: FSMContext, setting_key: str) -> None:
@@ -277,18 +471,33 @@ async def send_confirmation_screen(
     """Показать экран подтверждения генерации."""
     state_data = await state.get_data()
     model_key = state_data.get("model_key")
+    model = get_generation_model(model_key) if model_key else None
+    is_lipsync = is_lipsync_generation_state(state_data) or bool(model and model.generation_type == "lipsync")
     prompt = (state_data.get("prompt") or "").strip()
     input_image_file_id = state_data.get("input_image_file_id")
+    input_media = state_data.get("input_media")
+    input_audio_or_text = state_data.get("input_audio_or_text")
 
-    if not model_key or not prompt or not input_image_file_id:
+    if is_lipsync:
+        prompt = get_input_audio_or_text_display(input_audio_or_text)
+        is_complete = bool(model_key and input_media and input_audio_or_text)
+    else:
+        is_complete = bool(model_key and prompt and input_image_file_id)
+
+    if not is_complete:
         if edit:
-            await message.edit_text("❌ Данные генерации неполные. Начни заново.", reply_markup=None)
+            await message.edit_text(
+                get_lipsync_incomplete_error_text() if is_lipsync else "❌ Данные генерации неполные. Начни заново.",
+                reply_markup=None,
+            )
         else:
-            await message.answer("❌ Данные генерации неполные. Начни заново.", reply_markup=get_main_menu_keyboard())
+            await message.answer(
+                get_lipsync_incomplete_error_text() if is_lipsync else "❌ Данные генерации неполные. Начни заново.",
+                reply_markup=get_main_menu_keyboard(),
+            )
         await reset_generation_state(state)
         return
 
-    model = get_generation_model(model_key)
     user_settings = get_model_state_settings(state_data, model_key)
     user_repo = UserRepository(session)
     user = await user_repo.get_or_create_user_from_telegram(telegram_user)
@@ -586,7 +795,10 @@ async def poll_generation_result(
         )
         delivery_success = await send_generation_outputs(bot, chat_id, result.outputs)
         if delivery_success:
-            await safe_send_bot_message(bot, chat_id, "Готово ✅")
+            success_text = "Готово ✅"
+            if get_generation_model(model_key).generation_type == "lipsync":
+                success_text = "Готово ✅ Ваш аватар озвучен."
+            await safe_send_bot_message(bot, chat_id, success_text)
         await safe_send_bot_message(bot, chat_id, "🏠 Главное меню", reply_markup=get_main_menu_keyboard())
     except WavespeedTimeoutError as exc:
         logger.exception("Wavespeed timeout while polling generation result: %s", exc)
@@ -679,6 +891,7 @@ async def show_generation_menu(message: Message, state: FSMContext):
             return
 
         await reset_generation_state(state)
+        await state.set_state(GenerationStates.choosing_generation_type)
         await render_models_screen(message)
         
         logger.debug(f"Generation menu shown for user {message.from_user.id}")
@@ -701,22 +914,122 @@ async def choose_generation_model(callback: CallbackQuery, state: FSMContext):
         model_key=model.key,
         model_title=model.title,
         model_endpoint=model.endpoint,
+        model_generation_type=model.generation_type,
         user_settings=get_default_settings(model.key),
         current_setting_key=None,
         input_image_file_id=None,
+        input_media=None,
+        input_audio_or_text=None,
         prompt=None,
     )
     await render_settings_screen(callback.message, state)
     await callback.answer()
 
 
+@router.callback_query(lambda cb: cb.data.startswith(GENERATION_TYPE_PREFIX))
+async def choose_generation_type(callback: CallbackQuery, state: FSMContext):
+    """Выбрать тип генерации или перейти к выбору провайдера."""
+    generation_type = callback.data.removeprefix(GENERATION_TYPE_PREFIX)
+
+    if generation_type == "all":
+        await state.set_state(GenerationStates.choosing_provider)
+        await state.update_data(selected_generation_type="all", selected_provider=None)
+        await render_provider_screen(callback.message, edit=True)
+        await callback.answer()
+        return
+
+    models = list_models_by_type(generation_type)
+    if not models:
+        await callback.answer("Для этого типа пока нет моделей", show_alert=True)
+        return
+
+    await state.set_state(GenerationStates.choosing_generation_type)
+    await state.update_data(selected_generation_type=generation_type, selected_provider=None)
+    await render_model_list_screen(
+        callback.message,
+        models=models,
+        edit=True,
+        heading="Выберите модель:",
+    )
+    await callback.answer()
+
+
+@router.callback_query(lambda cb: cb.data.startswith(PROVIDER_PREFIX))
+async def choose_provider(callback: CallbackQuery, state: FSMContext):
+    """Выбрать провайдера и показать его модели."""
+    provider = callback.data.removeprefix(PROVIDER_PREFIX)
+    models = list_models_by_provider(provider)
+    if not models:
+        await callback.answer("Для этого провайдера пока нет моделей", show_alert=True)
+        return
+
+    await state.set_state(GenerationStates.choosing_provider)
+    await state.update_data(selected_generation_type="all", selected_provider=provider)
+    await render_model_list_screen(
+        callback.message,
+        models=models,
+        edit=True,
+        heading="Выберите модель:",
+    )
+    await callback.answer()
+
+
 @router.callback_query(lambda cb: cb.data == SETTINGS_BACK_MODELS)
 async def back_to_generation_models(callback: CallbackQuery, state: FSMContext):
-    """Вернуться к выбору модели."""
-    await reset_generation_state(state)
+    """Вернуться к предыдущему экрану выбора модели."""
+    state_data = await state.get_data()
+    selected_provider = state_data.get("selected_provider")
+    selected_generation_type = state_data.get("selected_generation_type")
+
+    for key in (
+        "model_key",
+        "model_title",
+        "model_endpoint",
+        "model_generation_type",
+        "user_settings",
+        "current_setting_key",
+        "input_image_file_id",
+        "input_media",
+        "input_audio_or_text",
+        "prompt",
+    ):
+        await state.update_data(**{key: None})
+
+    if selected_provider:
+        await state.set_state(GenerationStates.choosing_provider)
+        await render_model_list_screen(
+            callback.message,
+            models=list_models_by_provider(str(selected_provider)),
+            edit=True,
+            heading="Выберите модель:",
+        )
+        await callback.answer()
+        return
+
+    if selected_generation_type and selected_generation_type != "all":
+        await state.set_state(GenerationStates.choosing_generation_type)
+        await render_model_list_screen(
+            callback.message,
+            models=list_models_by_type(str(selected_generation_type)),
+            edit=True,
+            heading="Выберите модель:",
+        )
+        await callback.answer()
+        return
+
+    await state.set_state(GenerationStates.choosing_generation_type)
+    await render_models_screen(callback.message)
+    await callback.answer()
+
+
+@router.callback_query(lambda cb: cb.data == PROVIDERS_BACK_TYPES)
+async def back_to_generation_types(callback: CallbackQuery, state: FSMContext):
+    """Вернуться от провайдеров к типам генерации."""
+    await state.set_state(GenerationStates.choosing_generation_type)
+    await state.update_data(selected_generation_type=None, selected_provider=None)
     await callback.message.edit_text(
-        "Выберите модель для генерации/редактирования изображения:",
-        reply_markup=build_model_selection_keyboard(list_generation_models()),
+        build_generation_types_screen_text(),
+        reply_markup=build_generation_type_keyboard(build_generation_type_options()),
         parse_mode="HTML",
     )
     await callback.answer()
@@ -795,8 +1108,13 @@ async def choose_setting_value(callback: CallbackQuery, state: FSMContext):
 @router.callback_query(lambda cb: cb.data == SETTINGS_CONTINUE)
 async def continue_after_settings(callback: CallbackQuery, state: FSMContext):
     """Перейти от настроек к загрузке изображения."""
+    state_data = await state.get_data()
     await state.set_state(GenerationStates.waiting_for_image)
-    await prompt_for_generation_image(callback.message, edit=True)
+    await prompt_for_generation_input(
+        callback.message,
+        edit=True,
+        is_lipsync=is_lipsync_generation_state(state_data),
+    )
     await callback.answer()
 
 
@@ -808,33 +1126,50 @@ async def back_to_settings_from_image_step(message: Message, state: FSMContext):
     await render_settings_screen_message(message, state, edit=False)
 
 
-@router.message(GenerationStates.waiting_for_image, lambda message: bool(message.photo) or bool(message.document))
+@router.message(GenerationStates.waiting_for_image, lambda message: bool(message.photo) or bool(message.document) or bool(message.video))
 async def process_generation_image(message: Message, state: FSMContext):
     """Принять изображение для генерации."""
+    state_data = await state.get_data()
+    is_lipsync = is_lipsync_generation_state(state_data)
     document = message.document
     photo = message.photo[-1] if message.photo else None
+    video = message.video
 
-    if document and not ((document.mime_type or "").startswith("image/")):
+    if document and not is_supported_media_document(document, is_lipsync=is_lipsync):
         await message.answer(
-            "❌ Нужен файл изображения. Отправь фото Telegram или document с форматом image/*.",
+            "❌ Нужны фото лица или видео. Отправь фото, video или document с форматом image/* или video/*."
+            if is_lipsync
+            else "❌ Нужен файл изображения. Отправь фото Telegram или document с форматом image/*.",
             reply_markup=get_main_menu_keyboard(),
         )
         return
 
-    file_id = document.file_id if document else photo.file_id
-    await state.update_data(input_image_file_id=file_id)
+    if not any([document, photo, video]):
+        await invalid_generation_image(message, state)
+        return
+
+    input_media = build_input_media_payload(message)
+    input_image_file_id = None
+    if input_media.get("type") in {"photo", "image"}:
+        input_image_file_id = input_media.get("file_id")
+
+    await state.update_data(input_media=input_media, input_image_file_id=input_image_file_id)
     await state.set_state(GenerationStates.waiting_for_prompt)
     await message.answer(
-        "Опишите, что нужно изменить на изображении.",
+        get_second_step_prompt_text(is_lipsync=is_lipsync),
         reply_markup=ReplyKeyboardRemove(),
     )
 
 
 @router.message(GenerationStates.waiting_for_image)
-async def invalid_generation_image(message: Message):
+async def invalid_generation_image(message: Message, state: FSMContext):
     """Сообщить, что ожидается изображение."""
+    state_data = await state.get_data()
+    is_lipsync = is_lipsync_generation_state(state_data)
     await message.answer(
-        "❌ Я жду изображение. Отправь фото Telegram или document с форматом image/*.",
+        "❌ Я жду фото лица или видео. Отправь фото, video или document с форматом image/* или video/*."
+        if is_lipsync
+        else "❌ Я жду изображение. Отправь фото Telegram или document с форматом image/*.",
         reply_markup=build_back_to_settings_keyboard(),
     )
 
@@ -847,21 +1182,36 @@ async def process_prompt(
 ):
     """Обработать промпт для генерации."""
     try:
-        prompt = (message.text or "").strip()
         state_data = await state.get_data()
         model_key = state_data.get("model_key", "nano_banana")
+        is_lipsync = is_lipsync_generation_state(state_data)
         input_image_file_id = state_data.get("input_image_file_id")
+        input_media = state_data.get("input_media")
+        input_audio_or_text = None
+        prompt = ""
         
-        if not prompt:
-            await message.answer("❌ Отправь текстовый prompt.", reply_markup=get_main_menu_keyboard())
-            return
-        if len(prompt) < 10:
-            await message.answer("❌ Описание слишком короткое (минимум 10 символов)")
-            return
-        if not input_image_file_id:
-            await message.answer("❌ Сначала отправь изображение.", reply_markup=build_back_to_settings_keyboard())
-            await state.set_state(GenerationStates.waiting_for_image)
-            return
+        if is_lipsync:
+            input_audio_or_text = build_input_audio_or_text_payload(message)
+            prompt = get_input_audio_or_text_display(input_audio_or_text)
+            if not input_audio_or_text:
+                await message.answer("❌ Отправь текст, голосовое сообщение или аудиофайл для озвучки.")
+                return
+            if not input_media:
+                await message.answer("❌ Сначала отправь фото лица или видео.", reply_markup=build_back_to_settings_keyboard())
+                await state.set_state(GenerationStates.waiting_for_image)
+                return
+        else:
+            prompt = (message.text or "").strip()
+            if not prompt:
+                await message.answer("❌ Отправь текстовый prompt.", reply_markup=get_main_menu_keyboard())
+                return
+            if len(prompt) < 10:
+                await message.answer("❌ Описание слишком короткое (минимум 10 символов)")
+                return
+            if not input_image_file_id:
+                await message.answer("❌ Сначала отправь изображение.", reply_markup=build_back_to_settings_keyboard())
+                await state.set_state(GenerationStates.waiting_for_image)
+                return
         
         user_repo = UserRepository(session)
         user = await user_repo.get_or_create_user_from_telegram(message.from_user)
@@ -874,7 +1224,7 @@ async def process_prompt(
             await message.answer("❌ Недостаточно средств. Минимум 1 кредит для генерации")
             return
 
-        await state.update_data(prompt=prompt)
+        await state.update_data(prompt=prompt, input_audio_or_text=input_audio_or_text)
         await send_confirmation_screen(
             message=message,
             state=state,
@@ -909,10 +1259,14 @@ async def confirm_generation(callback: CallbackQuery, state: FSMContext, session
     model_endpoint = state_data.get("model_endpoint")
     prompt = state_data.get("prompt")
     input_image_file_id = state_data.get("input_image_file_id")
+    is_lipsync = is_lipsync_generation_state(state_data)
     user_settings = validate_model_settings(model_key, state_data.get("user_settings")) if model_key else {}
 
     if not all([model_key, model_title, model_endpoint, prompt, input_image_file_id]):
-        await callback.message.answer("❌ Данные генерации неполные. Начни заново.", reply_markup=get_main_menu_keyboard())
+        await callback.message.answer(
+            get_lipsync_incomplete_error_text() if is_lipsync else "❌ Данные генерации неполные. Начни заново.",
+            reply_markup=get_main_menu_keyboard(),
+        )
         await reset_generation_state(state)
         await callback.answer()
         return
