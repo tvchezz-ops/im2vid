@@ -289,6 +289,54 @@ def test_generation_model_exposes_new_fields_and_legacy_aliases() -> None:
     assert model.supports_multiple_images is True
     assert model.min_images == 1
     assert model.max_images == 14
+    assert model.supports_batch_outputs is False
+    assert model.max_outputs_per_request == 1
+    assert model.output_count_field is None
+
+
+def test_default_num_outputs_is_one_for_supported_batch_model() -> None:
+    model = get_generation_model("bytedance_seedream_v4_sequential")
+
+    assert model.supports_batch_outputs is True
+    assert model.max_outputs_per_request == 4
+    assert model.output_count_field == "max_images"
+    assert get_default_settings("bytedance_seedream_v4_sequential")["num_outputs"] == "1"
+
+
+def test_build_payload_maps_num_outputs_to_confirmed_output_count_field() -> None:
+    payload = build_payload(
+        "bytedance_seedream_v4_sequential",
+        [],
+        "Generate a cinematic portrait",
+        {"size": "2048*2048", "num_outputs": "4"},
+    )
+
+    assert payload["prompt"] == "Generate a cinematic portrait"
+    assert payload["size"] == "2048*2048"
+    assert payload["max_images"] == 4
+    assert "num_outputs" not in payload
+
+
+def test_build_payload_clamps_num_outputs_above_ui_limit() -> None:
+    payload = build_payload(
+        "bytedance_seedream_v4_sequential",
+        [],
+        "Generate four variations",
+        {"num_outputs": "9"},
+    )
+
+    assert payload["max_images"] == 4
+
+
+def test_build_payload_ignores_num_outputs_for_models_without_batch_support() -> None:
+    payload = build_payload(
+        "google_veo3",
+        [],
+        "Create a short atmospheric video",
+        {"num_outputs": "4", "duration": "8", "resolution": "720p", "aspect_ratio": "16:9"},
+    )
+
+    assert "num_outputs" not in payload
 
 
 def test_generation_registry_constants_include_supported_values() -> None:

@@ -42,6 +42,7 @@ from app.services.generation_service import (
     build_payload,
     get_default_settings,
     get_generation_model,
+    get_model_num_outputs,
     get_required_input_type,
     list_generation_types,
     list_generation_models,
@@ -234,6 +235,10 @@ def format_generation_settings(model: GenerationModel, user_settings: dict[str, 
     )
 
 
+def get_total_generation_cost(model: GenerationModel, user_settings: dict[str, Any]) -> int:
+    return GENERATION_COST * get_model_num_outputs(model, user_settings)
+
+
 def build_settings_text(model: GenerationModel, user_settings: dict[str, Any]) -> str:
     """Собрать экран настроек модели."""
     if not model.user_settings:
@@ -277,7 +282,9 @@ def build_confirmation_text(
     balance: int,
 ) -> str:
     """Собрать экран подтверждения генерации."""
-    balance_after_launch = max(balance - GENERATION_COST, 0)
+    num_outputs = get_model_num_outputs(model, user_settings)
+    total_cost = get_total_generation_cost(model, user_settings)
+    balance_after_launch = max(balance - total_cost, 0)
     prompt_label = "Prompt"
     if model.generation_type == "lipsync":
         prompt_label = "Озвучка"
@@ -286,7 +293,8 @@ def build_confirmation_text(
         f"Модель: <b>{escape(model.title)}</b>\n"
         f"Настройки:\n{format_generation_settings(model, user_settings)}\n\n"
         f"{prompt_label}: <i>{escape(prompt)}</i>\n\n"
-        f"Стоимость: 1 кредит\n"
+        f"Количество результатов: <code>{num_outputs}</code>\n"
+        f"Стоимость: {total_cost} кредитов\n"
         f"Баланс после запуска: <code>{balance_after_launch}</code>"
     )
 
@@ -2163,9 +2171,16 @@ async def process_prompt(
             await message.answer(format_user_error(ErrorCode.E010_INTERNAL_ERROR, "пользователь не найден."))
             return
         
-        if not await user_repo.has_enough_balance(user.id, GENERATION_COST):
+        user_settings = get_model_state_settings(state_data, model_key)
+        total_cost = get_total_generation_cost(model, user_settings)
+        if not await user_repo.has_enough_balance(user.id, total_cost):
             log_generation_error(ErrorCode.E006_INSUFFICIENT_BALANCE, user_id=user.id, model_key=model_key, status="rejected")
-            await message.answer(format_user_error(ErrorCode.E006_INSUFFICIENT_BALANCE, "недостаточно кредитов."))
+            await message.answer(
+                format_user_error(
+                    ErrorCode.E006_INSUFFICIENT_BALANCE,
+                    f"Недостаточно кредитов. Нужно {total_cost}, у вас {user.balance}.",
+                )
+            )
             return
 
         await state.update_data(prompt=prompt, input_audio_or_text=input_audio_or_text)
@@ -2259,25 +2274,30 @@ async def confirm_generation(callback: CallbackQuery, state: FSMContext, session
     generation_request_id = None
     temp_input_path: Optional[str] | list[str] = None
     task_started = False
+    total_cost = GENERATION_COST
 
     try:
         user_repo = UserRepository(session)
         generation_repo = GenerationRepository(session)
         user = await user_repo.get_or_create_user_from_telegram(callback.from_user)
         debited_user_id = user.id
+        total_cost = get_total_generation_cost(model, user_settings)
 
-        if not await user_repo.decrease_balance(user.id, GENERATION_COST):
-            log_balance_event("insufficient_balance", user.id, GENERATION_COST)
+        if not await user_repo.decrease_balance(user.id, total_cost):
+            log_balance_event("insufficient_balance", user.id, total_cost)
             log_generation_error(ErrorCode.E006_INSUFFICIENT_BALANCE, user_id=user.id, model_key=model_key, status="rejected")
             await callback.message.answer(
-                format_user_error(ErrorCode.E006_INSUFFICIENT_BALANCE, "недостаточно кредитов."),
+                format_user_error(
+                    ErrorCode.E006_INSUFFICIENT_BALANCE,
+                    f"Недостаточно кредитов. Нужно {total_cost}, у вас {user.balance}.",
+                ),
                 reply_markup=get_main_menu_keyboard(),
             )
             await reset_generation_state(state)
             await callback.answer()
             return
         debited_balance = True
-        log_balance_event("balance_debited", user.id, GENERATION_COST)
+        log_balance_event("balance_debited", user.id, total_cost)
 
         generation_request = await generation_repo.create_generation_request(
             user_id=user.id,
@@ -2292,7 +2312,7 @@ async def confirm_generation(callback: CallbackQuery, state: FSMContext, session
             size=user_settings.get("size"),
             output_format=user_settings.get("output_format"),
             status="created",
-            cost=GENERATION_COST,
+            cost=total_cost,
         )
         generation_request_id = generation_request.id
 
@@ -2355,7 +2375,7 @@ async def confirm_generation(callback: CallbackQuery, state: FSMContext, session
         if debited_balance and debited_user_id is not None:
             try:
                 user_repo = UserRepository(session)
-                await user_repo.increase_balance(debited_user_id, GENERATION_COST)
+                await user_repo.increase_balance(debited_user_id, total_cost)
             except Exception as refund_exc:
                 logger.exception("Error while refunding balance after image upload failure: %s", refund_exc)
         await state.update_data(input_image_file_id=None, input_media=None, input_media_items=[])
@@ -2377,7 +2397,7 @@ async def confirm_generation(callback: CallbackQuery, state: FSMContext, session
         if debited_balance and debited_user_id is not None:
             try:
                 user_repo = UserRepository(session)
-                await user_repo.increase_balance(debited_user_id, GENERATION_COST)
+                await user_repo.increase_balance(debited_user_id, total_cost)
             except Exception:
                 logger.exception("Error while refunding balance after invalid payload")
         await state.clear()
@@ -2404,7 +2424,7 @@ async def confirm_generation(callback: CallbackQuery, state: FSMContext, session
         if debited_balance and debited_user_id is not None:
             try:
                 user_repo = UserRepository(session)
-                await user_repo.increase_balance(debited_user_id, GENERATION_COST)
+                await user_repo.increase_balance(debited_user_id, total_cost)
             except Exception as refund_exc:
                 logger.exception("Error while refunding balance after launch failure: %s", refund_exc)
         await state.clear()
