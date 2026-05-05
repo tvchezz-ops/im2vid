@@ -60,9 +60,6 @@ class GenerationModel:
     input_media_field: str | None = None
     min_images: int = 0
     supports_multiple_images: bool = False
-    supports_batch_outputs: bool = False
-    max_outputs_per_request: int = 1
-    output_count_field: str | None = None
     is_enabled: bool = True
     warning: str = ""
     required_payload_fields: tuple[str, ...] = ()
@@ -240,15 +237,15 @@ def _select_setting(
     )
 
 
-def _build_batch_output_setting(max_outputs_per_request: int) -> GenerationSetting:
-    capped_limit = max(1, min(4, max_outputs_per_request))
+def _build_num_generations_setting(max_generations: int = 4) -> GenerationSetting:
+    capped_limit = max(1, min(4, max_generations))
     values = tuple(str(value) for value in range(1, capped_limit + 1))
     return _select_setting(
-        "num_outputs",
-        "Количество результатов",
+        "num_generations",
+        "Количество генераций",
         "1",
         values,
-        "Сколько вариантов сгенерировать за один запуск",
+        "Сколько генераций запустить за один запрос",
     )
 
 
@@ -339,9 +336,6 @@ def _model(
     requires_audio: bool = False,
     max_images: int = 0,
     supports_multiple_images: bool = False,
-    supports_batch_outputs: bool = False,
-    max_outputs_per_request: int = 1,
-    output_count_field: str | None = None,
     is_enabled: bool = True,
     warning: str = "",
     required_payload_fields: tuple[str, ...] = (),
@@ -351,10 +345,10 @@ def _model(
     system_settings: Optional[dict[str, Any]] = None,
 ) -> GenerationModel:
     normalized_user_settings = dict(user_settings or {})
-    if supports_batch_outputs:
+    if is_enabled:
         normalized_user_settings.setdefault(
-            "num_outputs",
-            _build_batch_output_setting(max_outputs_per_request),
+            "num_generations",
+            _build_num_generations_setting(),
         )
 
     return GenerationModel(
@@ -369,9 +363,6 @@ def _model(
         min_images=min_images,
         max_images=max_images,
         supports_multiple_images=supports_multiple_images,
-        supports_batch_outputs=supports_batch_outputs,
-        max_outputs_per_request=max_outputs_per_request,
-        output_count_field=output_count_field,
         requires_prompt=requires_prompt,
         requires_image=requires_image,
         requires_video=requires_video,
@@ -464,9 +455,6 @@ def build_input_schema(model: GenerationModel) -> dict[str, Any]:
         "min_images": model.min_images,
         "max_images": model.max_images,
         "supports_multiple_images": model.supports_multiple_images,
-        "supports_batch_outputs": model.supports_batch_outputs,
-        "max_outputs_per_request": model.max_outputs_per_request,
-        "output_count_field": model.output_count_field,
         "required_payload_fields": list(model.required_payload_fields),
         "allowed_payload_fields": list(model.allowed_payload_fields),
         "user_settings": {
@@ -750,9 +738,6 @@ MODEL_REGISTRY = build_model_registry((
         input_media_field=None,
         required_payload_fields=("prompt",),
         allowed_payload_fields=("prompt", "size", "max_images", "enable_sync_mode", "enable_base64_output"),
-        supports_batch_outputs=True,
-        max_outputs_per_request=4,
-        output_count_field="max_images",
         user_settings={
             "size": _select_setting("size", "Размер", "1024*1024", ("512*512", "768*768", "1024*1024", "1280*720", "720*1280", "2048*2048")),
         },
@@ -1038,15 +1023,14 @@ def validate_model_settings(
             raise ValueError(
                 f"Setting '{setting_key}' for model '{model.key}' must be a string value"
             )
-        if setting_key == "num_outputs" and model.supports_batch_outputs:
+        if setting_key == "num_generations":
             try:
-                requested_outputs = int(raw_value.strip())
+                requested_generations = int(raw_value.strip())
             except ValueError as exc:
                 raise ValueError(
                     f"Invalid value '{raw_value}' for setting '{setting_key}' in model '{model.key}'"
                 ) from exc
-            max_outputs = max(1, min(4, model.max_outputs_per_request))
-            validated_settings[setting_key] = str(min(max(requested_outputs, 1), max_outputs))
+            validated_settings[setting_key] = str(min(max(requested_generations, 1), 4))
             continue
         if setting.type == "select" and raw_value not in setting.allowed_values:
             allowed_values = ", ".join(option.value for option in setting.options)
@@ -1068,16 +1052,14 @@ def _apply_supported_system_flags(
             payload[field_name] = False
 
 
-def get_model_num_outputs(model: GenerationModel, user_settings: Optional[Mapping[str, Any]] = None) -> int:
-    if not model.supports_batch_outputs or not model.output_count_field:
-        return 1
+def get_model_num_generations(model: GenerationModel, user_settings: Optional[Mapping[str, Any]] = None) -> int:
     validated_settings = validate_model_settings(model.key, user_settings)
-    raw_value = validated_settings.get("num_outputs", "1")
+    raw_value = validated_settings.get("num_generations", "1")
     try:
-        requested_outputs = int(str(raw_value).strip())
+        requested_generations = int(str(raw_value).strip())
     except (TypeError, ValueError):
-        requested_outputs = 1
-    return min(max(requested_outputs, 1), max(1, min(4, model.max_outputs_per_request)))
+        requested_generations = 1
+    return min(max(requested_generations, 1), 4)
 
 
 def _assert_required_payload_fields(
@@ -1188,12 +1170,8 @@ def build_payload(
             raise ValueError(f"Model {model.key} supports exactly one video input")
 
     payload: dict[str, Any] = {**validated_settings, **model.system_settings}
-
-    if model.supports_batch_outputs and model.output_count_field:
-        payload[model.output_count_field] = get_model_num_outputs(model, validated_settings)
-        payload.pop("num_outputs", None)
-    else:
-        payload.pop("num_outputs", None)
+    payload.pop("num_generations", None)
+    payload.pop("num_outputs", None)
     if model.requires_prompt and cleaned_prompt:
         payload["prompt"] = cleaned_prompt
     if model.input_media_field == "video":
