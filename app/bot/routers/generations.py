@@ -242,11 +242,12 @@ def build_setting_value_text(model: GenerationModel, setting_key: str, current_v
     """Собрать экран выбора конкретной настройки."""
     setting = model.user_settings[setting_key]
     if setting.type == "text":
+        description_block = f"\n\n{escape(setting.description)}" if setting.description else ""
         return (
             f"Настройки модели: <b>{escape(model.title)}</b>\n\n"
             f"Параметр: <b>{escape(setting.title)}</b>\n"
             f"Текущее значение: <code>{escape(current_value)}</code>\n\n"
-            "Для текстовых параметров сейчас используется сохранённое значение по умолчанию."
+            f"Для текстовых параметров сейчас используется сохранённое значение по умолчанию.{description_block}"
         )
     options = "\n".join(f"• <code>{escape(option.value)}</code>" for option in setting.options)
     return (

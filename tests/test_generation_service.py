@@ -102,6 +102,40 @@ def test_build_payload_seedream_custom_settings() -> None:
     assert payload["enable_base64_output"] is False
 
 
+def test_build_payload_omits_negative_seed_for_alibaba_wan() -> None:
+    payload = build_payload(
+        "alibaba_wan_2_6_text_to_image",
+        [],
+        "Generate a product hero shot",
+        {"seed": "-1"},
+    )
+
+    assert "seed" not in payload
+
+
+def test_build_payload_keeps_non_negative_seed_as_integer() -> None:
+    payload = build_payload(
+        "alibaba_wan_2_6_text_to_image",
+        [],
+        "Generate a product hero shot",
+        {"seed": "42"},
+    )
+
+    assert payload["seed"] == 42
+    assert isinstance(payload["seed"], int)
+
+
+def test_build_payload_ignores_non_numeric_seed() -> None:
+    payload = build_payload(
+        "bytedance_seedream_v3_1",
+        [],
+        "Generate a concept art shot",
+        {"seed": "not-a-number"},
+    )
+
+    assert "seed" not in payload
+
+
 def test_build_payload_multi_image_models_keep_all_uploaded_images() -> None:
     payload = build_payload(
         "nano_banana",
@@ -289,6 +323,17 @@ def test_generation_model_exposes_new_fields_and_legacy_aliases() -> None:
     assert model.supports_multiple_images is True
     assert model.min_images == 1
     assert model.max_images == 14
+
+
+def test_seed_settings_expose_random_and_fixed_description() -> None:
+    wan_seed = get_generation_model("alibaba_wan_2_6_text_to_image").user_settings["seed"]
+    happyhorse_seed = get_generation_model("alibaba_happyhorse_1_0_text_to_video").user_settings["seed"]
+    seedream_seed = get_generation_model("bytedance_seedream_v3_1").user_settings["seed"]
+
+    assert wan_seed.title == "Seed"
+    assert wan_seed.description == "-1 = случайный\n>=0 = фиксированный"
+    assert happyhorse_seed.description == "-1 = случайный\n>=0 = фиксированный"
+    assert seedream_seed.description == "-1 = случайный\n>=0 = фиксированный"
 
 
 def test_generation_registry_constants_include_supported_values() -> None:
@@ -479,7 +524,7 @@ def test_build_payload_keeps_allowed_fields_for_known_models() -> None:
         "width": "1280",
         "height": "1536",
         "enable_prompt_expansion": "false",
-        "seed": "42",
+        "seed": 42,
     }
 
 

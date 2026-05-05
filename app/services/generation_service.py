@@ -31,6 +31,7 @@ class GenerationSetting:
     type: str
     default: str
     options: tuple[SettingOption, ...]
+    description: str = ""
 
     @property
     def allowed_values(self) -> set[str]:
@@ -225,10 +226,12 @@ def _select_setting(
     title: str,
     default: str,
     values: tuple[str, ...],
+    description: str = "",
 ) -> GenerationSetting:
     return GenerationSetting(
         key=key,
         title=title,
+        description=description,
         type="select",
         default=default,
         options=tuple(SettingOption(value=value, label=value) for value in values),
@@ -239,14 +242,44 @@ def _text_setting(
     key: str,
     title: str,
     default: str,
+    description: str = "",
 ) -> GenerationSetting:
     return GenerationSetting(
         key=key,
         title=title,
+        description=description,
         type="text",
         default=default,
         options=(),
     )
+
+
+def _normalize_seed_setting(settings: Mapping[str, Any]) -> dict[str, Any]:
+    """Преобразовать seed к формату, который принимает Wavespeed API."""
+    normalized_settings = dict(settings)
+    original_seed = normalized_settings.get("seed")
+    used_seed = None
+
+    if "seed" in normalized_settings:
+        try:
+            seed_value = int(str(original_seed).strip())
+        except (TypeError, ValueError):
+            normalized_settings.pop("seed", None)
+        else:
+            if seed_value >= 0:
+                normalized_settings["seed"] = seed_value
+                used_seed = seed_value
+            else:
+                normalized_settings.pop("seed", None)
+
+    logger.info(
+        {
+            "action": "seed_processed",
+            "original_seed": original_seed,
+            "used_seed": used_seed,
+        }
+    )
+    return normalized_settings
 
 
 def _api_endpoint(provider: str, path: str) -> str:
@@ -432,7 +465,7 @@ MODEL_REGISTRY = build_model_registry((
             "width": _select_setting("width", "Ширина", "1024", ("512", "768", "1024", "1280", "1536")),
             "height": _select_setting("height", "Высота", "1024", ("512", "768", "1024", "1280", "1536")),
             "enable_prompt_expansion": _select_setting("enable_prompt_expansion", "Улучшение prompt", "false", ("false", "true")),
-            "seed": _text_setting("seed", "Seed", "-1"),
+            "seed": _text_setting("seed", "Seed", "-1", "-1 = случайный\n>=0 = фиксированный"),
         },
     ),
     _model(
@@ -550,7 +583,7 @@ MODEL_REGISTRY = build_model_registry((
             "aspect_ratio": _select_setting("aspect_ratio", "Формат", "16:9", ("16:9", "9:16", "1:1", "4:3", "3:4")),
             "resolution": _select_setting("resolution", "Разрешение", "720p", ("720p", "1080p")),
             "duration": _select_setting("duration", "Длительность", "5", ("3", "5", "8", "10", "15")),
-            "seed": _text_setting("seed", "Seed", "-1"),
+            "seed": _text_setting("seed", "Seed", "-1", "-1 = случайный\n>=0 = фиксированный"),
         },
     ),
     _model(
@@ -728,7 +761,7 @@ MODEL_REGISTRY = build_model_registry((
         allowed_payload_fields=("prompt", "size", "seed", "enable_prompt_expansion", "enable_sync_mode", "enable_base64_output"),
         user_settings={
             "size": _select_setting("size", "Размер", "1024*1024", ("512*512", "768*768", "1024*1024", "1280*720", "720*1280", "2048*2048")),
-            "seed": _text_setting("seed", "Seed", "-1"),
+            "seed": _text_setting("seed", "Seed", "-1", "-1 = случайный\n>=0 = фиксированный"),
             "enable_prompt_expansion": _select_setting("enable_prompt_expansion", "Улучшение prompt", "false", ("false", "true")),
         },
         system_settings=COMMON_IMAGE_SYSTEM_SETTINGS,
@@ -1023,7 +1056,7 @@ def build_payload(
 
     cleaned_prompt = prompt.strip()
     valid_inputs = [image_url.strip() for image_url in image_urls if image_url.strip()]
-    validated_settings = validate_model_settings(model_key, user_settings)
+    validated_settings = _normalize_seed_setting(validate_model_settings(model_key, user_settings))
 
     if model.generation_type == "lipsync":
         media_url = valid_inputs[0] if valid_inputs else ""
@@ -1059,7 +1092,7 @@ def build_payload(
         _assert_required_payload_fields(model, filtered_payload)
         return filtered_payload
 
-    if any(not isinstance(value, str) for value in validated_settings.values()):
+    if any(not isinstance(value, (str, int)) for value in validated_settings.values()):
         raise ValueError("All validated settings must be string values")
 
     if model.requires_prompt and not cleaned_prompt:
