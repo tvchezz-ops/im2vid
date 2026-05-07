@@ -19,6 +19,14 @@ DATABASE_URL=sqlite+aiosqlite:///./bot.db
 ADMIN_IDS=123456789,987654321    # Список ID админов через запятую
 TEMP_MEDIA_DIR=tmp/media
 TEMP_MEDIA_TTL_MINUTES=30
+TELEGRAM_STARS_WALLET_BOT_USERNAME=
+TELEGRAM_STARS_RETURN_BOT_USERNAME=
+CRYPTO_PROVIDER=
+CRYPTO_WEBHOOK_SECRET=
+CRYPTO_WALLET_BTC=
+CRYPTO_WALLET_ETH=
+CRYPTO_WALLET_USDT_TRC20=
+CRYPTO_WALLET_USDT_ERC20=
 STORE_INPUT_MEDIA=false
 STORE_OUTPUT_URLS=false
 ```
@@ -34,6 +42,14 @@ STORE_OUTPUT_URLS=false
 | `admin_ids` | `list[int]` | ❌ | `[]` | Список админ ID через запятую |
 | `temp_media_dir` | `str` | ❌ | `tmp/media` | Временная директория для входных изображений |
 | `temp_media_ttl_minutes` | `int` | ❌ | `30` | TTL временных файлов на диске |
+| `telegram_stars_wallet_bot_username` | `str` | ❌ | `""` | Username внешнего wallet bot для Telegram Stars без `@` |
+| `telegram_stars_return_bot_username` | `str` | ❌ | `""` | Username текущего бота для возврата из wallet bot без `@` |
+| `crypto_provider` | `str` | ❌ | `""` | Имя будущего crypto payment provider |
+| `crypto_webhook_secret` | `str` | ❌ | `""` | Секрет будущих crypto webhook callbacks |
+| `crypto_wallet_btc` | `str` | ❌ | `""` | BTC wallet address для будущих crypto payments |
+| `crypto_wallet_eth` | `str` | ❌ | `""` | ETH wallet address для будущих crypto payments |
+| `crypto_wallet_usdt_trc20` | `str` | ❌ | `""` | USDT TRC20 wallet address для будущих crypto payments |
+| `crypto_wallet_usdt_erc20` | `str` | ❌ | `""` | USDT ERC20 wallet address для будущих crypto payments |
 | `store_input_media` | `bool` | ❌ | `false` | Всегда `false`, поле совместимости |
 | `store_output_urls` | `bool` | ❌ | `false` | Всегда `false`, поле совместимости |
 
@@ -50,9 +66,25 @@ DATABASE_URL=sqlite+aiosqlite:///./bot.db
 ADMIN_IDS=123456789,987654321,111111111
 TEMP_MEDIA_DIR=tmp/media
 TEMP_MEDIA_TTL_MINUTES=30
+TELEGRAM_STARS_WALLET_BOT_USERNAME=
+TELEGRAM_STARS_RETURN_BOT_USERNAME=
+CRYPTO_PROVIDER=
+CRYPTO_WEBHOOK_SECRET=
+CRYPTO_WALLET_BTC=
+CRYPTO_WALLET_ETH=
+CRYPTO_WALLET_USDT_TRC20=
+CRYPTO_WALLET_USDT_ERC20=
 STORE_INPUT_MEDIA=false
 STORE_OUTPUT_URLS=false
 ```
+
+## Telegram Stars wallet bot
+
+Основной рабочий путь оплаты Telegram Stars остается внутри бота через Bot API invoice: `sendInvoice` с `currency=XTR` и пустым `provider_token`.
+
+Если задан `TELEGRAM_STARS_WALLET_BOT_USERNAME`, после выбора пакета Stars бот показывает дополнительный экран с кнопкой `Перейти к оплате` во внешний wallet bot и fallback-кнопкой `Оплатить здесь`, которая отправляет обычный invoice из текущего бота.
+
+Возврат из wallet bot должен вести на `https://t.me/{TELEGRAM_STARS_RETURN_BOT_USERNAME}?start=paid_{payload}`. Такой возврат сам по себе не подтверждает оплату: бот показывает `Проверяем оплату...` и начисляет кредиты только если заказ уже был подтвержден будущей trusted wallet integration через `PaymentService.mark_external_stars_payment_paid(payload, external_payment_id)`.
 
 ## 🚀 Использование конфигурации в коде
 

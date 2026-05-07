@@ -136,7 +136,28 @@ TEMP_MEDIA_DIR=tmp/media
 TEMP_MEDIA_TTL_MINUTES=30
 STORE_INPUT_MEDIA=false
 STORE_OUTPUT_URLS=false
+CRYPTO_PROVIDER=
+CRYPTO_WEBHOOK_SECRET=
+CRYPTO_WALLET_BTC=
+CRYPTO_WALLET_ETH=
+CRYPTO_WALLET_USDT_TRC20=
+CRYPTO_WALLET_USDT_ERC20=
 ```
+
+## Crypto payment integration TODO
+
+Crypto payments are prepared as a future integration only. The current UI shows a `₿ Crypto` button in balance top-up and responds with `Crypto payments are coming soon.`
+
+Before enabling real crypto payments:
+
+- implement a concrete `CryptoPaymentProvider` in `app/services/crypto_payments.py`;
+- create invoices through the selected provider from `CRYPTO_PROVIDER`;
+- verify paid invoices only through a trusted webhook/API callback protected by `CRYPTO_WEBHOOK_SECRET`;
+- mark payment orders paid only after verified provider confirmation;
+- keep `/start` or user-return flows informational only, never as proof of payment;
+- add provider-specific tests for paid, pending, expired, failed, duplicate webhook, and partial amount cases.
+
+Until that webhook/API path exists, crypto orders stay draft/pending and do not credit user balances automatically.
 
 Для больших результатов генерации бот показывает короткую ссылку вида `PUBLIC_BASE_URL/d/{token}`, а не прямой длинный Cloudflare R2 presigned URL. По этой короткой ссылке пользователь сначала попадает на отдельную HTML-страницу скачивания с названием файла, сроком действия ссылки и кнопкой `Скачать файл`; только route `PUBLIC_BASE_URL/d/{token}/download` генерирует свежий временный signed URL и делает redirect. В базе хранится только token, `r2_object_key`, имя файла, размер, content type, срок жизни и счётчик использований; полный signed URL не сохраняется и не логируется.
 

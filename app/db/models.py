@@ -23,6 +23,24 @@ class GenerationRequestStatus(str, enum.Enum):
     FAILED = "failed"
 
 
+class PaymentProvider(str, enum.Enum):
+    """Провайдеры платежей."""
+
+    TELEGRAM_STARS = "telegram_stars"
+    CRYPTO = "crypto"
+
+
+class PaymentOrderStatus(str, enum.Enum):
+    """Статусы платежного заказа."""
+
+    CREATED = "created"
+    PENDING = "pending"
+    PAID = "paid"
+    FAILED = "failed"
+    CANCELLED = "cancelled"
+    EXPIRED = "expired"
+
+
 class User(BaseModel):
     """Модель пользователя."""
     
@@ -110,6 +128,56 @@ class Payment(Base):
         default=lambda: datetime.now(timezone.utc),
         server_default=func.now(),
     )
+
+
+class PaymentOrder(BaseModel):
+    """Платежный заказ для пополнения баланса."""
+
+    __tablename__ = "payment_orders"
+
+    id: Mapped[uuid.UUID] = mapped_column(Uuid, primary_key=True, default=uuid.uuid4)
+    user_id: Mapped[int] = mapped_column(BigInteger, ForeignKey("users.id"), index=True)
+    provider: Mapped[str] = mapped_column(String(50), index=True)
+    status: Mapped[str] = mapped_column(
+        String(50),
+        default=PaymentOrderStatus.CREATED.value,
+        server_default=PaymentOrderStatus.CREATED.value,
+        index=True,
+    )
+    amount: Mapped[int] = mapped_column(Integer)
+    credits: Mapped[int] = mapped_column(Integer)
+    currency: Mapped[str] = mapped_column(String(20))
+    external_payment_id: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
+    telegram_payment_charge_id: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
+    payload: Mapped[Optional[str]] = mapped_column(String(255), unique=True, nullable=True)
+    metadata_: Mapped[Optional[dict[str, Any]]] = mapped_column(
+        "metadata",
+        JSON,
+        nullable=True,
+        default=dict,
+        server_default="{}",
+    )
+    paid_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
+
+
+class CryptoPaymentOrder(Base):
+    """Детали крипто-платежа для платежного заказа."""
+
+    __tablename__ = "crypto_payment_orders"
+
+    id: Mapped[uuid.UUID] = mapped_column(Uuid, primary_key=True, default=uuid.uuid4)
+    payment_order_id: Mapped[uuid.UUID] = mapped_column(
+        Uuid,
+        ForeignKey("payment_orders.id"),
+        index=True,
+    )
+    network: Mapped[Optional[str]] = mapped_column(String(100), nullable=True)
+    asset: Mapped[Optional[str]] = mapped_column(String(100), nullable=True)
+    wallet_address: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
+    expected_amount: Mapped[Optional[str]] = mapped_column(String(100), nullable=True)
+    tx_hash: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
+    status: Mapped[str] = mapped_column(String(50), default="draft", server_default="draft")
+    metadata_: Mapped[dict[str, Any]] = mapped_column("metadata", JSON, default=dict, server_default="{}")
 
 
 class DownloadLink(Base):

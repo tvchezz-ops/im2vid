@@ -7,7 +7,17 @@ from typing import Any, Optional
 from sqlalchemy import delete, func, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.db.models import DownloadLink, GenerationRequest, GenerationRequestStatus, Payment, User, UserEvent
+from app.db.models import (
+    CryptoPaymentOrder,
+    DownloadLink,
+    GenerationRequest,
+    GenerationRequestStatus,
+    Payment,
+    PaymentOrder,
+    PaymentOrderStatus,
+    User,
+    UserEvent,
+)
 from app.utils import logger
 
 
@@ -358,6 +368,138 @@ class PaymentRepository:
         await self.session.commit()
         await self.session.refresh(payment)
         return payment
+
+    async def create_payment_order(
+        self,
+        user_id: int,
+        provider: str,
+        amount: int,
+        credits: int,
+        currency: str,
+        payload: Optional[str] = None,
+        metadata: Optional[dict[str, Any]] = None,
+    ) -> PaymentOrder:
+        """Создать платежный заказ."""
+        order = PaymentOrder(
+            user_id=user_id,
+            provider=provider,
+            status=PaymentOrderStatus.CREATED.value,
+            amount=amount,
+            credits=credits,
+            currency=currency,
+            payload=payload,
+            metadata_=metadata or {},
+        )
+        self.session.add(order)
+        await self.session.commit()
+        await self.session.refresh(order)
+        return order
+
+    async def get_payment_order_by_payload(self, payload: str) -> Optional[PaymentOrder]:
+        """Получить платежный заказ по уникальному payload Telegram invoice."""
+        result = await self.session.execute(
+            select(PaymentOrder).where(PaymentOrder.payload == payload)
+        )
+        return result.scalars().first()
+
+    async def mark_payment_order_paid(
+        self,
+        order_id: Any,
+        external_payment_id: Optional[str] = None,
+        telegram_payment_charge_id: Optional[str] = None,
+    ) -> Optional[PaymentOrder]:
+        """Отметить заказ оплаченным и один раз начислить кредиты."""
+        order = await self.get_payment_order_by_id(order_id)
+        if order is None:
+            return None
+
+        paid_at = datetime.now(timezone.utc)
+        result = await self.session.execute(
+            update(PaymentOrder)
+            .where(
+                PaymentOrder.id == order_id,
+                PaymentOrder.status != PaymentOrderStatus.PAID.value,
+            )
+            .values(
+                status=PaymentOrderStatus.PAID.value,
+                external_payment_id=external_payment_id,
+                telegram_payment_charge_id=telegram_payment_charge_id,
+                paid_at=paid_at,
+            )
+        )
+        if result.rowcount and result.rowcount > 0:
+            await self.session.execute(
+                update(User)
+                .where(User.id == order.user_id)
+                .values(balance=User.balance + order.credits)
+            )
+
+        await self.session.commit()
+        await self.session.refresh(order)
+        return order
+
+    async def mark_payment_order_failed(
+        self,
+        order_id: Any,
+        reason: Optional[str] = None,
+    ) -> Optional[PaymentOrder]:
+        """Отметить заказ ошибочным, не меняя уже оплаченные заказы."""
+        order = await self.get_payment_order_by_id(order_id)
+        if order is None:
+            return None
+        if order.status == PaymentOrderStatus.PAID.value:
+            return order
+
+        order.status = PaymentOrderStatus.FAILED.value
+        if reason:
+            metadata = dict(order.metadata_ or {})
+            metadata["failure_reason"] = reason
+            order.metadata_ = metadata
+        await self.session.commit()
+        await self.session.refresh(order)
+        return order
+
+    async def get_user_payment_orders(self, user_id: int, limit: int = 10) -> list[PaymentOrder]:
+        """Получить последние платежные заказы пользователя."""
+        result = await self.session.execute(
+            select(PaymentOrder)
+            .where(PaymentOrder.user_id == user_id)
+            .order_by(PaymentOrder.created_at.desc())
+            .limit(limit)
+        )
+        return list(result.scalars().all())
+
+    async def get_payment_order_by_id(self, order_id: Any) -> Optional[PaymentOrder]:
+        """Получить платежный заказ по id."""
+        result = await self.session.execute(
+            select(PaymentOrder).where(PaymentOrder.id == order_id)
+        )
+        return result.scalars().first()
+
+    async def create_crypto_payment_order(
+        self,
+        payment_order_id: Any,
+        *,
+        asset: Optional[str] = None,
+        network: Optional[str] = None,
+        wallet_address: Optional[str] = None,
+        expected_amount: Optional[str] = None,
+        status: str = "draft",
+    ) -> CryptoPaymentOrder:
+        """Создать draft-детали крипто-платежа."""
+        crypto_order = CryptoPaymentOrder(
+            payment_order_id=payment_order_id,
+            asset=asset,
+            network=network,
+            wallet_address=wallet_address,
+            expected_amount=expected_amount,
+            status=status,
+            metadata_={},
+        )
+        self.session.add(crypto_order)
+        await self.session.commit()
+        await self.session.refresh(crypto_order)
+        return crypto_order
 
 
 class DownloadLinkRepository:

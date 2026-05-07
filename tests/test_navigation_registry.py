@@ -70,7 +70,7 @@ class FakeMessage:
 
 class FakeCallback:
     def __init__(self, user_id: int = 1, message: FakeMessage | None = None, data: str = ""):
-        self.from_user = SimpleNamespace(id=user_id)
+        self.from_user = SimpleNamespace(id=user_id, language_code="ru")
         self.message = message or FakeMessage(chat_id=user_id)
         self.data = data
 

@@ -13,6 +13,7 @@ from app.bot.middlewares import DbSessionMiddleware
 from app.bot.routers import (
     errors_router,
     generations_router,
+    payments_router,
     profile_router,
     start_router,
 )
@@ -55,6 +56,7 @@ class TelegramBot:
         self.dp.include_router(errors_router)
         self.dp.include_router(start_router)
         self.dp.include_router(profile_router)
+        self.dp.include_router(payments_router)
         self.dp.include_router(generations_router)
         logger.info("Handlers installed")
 

@@ -21,6 +21,7 @@ from app.bot.keyboards import build_main_menu_keyboard, get_button_text
 from app.bot.states import GenerationStates
 from app.db.base import Base
 from app.db.models import User
+from app.services.payments import PaymentService
 
 
 class FakeState:
@@ -186,6 +187,46 @@ async def test_start_command_persists_telegram_language_code(session_factory) ->
 
         result = await session.execute(select(User.language_code).where(User.id == 706))
         assert result.scalar_one() == "pt-BR"
+
+
+@pytest.mark.asyncio
+async def test_start_paid_payload_checks_payment_without_crediting_pending_order(session_factory) -> None:
+    async with session_factory() as session:
+        session.add(User(id=711, balance=5))
+        await session.commit()
+        order = await PaymentService(session).create_stars_order(user_id=711, stars_amount=100)
+        state = FakeState()
+        message = FakeMessage(user_id=711, text=f"/start paid_{order.payload}")
+
+        await start.start_command(message, state, session, command=SimpleNamespace(args=f"paid_{order.payload}"))
+
+        result = await session.execute(select(User.balance).where(User.id == 711))
+        assert result.scalar_one() == 5
+        assert message.answers == [
+            "Проверяем оплату...",
+            "Платёж пока не подтверждён. Если вы уже оплатили, подождите немного и откройте бота ещё раз.",
+        ]
+
+
+@pytest.mark.asyncio
+async def test_start_paid_payload_reports_confirmed_external_payment(session_factory) -> None:
+    async with session_factory() as session:
+        session.add(User(id=712, balance=5))
+        await session.commit()
+        service = PaymentService(session)
+        order = await service.create_stars_order(user_id=712, stars_amount=100)
+        await service.mark_external_stars_payment_paid(order.payload, "wallet-payment-712")
+        state = FakeState()
+        message = FakeMessage(user_id=712, text=f"/start paid_{order.payload}")
+
+        await start.start_command(message, state, session, command=SimpleNamespace(args=f"paid_{order.payload}"))
+
+        result = await session.execute(select(User.balance).where(User.id == 712))
+        assert result.scalar_one() == 105
+        assert message.answers == [
+            "Проверяем оплату...",
+            "✅ Платёж получен. Добавлено кредитов: 100. Баланс: 105",
+        ]
 
 
 @pytest.mark.asyncio

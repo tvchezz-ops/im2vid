@@ -88,6 +88,26 @@ class Settings(BaseSettings):
         default=45,
         description="Безопасный размер документа для отправки через Telegram Bot API в МБ",
     )
+    telegram_stars_wallet_bot_username: str = Field(
+        default="",
+        description="Username внешнего wallet bot для Telegram Stars без @",
+    )
+    telegram_stars_return_bot_username: str = Field(
+        default="",
+        description="Username текущего бота для возврата из wallet bot без @",
+    )
+    crypto_provider: str = Field(
+        default="",
+        description="Имя будущего crypto payment provider",
+    )
+    crypto_webhook_secret: str = Field(
+        default="",
+        description="Секрет будущих crypto webhook callbacks",
+    )
+    crypto_wallet_btc: str = Field(default="", description="BTC wallet address для будущих crypto payments")
+    crypto_wallet_eth: str = Field(default="", description="ETH wallet address для будущих crypto payments")
+    crypto_wallet_usdt_trc20: str = Field(default="", description="USDT TRC20 wallet address для будущих crypto payments")
+    crypto_wallet_usdt_erc20: str = Field(default="", description="USDT ERC20 wallet address для будущих crypto payments")
     r2_endpoint_url: str = Field(
         default="",
         description="Endpoint URL для Cloudflare R2",
@@ -167,6 +187,14 @@ except Exception as e:
         f"- STORE_OUTPUT_URLS (опционально, по умолчанию false)\n"
         f"- TELEGRAM_MAX_DOCUMENT_SIZE_MB (опционально, по умолчанию 50)\n"
         f"- TELEGRAM_SAFE_DOCUMENT_SIZE_MB (опционально, по умолчанию 45)\n"
+        f"- TELEGRAM_STARS_WALLET_BOT_USERNAME (опционально, для внешнего wallet bot)\n"
+        f"- TELEGRAM_STARS_RETURN_BOT_USERNAME (опционально, для возврата из wallet bot)\n"
+        f"- CRYPTO_PROVIDER (опционально, для будущего crypto provider)\n"
+        f"- CRYPTO_WEBHOOK_SECRET (опционально, для будущих crypto webhooks)\n"
+        f"- CRYPTO_WALLET_BTC (опционально)\n"
+        f"- CRYPTO_WALLET_ETH (опционально)\n"
+        f"- CRYPTO_WALLET_USDT_TRC20 (опционально)\n"
+        f"- CRYPTO_WALLET_USDT_ERC20 (опционально)\n"
         f"- R2_ENDPOINT_URL (опционально, для Cloudflare R2)\n"
         f"- R2_ACCESS_KEY_ID (опционально, для Cloudflare R2)\n"
         f"- R2_SECRET_ACCESS_KEY (опционально, для Cloudflare R2)\n"

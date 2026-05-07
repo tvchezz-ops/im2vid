@@ -1,6 +1,17 @@
 """Инициализация пакета db."""
 from app.db.base import Base, BaseModel
-from app.db.models import DownloadLink, GenerationRequest, GenerationRequestStatus, Payment, User, UserEvent
+from app.db.models import (
+    CryptoPaymentOrder,
+    DownloadLink,
+    GenerationRequest,
+    GenerationRequestStatus,
+    Payment,
+    PaymentOrder,
+    PaymentOrderStatus,
+    PaymentProvider,
+    User,
+    UserEvent,
+)
 from app.db.repositories import (
     DownloadLinkRepository,
     EventRepository,
@@ -18,6 +29,10 @@ __all__ = [
     "GenerationRequestStatus",
     "UserEvent",
     "Payment",
+    "PaymentOrder",
+    "PaymentOrderStatus",
+    "PaymentProvider",
+    "CryptoPaymentOrder",
     "DownloadLink",
     "UserRepository",
     "GenerationRepository",

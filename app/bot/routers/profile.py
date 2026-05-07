@@ -79,11 +79,6 @@ async def back_to_menu(callback: CallbackQuery):
     await callback.answer()
 
 
-@router.callback_query(lambda cb: cb.data == "profile:top_up_balance")
-async def profile_top_up_balance(callback: CallbackQuery) -> None:
-    await callback.answer(t("profile.top_up_soon", get_user_language(getattr(callback.from_user, "language_code", None))), show_alert=True)
-
-
 @router.callback_query(lambda cb: cb.data == "profile:toggle_delivery_mode")
 async def toggle_delivery_mode(callback: CallbackQuery, session: AsyncSession):
     """Переключить способ отправки результатов и обновить экран профиля."""

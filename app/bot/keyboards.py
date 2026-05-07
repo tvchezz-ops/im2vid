@@ -6,6 +6,7 @@ from typing import Any, Iterable, Sequence
 from aiogram.types import InlineKeyboardButton, InlineKeyboardMarkup, KeyboardButton, ReplyKeyboardMarkup
 
 from app.i18n import get_user_language, t
+from app.services.payments import ALLOWED_STARS_AMOUNTS
 from app.services.generation_service import list_generation_types, list_providers
 
 
@@ -30,6 +31,8 @@ BUTTON_ICONS = {
     "common.change_settings": "⚙️",
     "profile.top_up": "💳",
     "profile.toggle_delivery": "📎",
+    "payments.back_to_profile": "⬅️",
+    "payments.pay_here": "⭐",
     "generation.text_to_image": "🖼",
     "generation.text_to_video": "🎬",
     "generation.image_edit": "🛠",
@@ -364,5 +367,61 @@ def get_profile_keyboard(*, send_results_as_files: bool, lang: str = "en") -> In
             [InlineKeyboardButton(text=get_button_text("profile.top_up", lang), callback_data="profile:top_up_balance")],
             [InlineKeyboardButton(text=get_button_text("profile.toggle_delivery", lang), callback_data="profile:toggle_delivery_mode")],
             [InlineKeyboardButton(text=get_button_text("common.back", lang), callback_data="back_to_menu")],
+        ]
+    )
+
+
+def build_stars_top_up_keyboard(lang: str = "en") -> InlineKeyboardMarkup:
+    """Клавиатура выбора пакета Telegram Stars."""
+    rows = [
+        [
+            InlineKeyboardButton(
+                text=f"{amount} ⭐",
+                callback_data=validate_callback_length(f"pay:stars:{amount}"),
+            )
+        ]
+        for amount in ALLOWED_STARS_AMOUNTS
+    ]
+    rows.append(
+        [
+            InlineKeyboardButton(
+                text=t("payments.crypto", lang),
+                callback_data="pay:crypto",
+            )
+        ]
+    )
+    rows.append(
+        [
+            InlineKeyboardButton(
+                text=get_button_text("payments.back_to_profile", lang),
+                callback_data="pay:back:profile",
+            )
+        ]
+    )
+    return InlineKeyboardMarkup(inline_keyboard=rows)
+
+
+def build_stars_payment_method_keyboard(
+    *,
+    order_id: str,
+    wallet_payment_url: str,
+    lang: str = "en",
+) -> InlineKeyboardMarkup:
+    """Клавиатура выбора внешнего wallet bot или invoice в текущем боте."""
+    return InlineKeyboardMarkup(
+        inline_keyboard=[
+            [InlineKeyboardButton(text=t("payments.open_wallet_bot", lang), url=wallet_payment_url)],
+            [
+                InlineKeyboardButton(
+                    text=get_button_text("payments.pay_here", lang),
+                    callback_data=validate_callback_length(f"pay:invoice:{order_id}"),
+                )
+            ],
+            [
+                InlineKeyboardButton(
+                    text=get_button_text("payments.back_to_profile", lang),
+                    callback_data="pay:back:profile",
+                )
+            ],
         ]
     )
