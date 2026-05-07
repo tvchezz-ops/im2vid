@@ -5,6 +5,7 @@ from aiogram import Router
 from aiogram.types import ErrorEvent
 
 from app.bot.keyboards import get_main_menu_keyboard
+from app.i18n import get_user_language, t
 from app.utils import get_friendly_error_message, logger
 
 
@@ -23,17 +24,19 @@ async def global_error_handler(event: ErrorEvent):
 
     try:
         if callback_query is not None:
+            lang = get_user_language(getattr(callback_query.from_user, "language_code", None))
             try:
-                await callback_query.answer("Произошла ошибка", show_alert=False)
+                await callback_query.answer(t("errors.internal", lang), show_alert=False)
             except Exception:
                 pass
             target_message = callback_query.message
             if target_message is not None:
-                await target_message.answer(user_message, reply_markup=get_main_menu_keyboard())
+                await target_message.answer(user_message, reply_markup=get_main_menu_keyboard(lang))
                 return True
 
         if message is not None:
-            await message.answer(user_message, reply_markup=get_main_menu_keyboard())
+            lang = get_user_language(getattr(message.from_user, "language_code", None))
+            await message.answer(user_message, reply_markup=get_main_menu_keyboard(lang))
             return True
     except Exception:
         logger.exception("Failed to send friendly error message to user")

@@ -125,13 +125,13 @@ def test_build_generation_confirm_keyboard_uses_new_callbacks() -> None:
 
 
 def test_build_back_to_settings_reply_keyboard_uses_expected_text() -> None:
-    keyboard = build_back_to_settings_reply_keyboard()
+    keyboard = build_back_to_settings_reply_keyboard("ru")
 
     assert keyboard.keyboard[0][0].text == "⬅️ Назад к настройкам"
 
 
 def test_build_main_menu_keyboard_uses_expected_layout() -> None:
-    keyboard = build_main_menu_keyboard()
+    keyboard = build_main_menu_keyboard("ru")
 
     assert keyboard.keyboard[0][0].text == "🎨 Генерации"
     assert keyboard.keyboard[1][0].text == "👤 Профиль"

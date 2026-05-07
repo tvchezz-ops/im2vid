@@ -4,7 +4,7 @@ from __future__ import annotations
 from datetime import datetime, timezone
 from typing import Any, Optional
 
-from sqlalchemy import delete, select, update
+from sqlalchemy import delete, func, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.db.models import DownloadLink, GenerationRequest, GenerationRequestStatus, Payment, User, UserEvent
@@ -28,7 +28,7 @@ class UserRepository:
         user.username = telegram_user.username
         user.first_name = telegram_user.first_name
         user.last_name = telegram_user.last_name
-        user.language_code = telegram_user.language_code
+        user.language_code = getattr(telegram_user, "language_code", None)
         user.is_bot = telegram_user.is_bot
         user.is_premium = getattr(telegram_user, "is_premium", None)
         user.last_seen_at = datetime.now(timezone.utc)
@@ -52,6 +52,16 @@ class UserRepository:
     async def get_user_profile(self, user_id: int) -> Optional[User]:
         """Получить профиль пользователя."""
         return await self.get_by_id(user_id)
+
+    async def get_total_spent_credits(self, user_id: int) -> int:
+        """Получить сумму кредитов по завершённым генерациям пользователя."""
+        result = await self.session.execute(
+            select(func.coalesce(func.sum(GenerationRequest.cost), 0)).where(
+                GenerationRequest.user_id == user_id,
+                GenerationRequest.status == GenerationRequestStatus.COMPLETED,
+            )
+        )
+        return int(result.scalar_one() or 0)
 
     async def get_user_delivery_preference(self, user_id: int) -> bool:
         """Получить флаг отправки результатов файлами."""
@@ -104,7 +114,7 @@ class UserRepository:
         username: Optional[str] = None,
         first_name: Optional[str] = None,
         last_name: Optional[str] = None,
-        language_code: str = "en",
+        language_code: Optional[str] = None,
     ) -> User:
         """Создать или обновить пользователя."""
         existing = await self.get_by_telegram_id(telegram_id)

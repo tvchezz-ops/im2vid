@@ -18,7 +18,7 @@ os.environ.setdefault("PUBLIC_BASE_URL", "https://example.com")
 
 
 from app.bot.routers import generations
-from app.bot.keyboards import build_main_menu_keyboard
+from app.bot.keyboards import build_main_menu_keyboard, get_button_text
 from app.db.base import Base
 from app.db.models import GenerationRequest, GenerationRequestStatus, User
 from app.db.repositories import GenerationRepository, UserRepository
@@ -112,31 +112,34 @@ class FakeBot:
         self.messages: list[str] = []
         self.message_markups: list[object] = []
 
-    async def send_document(self, chat_id, document, caption=None, request_timeout=None):
+    async def send_document(self, chat_id, document, caption=None, reply_markup=None, request_timeout=None):
         self.documents.append(
             {
                 "chat_id": chat_id,
                 "document": document,
                 "caption": caption,
+                "reply_markup": reply_markup,
                 "request_timeout": request_timeout,
             }
         )
 
-    async def send_photo(self, chat_id, photo, caption=None):
+    async def send_photo(self, chat_id, photo, caption=None, reply_markup=None):
         self.photos.append(
             {
                 "chat_id": chat_id,
                 "photo": photo,
                 "caption": caption,
+                "reply_markup": reply_markup,
             }
         )
 
-    async def send_video(self, chat_id, video, caption=None, request_timeout=None):
+    async def send_video(self, chat_id, video, caption=None, reply_markup=None, request_timeout=None):
         self.videos.append(
             {
                 "chat_id": chat_id,
                 "video": video,
                 "caption": caption,
+                "reply_markup": reply_markup,
                 "request_timeout": request_timeout,
             }
         )
@@ -195,8 +198,8 @@ async def test_show_generation_menu_starts_with_generation_type_selection() -> N
     await generations.show_generation_menu(message, state)
 
     assert state.state == GenerationStates.choosing_generation_type
-    assert "Выберите тип генерации:" in message.answers[-1]
-    assert "Text → Video" in message.answers[-1]
+    assert "Choose generation type:" in message.answers[-1]
+    assert "Text to Video" in message.answers[-1]
     keyboard = message.answer_markups[-1]
     callback_data = [row[0].callback_data for row in keyboard.inline_keyboard[:-1]]
     assert "gen:section:lipsync" not in callback_data
@@ -486,6 +489,33 @@ async def test_send_confirmation_screen_shows_lipsync_incomplete_error(session_f
 
 
 @pytest.mark.asyncio
+async def test_send_confirmation_screen_falls_back_to_english_language(session_factory) -> None:
+    async with session_factory() as session:
+        state = FakeState(
+            {
+                "model_key": "nano_banana",
+                "model_generation_type": "image_edit",
+                "prompt": "Make the image brighter and keep the subject intact",
+                "input_media": {"type": "image", "file_id": "telegram-file-id"},
+                "user_settings": {"aspect_ratio": "1:1", "resolution": "4k", "output_format": "png", "num_generations": "1"},
+            }
+        )
+        message = FakeMessage(chat_id=412)
+        message.from_user.language_code = None
+
+        await generations.send_confirmation_screen(
+            message=message,
+            state=state,
+            session=session,
+            telegram_user=message.from_user,
+            edit=False,
+        )
+
+        assert state.data["user_language"] == "en"
+        assert message.answer_markups[-1].inline_keyboard[0][0].text == get_button_text("generation.confirm", "en")
+
+
+@pytest.mark.asyncio
 async def test_process_generation_image_saves_lipsync_video_as_input_media() -> None:
     state = FakeState({"model_generation_type": "lipsync"})
     message = FakeMessage(chat_id=408)
@@ -764,7 +794,7 @@ async def test_back_to_settings_from_waiting_for_prompt_without_model_shows_sect
 
 
 @pytest.mark.asyncio
-async def test_send_generation_outputs_restores_main_menu_keyboard(monkeypatch, tmp_path) -> None:
+async def test_send_generation_outputs_keeps_main_menu_keyboard_without_menu_message(monkeypatch, tmp_path) -> None:
     output_path = tmp_path / "output.jpg"
     output_path.write_bytes(b"image")
 
@@ -777,8 +807,8 @@ async def test_send_generation_outputs_restores_main_menu_keyboard(monkeypatch, 
     delivered = await generations.send_generation_outputs(bot, 1, ["https://example.com/output.jpg"])
 
     assert delivered.delivered_successfully is True
-    assert bot.messages[-1] == "🏠 Главное меню"
-    assert bot.message_markups[-1].keyboard[0][0].text == "🎨 Генерации"
+    assert "🏠 Главное меню" not in bot.messages
+    assert bot.photos[-1]["reply_markup"].keyboard[0][0].text == get_button_text("main.generations", "en")
 
 
 @pytest.mark.asyncio
@@ -1092,7 +1122,7 @@ async def test_insufficient_balance_does_not_start_submit(session_factory, monke
         await generations.confirm_generation(callback, state, session)
 
         assert called is False
-        assert callback.message.answers[-1] == "❌ Ошибка E006: Недостаточно кредитов. Нужно 4, у вас 0."
+        assert callback.message.answers[-1] == "❌ Ошибка E006: недостаточно кредитов. Нужно 4, у вас 0."
         assert await get_user_balance(session, 401) == 0
 
 
@@ -1106,9 +1136,9 @@ def test_build_confirmation_text_shows_num_generations_and_total_cost() -> None:
         balance=10,
     )
 
-    assert "Количество генераций: <code>4</code>" in text
-    assert "Стоимость: 4 кредитов" in text
-    assert "Баланс после запуска: <code>6</code>" in text
+    assert "Generation count: <code>4</code>" in text
+    assert "Cost: 4 credits" in text
+    assert "Balance after launch: <code>6</code>" in text
 
 
 @pytest.mark.asyncio
@@ -1269,7 +1299,7 @@ async def test_batch_failure_refunds_only_one_credit_and_cleans_up_after_all_tas
     assert len(submit_calls) == 4
     assert len(delivery_calls) == 3
     assert temp_input_path.exists() is False
-    assert bot.messages.count("❌ Ошибка E007: одна из генераций не удалась. 1 кредит возвращён.") == 1
+    assert bot.messages.count("❌ Error E007: one of the generations failed. 1 credit was refunded.") == 1
 
 
 @pytest.mark.asyncio
@@ -1421,7 +1451,7 @@ async def test_send_generation_outputs_notifies_when_file_too_large(monkeypatch,
 
     assert delivered.delivered_successfully is False
     assert delivered.use_r2 is True
-    assert bot.messages[-1] == "❌ Не удалось загрузить файл. Попробуйте ещё раз позже"
+    assert bot.messages[-1] == "Could not upload the file. Please try again later"
     assert bot.documents == []
 
 
@@ -1441,7 +1471,7 @@ async def test_send_generation_outputs_returns_use_r2_for_files_over_safe_limit(
     assert delivered.delivered_successfully is False
     assert delivered.use_r2 is True
     assert bot.documents == []
-    assert bot.messages[-1] == "❌ Не удалось загрузить файл. Попробуйте ещё раз позже"
+    assert bot.messages[-1] == "Could not upload the file. Please try again later"
 
 
 @pytest.mark.asyncio
@@ -1489,11 +1519,11 @@ async def test_send_generation_outputs_uses_r2_fallback_when_configured(monkeypa
     assert delivered.use_r2 is True
     assert bot.documents == []
     assert bot.messages[-1] == (
-        "⚠️ Файл слишком большой для Telegram.\n\n"
-        "Мы загрузили его в защищённое облачное хранилище Cloudflare R2.\n\n"
-        "🔗 Скачать файл:\nhttps://example.com/d/abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMN\n\n"
-        "🔒 Ссылка временная и безопасная. Она действует 30 минут.\n\n"
-        "Если сомневаетесь, можете проверить ссылку через любой AI, онлайн-анализатор ссылок или открыть её в браузере."
+        "⚠️ File is too large for Telegram\n\n"
+        "Uploaded to secure Cloudflare R2 storage\n\n"
+        "🔗 Download file:\nhttps://example.com/d/abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMN\n\n"
+        "🔒 Safe link\n\n"
+        "If you are unsure, you can inspect the link with any AI, an online link analyzer, or open it in a browser."
     )
 
 
@@ -1505,11 +1535,11 @@ async def test_send_document_with_retry_retries_network_errors(monkeypatch, tmp_
     attempts = {"count": 0}
     sleep_calls: list[int] = []
 
-    async def flaky_send_document(chat_id, document, caption=None, request_timeout=None):
+    async def flaky_send_document(chat_id, document, caption=None, reply_markup=None, request_timeout=None):
         attempts["count"] += 1
         if attempts["count"] < 4:
             raise TimeoutError("timeout")
-        await FakeBot.send_document(bot, chat_id, document, caption, request_timeout)
+        await FakeBot.send_document(bot, chat_id, document, caption, reply_markup, request_timeout)
 
     async def fake_sleep(seconds: int):
         sleep_calls.append(seconds)
@@ -1534,7 +1564,7 @@ async def test_send_generation_outputs_deletes_temp_file_only_after_document_sen
     async def fake_download_output_file_to_temp(output_url: str):
         return str(output_path), "image/jpeg", 5
 
-    async def fake_send_document_with_retry(*, bot, chat_id: int, file_path: str, caption=None):
+    async def fake_send_document_with_retry(*, bot, chat_id: int, file_path: str, caption=None, reply_markup=None):
         captured["exists_during_send"] = Path(file_path).exists()
 
     async def fake_get_user_send_results_as_files(user_id: int) -> bool:
@@ -1620,10 +1650,10 @@ async def test_send_generation_outputs_uses_r2_after_telegram_delivery_failure(m
     async def fake_download_output_file_to_temp(output_url: str):
         return str(output_path), "image/jpeg", 5
 
-    async def fake_send_document_with_retry(*, bot, chat_id: int, file_path: str, caption=None):
+    async def fake_send_document_with_retry(*, bot, chat_id: int, file_path: str, caption=None, reply_markup=None):
         raise ConnectionResetError("delivery failed")
 
-    async def fake_send_photo_output(*, bot, chat_id: int, file_path: str):
+    async def fake_send_photo_output(*, bot, chat_id: int, file_path: str, reply_markup=None):
         raise TelegramBadRequest("photo failed")
 
     class FakeR2StorageService:
@@ -1665,11 +1695,11 @@ async def test_send_generation_outputs_uses_r2_after_telegram_delivery_failure(m
     assert delivered.use_r2 is True
     assert bot.documents == []
     assert bot.messages[-1] == (
-        "⚠️ Файл слишком большой для Telegram.\n\n"
-        "Мы загрузили его в защищённое облачное хранилище Cloudflare R2.\n\n"
-        "🔗 Скачать файл:\nhttps://example.com/d/retry-fallback-token\n\n"
-        "🔒 Ссылка временная и безопасная. Она действует 30 минут.\n\n"
-        "Если сомневаетесь, можете проверить ссылку через любой AI, онлайн-анализатор ссылок или открыть её в браузере."
+        "⚠️ File is too large for Telegram\n\n"
+        "Uploaded to secure Cloudflare R2 storage\n\n"
+        "🔗 Download file:\nhttps://example.com/d/retry-fallback-token\n\n"
+        "🔒 Safe link\n\n"
+        "If you are unsure, you can inspect the link with any AI, an online link analyzer, or open it in a browser."
     )
 
 
@@ -1697,7 +1727,7 @@ async def test_send_generation_outputs_reports_error_when_r2_upload_fails(monkey
     assert delivered.delivered_successfully is False
     assert delivered.use_r2 is True
     assert bot.documents == []
-    assert bot.messages[-1] == "❌ Не удалось загрузить файл. Попробуйте ещё раз позже"
+    assert bot.messages[-1] == "Could not upload the file. Please try again later"
 
 
 @pytest.mark.asyncio
@@ -1737,7 +1767,7 @@ async def test_send_generation_outputs_reports_error_when_r2_returns_empty_url(m
     assert delivered.delivered_successfully is False
     assert delivered.use_r2 is True
     assert bot.documents == []
-    assert bot.messages[-1] == "❌ Не удалось загрузить файл. Попробуйте ещё раз позже"
+    assert bot.messages[-1] == "Could not upload the file. Please try again later"
 
 
 @pytest.mark.asyncio
@@ -1748,10 +1778,10 @@ async def test_send_generation_outputs_reports_plain_message_when_telegram_deliv
     async def fake_download_output_file_to_temp(output_url: str):
         return str(output_path), "image/jpeg", 5
 
-    async def fake_send_document_with_retry(*, bot, chat_id: int, file_path: str, caption=None):
+    async def fake_send_document_with_retry(*, bot, chat_id: int, file_path: str, caption=None, reply_markup=None):
         raise TimeoutError("delivery failed")
 
-    async def fake_send_photo_output(*, bot, chat_id: int, file_path: str):
+    async def fake_send_photo_output(*, bot, chat_id: int, file_path: str, reply_markup=None):
         raise TelegramBadRequest("photo failed")
 
     bot = FakeBot()
@@ -1764,7 +1794,7 @@ async def test_send_generation_outputs_reports_plain_message_when_telegram_deliv
     assert delivered.delivered_successfully is False
     assert delivered.use_r2 is False
     assert bot.documents == []
-    assert bot.messages[-1] == "Файл готов, но Telegram не смог его доставить"
+    assert bot.messages[-1] == "The file is ready, but Telegram could not deliver it"
 
 
 @pytest.mark.asyncio
@@ -1936,7 +1966,7 @@ async def test_send_generation_outputs_falls_back_from_photo_to_document(monkeyp
     async def fake_get_user_send_results_as_files(user_id: int) -> bool:
         return False
 
-    async def failing_send_photo(chat_id, photo, caption=None):
+    async def failing_send_photo(chat_id, photo, caption=None, reply_markup=None):
         raise TelegramBadRequest("photo failed")
 
     bot = FakeBot()
@@ -1961,7 +1991,7 @@ async def test_send_generation_outputs_falls_back_from_video_to_document(monkeyp
     async def fake_get_user_send_results_as_files(user_id: int) -> bool:
         return False
 
-    async def failing_send_video(chat_id, video, caption=None, request_timeout=None):
+    async def failing_send_video(chat_id, video, caption=None, reply_markup=None, request_timeout=None):
         raise TelegramBadRequest("video failed")
 
     bot = FakeBot()

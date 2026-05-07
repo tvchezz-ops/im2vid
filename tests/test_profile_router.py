@@ -14,6 +14,7 @@ os.environ.setdefault("PUBLIC_BASE_URL", "https://example.com")
 
 
 from app.bot.routers import profile
+from app.bot.keyboards import get_button_text
 from app.bot.states import GenerationStates
 from app.db.base import Base
 
@@ -96,9 +97,20 @@ async def test_show_profile_displays_delivery_mode_and_toggle_button(session_fac
 
         await profile.show_profile(message, state, session)
 
-        assert "Способ отправки: Обычный формат" in message.answers[-1]
+        assert message.answers[-1].startswith("👤 <b>Профиль</b>")
+        assert "Username" not in message.answers[-1]
+        assert "Имя" not in message.answers[-1]
+        assert "Язык" not in message.answers[-1]
+        assert "Premium" not in message.answers[-1]
+        assert "Дата регистрации" not in message.answers[-1]
+        assert "Последняя активность" not in message.answers[-1]
+        assert "📦 Способ отправки: Обычный формат" in message.answers[-1]
+        assert "💰 Потрачено кредитов: 0" in message.answers[-1]
         keyboard = message.answer_markups[-1]
-        assert keyboard.inline_keyboard[0][0].text == "📎 Отправлять файлом"
+        assert keyboard.inline_keyboard[0][0].text == "💳 Пополнить баланс"
+        assert keyboard.inline_keyboard[1][0].text == "📎 Переключить способ отправки"
+        assert keyboard.inline_keyboard[2][0].text == "📜 История генераций"
+        assert keyboard.inline_keyboard[3][0].text == "⬅️ Назад"
 
 
 @pytest.mark.asyncio
@@ -110,6 +122,19 @@ async def test_toggle_delivery_mode_updates_profile_message(session_factory) -> 
         await profile.toggle_delivery_mode(callback, session)
 
         assert callback.answers[-1] == "Настройка обновлена"
-        assert "Способ отправки: Файлом без сжатия" in message.edits[-1]
+        assert "📦 Способ отправки: Файлом без сжатия" in message.edits[-1]
         keyboard = message.edit_markups[-1]
-        assert keyboard.inline_keyboard[0][0].text == "🖼 Отправлять обычным форматом"
+        assert keyboard.inline_keyboard[1][0].text == "📎 Переключить способ отправки"
+
+
+@pytest.mark.asyncio
+async def test_show_profile_falls_back_to_english_when_language_code_missing(session_factory) -> None:
+    async with session_factory() as session:
+        state = FakeState()
+        message = FakeMessage(user_id=603)
+        message.from_user.language_code = None
+
+        await profile.show_profile(message, state, session)
+
+        keyboard = message.answer_markups[-1]
+        assert keyboard.inline_keyboard[0][0].text == get_button_text("profile.top_up", "en")

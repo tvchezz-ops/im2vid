@@ -7,6 +7,7 @@ from types import SimpleNamespace
 
 import pytest
 import pytest_asyncio
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 
 
@@ -16,9 +17,10 @@ os.environ.setdefault("PUBLIC_BASE_URL", "https://example.com")
 
 
 from app.bot.routers import generations, profile, shop, start
-from app.bot.keyboards import build_main_menu_keyboard
+from app.bot.keyboards import build_main_menu_keyboard, get_button_text
 from app.bot.states import GenerationStates
 from app.db.base import Base
+from app.db.models import User
 
 
 class FakeState:
@@ -44,7 +46,7 @@ class FakeState:
 
 
 class FakeMessage:
-    def __init__(self, user_id: int = 1, text: str | None = None):
+    def __init__(self, user_id: int = 1, text: str | None = None, language_code: str | None = "ru"):
         self.chat = SimpleNamespace(id=user_id)
         self.bot = object()
         self.from_user = SimpleNamespace(
@@ -52,7 +54,7 @@ class FakeMessage:
             username="tester",
             first_name="Test",
             last_name=None,
-            language_code="ru",
+            language_code=language_code,
             is_bot=False,
             is_premium=False,
         )
@@ -65,11 +67,11 @@ class FakeMessage:
         self.answer_markups.append(reply_markup)
 
 
-def _assert_main_menu_keyboard(markup) -> None:
+def _assert_main_menu_keyboard(markup, lang: str = "ru") -> None:
     assert markup is not None
-    assert markup.keyboard[0][0].text == "🎨 Генерации"
-    assert markup.keyboard[1][0].text == "👤 Профиль"
-    assert markup.keyboard[1][1].text == "🛒 Магазин"
+    assert markup.keyboard[0][0].text == get_button_text("main.generations", lang)
+    assert markup.keyboard[1][0].text == get_button_text("main.profile", lang)
+    assert markup.keyboard[1][1].text == get_button_text("main.shop", lang)
 
 
 @pytest_asyncio.fixture
@@ -130,7 +132,7 @@ async def test_cancel_command_resets_generation_flow_and_shows_main_menu(session
         assert state.state is None
         assert state.data == {}
         assert message.answers[0] == "Сценарий генерации сброшен. Вы вернулись в главное меню."
-        assert message.answers[1] == "🏠 Главное меню"
+        assert message.answers[1] == "Выберите нужный раздел."
         _assert_main_menu_keyboard(message.answer_markups[0])
         _assert_main_menu_keyboard(message.answer_markups[1])
 
@@ -148,6 +150,44 @@ async def test_start_command_always_shows_main_menu(session_factory) -> None:
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("language_code", "expected_lang", "expected_greeting"),
+    [
+        ("ru", "ru", "Привет"),
+        ("en", "en", "Hi"),
+        ("xx", "en", "Hi"),
+    ],
+)
+async def test_start_command_uses_localized_main_menu(
+    session_factory,
+    language_code: str,
+    expected_lang: str,
+    expected_greeting: str,
+) -> None:
+    async with session_factory() as session:
+        state = FakeState()
+        message = FakeMessage(user_id=710, text="/start", language_code=language_code)
+
+        await start.start_command(message, state, session)
+
+        assert expected_greeting in message.answers[-1]
+        _assert_main_menu_keyboard(message.answer_markups[-1], expected_lang)
+
+
+@pytest.mark.asyncio
+async def test_start_command_persists_telegram_language_code(session_factory) -> None:
+    async with session_factory() as session:
+        state = FakeState()
+        message = FakeMessage(user_id=706, text="/start")
+        message.from_user.language_code = "pt-BR"
+
+        await start.start_command(message, state, session)
+
+        result = await session.execute(select(User.language_code).where(User.id == 706))
+        assert result.scalar_one() == "pt-BR"
+
+
+@pytest.mark.asyncio
 async def test_menu_command_always_shows_main_menu(session_factory) -> None:
     async with session_factory() as session:
         state = FakeState()
@@ -155,7 +195,7 @@ async def test_menu_command_always_shows_main_menu(session_factory) -> None:
 
         await start.menu_command(message, state, session)
 
-        assert message.answers[-1] == "🏠 Главное меню"
+        assert message.answers[-1] == "Выберите нужный раздел."
         _assert_main_menu_keyboard(message.answer_markups[-1])
 
 
@@ -177,7 +217,7 @@ async def test_generations_button_resets_generation_flow_before_opening_menu() -
 @pytest.mark.parametrize(
     ("label", "handler", "expected_text"),
     [
-        ("👤 Профиль", profile.show_profile, "👤 <b>Ваш профиль</b>"),
+        ("👤 Профиль", profile.show_profile, "👤 <b>Профиль</b>"),
         ("🛒 Магазин", shop.show_shop, "🛍 <b>Магазин</b>"),
     ],
 )
@@ -192,10 +232,7 @@ async def test_main_menu_buttons_reset_generation_flow_before_navigation(
         state.state = GenerationStates.waiting_for_prompt
         message = FakeMessage(user_id=703, text=label)
 
-        if handler is profile.show_profile:
-            await handler(message, state, session)
-        else:
-            await handler(message, state)
+        await handler(message, state, session)
 
         assert state.state is None
         assert state.data == {}

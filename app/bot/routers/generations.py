@@ -32,12 +32,14 @@ from app.bot.keyboards import (
     build_provider_keyboard,
     build_setting_options_keyboard,
     get_main_menu_keyboard,
+    is_localized_button_text,
     resolve_model_key_from_token,
 )
 from app.bot.states import GenerationStates
 from app.config import settings
 from app.db import GenerationRepository, UserRepository
 from app.db.session import db_manager
+from app.i18n import get_user_language, t
 from app.services.generation_service import (
     GenerationModel,
     build_payload,
@@ -68,6 +70,24 @@ from app.utils import (
 
 
 router = Router()
+
+
+def get_actor_language(actor: Any) -> str:
+    return get_user_language(getattr(actor, "language_code", None))
+
+
+def get_user_preferred_language(user: Any | None = None, actor: Any | None = None) -> str:
+    if user is not None:
+        return get_user_language(getattr(user, "language_code", None))
+    return get_actor_language(actor)
+
+
+def get_state_language(state_data: dict[str, Any], actor: Any | None = None, user: Any | None = None) -> str:
+    if user is not None:
+        return get_user_preferred_language(user)
+    if state_data.get("user_language"):
+        return get_user_language(str(state_data.get("user_language")))
+    return get_actor_language(actor)
 
 ACTIVE_GENERATIONS: Dict[int, Dict[str, Any]] = {}
 POLL_TIMEOUT_SECONDS = 600
@@ -119,15 +139,15 @@ class ErrorCode:
     E012_MEDIA_UPLOAD_FAILED = "E012"
 
 
-def format_user_error(code: str, message: str) -> str:
-    return f"❌ Ошибка {code}: {message}"
+def format_user_error(code: str, message: str, lang: str = "en") -> str:
+    return t("errors.formatted", lang, code=code, message=message)
 
 
 @dataclass(frozen=True)
 class FlowTexts:
     initial_prompt: str
     second_step_prompt: str = ""
-    missing_prompt: str = "требуется текстовый prompt."
+    missing_prompt: str = ""
     missing_media: str = ""
     invalid_media: str = ""
     invalid_specific_media: str = ""
@@ -139,40 +159,6 @@ class OutputDeliveryResult:
     use_r2: bool = False
 
 
-FLOW_TEXTS = {
-    "text_to_image": FlowTexts(
-        initial_prompt="Опишите изображение, которое хотите создать.",
-    ),
-    "text_to_video": FlowTexts(
-        initial_prompt="Опишите видео, которое хотите создать.",
-    ),
-    "image_edit": FlowTexts(
-        initial_prompt="Отправьте изображение, которое хотите изменить. После этого бот попросит текстовое описание.",
-        second_step_prompt="Теперь отправьте текстовое описание.",
-        missing_media="требуется изображение.",
-        invalid_media="нужно отправить изображение.",
-        invalid_specific_media="Нужно отправить изображение, не видео.",
-    ),
-    "image_to_video": FlowTexts(
-        initial_prompt="Отправьте изображение, которое хотите анимировать. После этого бот попросит текстовое описание.",
-        second_step_prompt="Теперь отправьте текстовое описание.",
-        missing_media="требуется изображение.",
-        invalid_media="нужно отправить изображение.",
-        invalid_specific_media="Нужно отправить изображение, не видео.",
-    ),
-    "video_edit": FlowTexts(
-        initial_prompt="Отправьте видео, которое хотите изменить. После этого бот попросит текстовое описание.",
-        second_step_prompt="Теперь отправьте текстовое описание.",
-        missing_media="требуется видео.",
-        invalid_media="нужно отправить видео.",
-        invalid_specific_media="Нужно отправить видео, не изображение.",
-    ),
-    "lipsync": FlowTexts(
-        initial_prompt="Вы выбрали Lipsync.\nОтправьте фото или видео, затем текст или голос для озвучки.",
-        second_step_prompt="Теперь отправьте текст или голосовое сообщение для озвучки.",
-    ),
-}
-
 GENERATION_TYPE_LABELS = {
     "text_to_image": "🖼 Text → Image",
     "text_to_video": "🎬 Text → Video",
@@ -183,30 +169,20 @@ GENERATION_TYPE_LABELS = {
     "all": "📚 All models",
 }
 
-GENERATION_TYPE_TITLES = {
-    "text_to_image": "Text → Image",
-    "text_to_video": "Text → Video",
-    "image_edit": "Image Edit",
-    "image_to_video": "Image → Video",
-    "video_edit": "Video Edit",
-    "lipsync": "Lipsync (озвучка лица)",
-}
-
-GENERATION_TYPE_DESCRIPTIONS = {
-    "text_to_image": "Создание изображения по тексту",
-    "text_to_video": "Создание видео по тексту",
-    "image_edit": "Редактирование или преобразование изображения",
-    "image_to_video": "Анимация изображения в видео",
-    "video_edit": "Преобразование или стилизация видео",
-    "lipsync": "Анимация лица под аудио или текст",
-}
-
 PROVIDER_LABELS = {
     "alibaba": "Alibaba",
     "openai": "OpenAI",
     "bytedance": "ByteDance",
     "google": "Google",
 }
+
+
+def get_generation_type_title(generation_type: str, lang: str) -> str:
+    return t(f"generation.section_title.{generation_type}", lang)
+
+
+def get_generation_type_description(generation_type: str, lang: str) -> str:
+    return t(f"generation.section_details.{generation_type}", lang)
 
 
 def extract_prediction_id(payload: Dict[str, Any]) -> Optional[str]:
@@ -243,7 +219,7 @@ def extract_output_urls(payload: Dict[str, Any]) -> list[str]:
 def format_generation_settings(model: GenerationModel, user_settings: dict[str, Any]) -> str:
     """Форматировать список текущих настроек модели."""
     if not model.user_settings:
-        return "—"
+        return "-"
     return "\n".join(
         f"- <b>{escape(setting.title)}</b>: <code>{escape(str(user_settings.get(setting.key, setting.default)))}</code>"
         for setting in model.user_settings.values()
@@ -254,39 +230,39 @@ def get_total_generation_cost(model: GenerationModel, user_settings: dict[str, A
     return GENERATION_COST * get_model_num_generations(model, user_settings)
 
 
-def build_settings_text(model: GenerationModel, user_settings: dict[str, Any]) -> str:
+def build_settings_text(model: GenerationModel, user_settings: dict[str, Any], lang: str = "en") -> str:
     """Собрать экран настроек модели."""
     if not model.user_settings:
         return (
-            f"Настройки модели: <b>{escape(model.title)}</b>\n\n"
-            "У этой модели нет дополнительных настроек. Можно продолжить."
+            f"{t('generation.settings_header', lang, model=escape(model.title))}\n\n"
+            f"{t('generation.settings_no_extra_full', lang)}"
         )
     return (
-        f"Настройки модели: <b>{escape(model.title)}</b>\n\n"
-        f"Выберите параметры или нажмите Продолжить.\n\n"
-        f"Текущие значения:\n{format_generation_settings(model, user_settings)}"
+        f"{t('generation.settings_header', lang, model=escape(model.title))}\n\n"
+        f"{t('generation.settings_choose', lang)}\n\n"
+        f"{t('generation.settings_current', lang, values=format_generation_settings(model, user_settings))}"
     )
 
 
-def build_setting_value_text(model: GenerationModel, setting_key: str, current_value: str) -> str:
+def build_setting_value_text(model: GenerationModel, setting_key: str, current_value: str, lang: str = "en") -> str:
     """Собрать экран выбора конкретной настройки."""
     setting = model.user_settings[setting_key]
     if setting.type == "text":
         description_block = f"\n\n{escape(setting.description)}" if setting.description else ""
         return (
-            f"Настройки модели: <b>{escape(model.title)}</b>\n\n"
-            f"Параметр: <b>{escape(setting.title)}</b>\n"
-            f"Текущее значение: <code>{escape(current_value)}</code>\n\n"
-            f"Отправьте новое текстовое значение сообщением. Отправьте <code>-</code>, чтобы очистить поле.{description_block}"
+            f"{t('generation.settings_header', lang, model=escape(model.title))}\n\n"
+            f"{t('generation.setting_parameter', lang, parameter=escape(setting.title))}\n"
+            f"{t('generation.setting_current_value', lang, value=escape(current_value))}\n\n"
+            f"{t('generation.setting_send_text', lang, description=description_block)}"
         )
     options = "\n".join(f"• <code>{escape(option.value)}</code>" for option in setting.options)
     return (
-        f"Настройки модели: <b>{escape(model.title)}</b>\n\n"
-        f"Выберите значение параметра.\n\n"
-        f"Модель: <b>{escape(model.title)}</b>\n"
-        f"Параметр: <b>{escape(setting.title)}</b>\n"
-        f"Текущее значение: <code>{escape(current_value)}</code>\n\n"
-        f"Доступные варианты:\n{options}"
+        f"{t('generation.settings_header', lang, model=escape(model.title))}\n\n"
+        f"{t('generation.setting_choose_value', lang)}\n\n"
+        f"{t('generation.model_label', lang, model=escape(model.title))}\n"
+        f"{t('generation.setting_parameter', lang, parameter=escape(setting.title))}\n"
+        f"{t('generation.setting_current_value', lang, value=escape(current_value))}\n\n"
+        f"{t('generation.setting_options', lang, options=options)}"
     )
 
 
@@ -295,44 +271,48 @@ def build_confirmation_text(
     user_settings: dict[str, Any],
     prompt: str,
     balance: int,
+    lang: str = "en",
 ) -> str:
     """Собрать экран подтверждения генерации."""
     num_generations = get_model_num_generations(model, user_settings)
     total_cost = get_total_generation_cost(model, user_settings)
     balance_after_launch = max(balance - total_cost, 0)
-    prompt_label = "Prompt"
+    prompt_line = t("generation.prompt_label", lang, prompt=escape(prompt))
     if model.generation_type == "lipsync":
-        prompt_label = "Озвучка"
+        prompt_line = t("generation.voiceover_label", lang, prompt=escape(prompt))
     return (
-        f"Проверьте генерацию:\n\n"
-        f"Модель: <b>{escape(model.title)}</b>\n"
-        f"Настройки:\n{format_generation_settings(model, user_settings)}\n\n"
-        f"{prompt_label}: <i>{escape(prompt)}</i>\n\n"
-        f"Количество генераций: <code>{num_generations}</code>\n"
-        f"Стоимость: {total_cost} кредитов\n"
-        f"Баланс после запуска: <code>{balance_after_launch}</code>"
+        f"{t('generation.review', lang)}\n\n"
+        f"{t('generation.model_label', lang, model=escape(model.title))}\n"
+        f"{t('generation.settings_label', lang, settings=format_generation_settings(model, user_settings))}\n\n"
+        f"{prompt_line}\n\n"
+        f"{t('generation.count_label', lang, count=num_generations)}\n"
+        f"{t('generation.cost_label', lang, cost=total_cost)}\n"
+        f"{t('generation.balance_after_label', lang, balance=balance_after_launch)}"
     )
 
 
-def build_partial_generation_failed_message() -> str:
-    return "❌ Ошибка E007: одна из генераций не удалась. 1 кредит возвращён."
+def build_partial_generation_failed_message(lang: str = "en") -> str:
+    return t("errors.formatted", lang, code=ErrorCode.E007_WAVESPEED_FAILED, message=t("errors.partial_generation_failed", lang))
 
 
-def get_user_friendly_error_message(error: Exception, result: Optional[WavespeedResult] = None) -> str:
+def get_user_friendly_error_message(error: Exception, result: Optional[WavespeedResult] = None, lang: str = "en") -> str:
     """Вернуть безопасное и понятное сообщение об ошибке для пользователя."""
     if isinstance(error, WavespeedTimeoutError):
-        return "⏱ Ошибка E008: генерация заняла слишком много времени. Кредит возвращён."
+        return f"⏱ {t('errors.formatted', lang, code=ErrorCode.E008_WAVESPEED_TIMEOUT, message=t('errors.timeout_refund', lang)).removeprefix('❌ ')}"
 
     if isinstance(error, WavespeedFailedError) or (result is not None and result.status == "failed"):
-        return "❌ Ошибка E007: генерация не удалась. Кредит возвращён.\n\nПричина: запрос отклонён провайдером."
+        return (
+            f"{t('errors.formatted', lang, code=ErrorCode.E007_WAVESPEED_FAILED, message=t('errors.generation_failed_refund', lang))}\n\n"
+            f"{t('errors.rejected_by_provider', lang)}"
+        )
 
     if isinstance(error, TelegramBadRequest):
-        return format_user_error(ErrorCode.E009_TELEGRAM_DELIVERY_FAILED, "Telegram не смог доставить результат.")
+        return t("errors.formatted", lang, code=ErrorCode.E009_TELEGRAM_DELIVERY_FAILED, message=t("errors.telegram_delivery_failed", lang))
 
     if isinstance(error, (WavespeedNetworkError, aiohttp.ClientError, TimeoutError)):
-        return format_user_error(ErrorCode.E010_INTERNAL_ERROR, "сбой сети при получении результата.")
+        return t("errors.formatted", lang, code=ErrorCode.E010_INTERNAL_ERROR, message=t("errors.result_network_failure", lang))
 
-    return format_user_error(ErrorCode.E010_INTERNAL_ERROR, "внутренняя ошибка. Попробуйте ещё раз.")
+    return t("errors.formatted", lang, code=ErrorCode.E010_INTERNAL_ERROR, message=t("errors.internal_retry", lang))
 
 
 class OutputDeliveryTooLargeError(Exception):
@@ -349,7 +329,7 @@ def is_lipsync_generation_state(state_data: dict[str, Any]) -> bool:
     return state_data.get("model_generation_type") == "lipsync"
 
 
-def get_input_audio_or_text_display(value: Any) -> str:
+def get_input_audio_or_text_display(value: Any, lang: str = "en") -> str:
     """Вернуть пользовательское описание текстового или аудио-входа."""
     if not isinstance(value, dict):
         return ""
@@ -357,41 +337,84 @@ def get_input_audio_or_text_display(value: Any) -> str:
     if source_type == "text":
         return str(value.get("text") or "")
     if source_type == "voice":
-        return "Голосовое сообщение"
+        return t("generation.voice_message", lang)
     if source_type == "audio":
-        return "Аудиофайл"
+        return t("generation.audio_file", lang)
     return ""
 
 
-def get_media_input_prompt_text(*, is_lipsync: bool) -> str:
+def get_media_input_prompt_text(*, is_lipsync: bool, lang: str = "en") -> str:
     """Вернуть текст шага загрузки media-входа."""
     if is_lipsync:
-        return FLOW_TEXTS["lipsync"].initial_prompt
-    return FLOW_TEXTS["image_edit"].initial_prompt
+        return get_flow_texts("lipsync", lang).initial_prompt
+    return get_flow_texts("image_edit", lang).initial_prompt
 
 
-def get_lipsync_incomplete_error_text() -> str:
+def get_lipsync_incomplete_error_text(lang: str = "en") -> str:
     """Вернуть единое сообщение о неполных входных данных lipsync."""
-    return "❌ Для lipsync нужно изображение/видео и текст или аудио."
+    return f"❌ {t('generation.lipsync_incomplete', lang)}"
 
 
-def get_second_step_prompt_text(*, is_lipsync: bool) -> str:
+def get_second_step_prompt_text(*, is_lipsync: bool, lang: str = "en") -> str:
     """Вернуть текст второго шага после загрузки media."""
     if is_lipsync:
-        return FLOW_TEXTS["lipsync"].second_step_prompt
-    return "Теперь отправьте текстовое описание."
+        return get_flow_texts("lipsync", lang).second_step_prompt
+    return t("generation.second_step_text", lang)
 
 
-def get_flow_texts(generation_type: str) -> FlowTexts:
-    return FLOW_TEXTS.get(generation_type, FLOW_TEXTS["text_to_image"])
+def get_flow_texts(generation_type: str, lang: str = "en") -> FlowTexts:
+    base = FlowTexts(
+        initial_prompt=t("generation.flow.text_to_image.initial", lang),
+        missing_prompt=t("errors.e002", lang).lower() + ".",
+    )
+    flows = {
+        "text_to_image": FlowTexts(
+            initial_prompt=t("generation.flow.text_to_image.initial", lang),
+            missing_prompt=t("errors.e002", lang).lower() + ".",
+        ),
+        "text_to_video": FlowTexts(
+            initial_prompt=t("generation.flow.text_to_video.initial", lang),
+            missing_prompt=t("errors.e002", lang).lower() + ".",
+        ),
+        "image_edit": FlowTexts(
+            initial_prompt=t("generation.flow.image_edit.initial", lang),
+            second_step_prompt=t("generation.second_step_text", lang),
+            missing_prompt=t("errors.e002", lang).lower() + ".",
+            missing_media=t("generation.flow.image.missing", lang),
+            invalid_media=t("generation.flow.image.invalid", lang),
+            invalid_specific_media=t("generation.flow.image.invalid_specific", lang),
+        ),
+        "image_to_video": FlowTexts(
+            initial_prompt=t("generation.flow.image_to_video.initial", lang),
+            second_step_prompt=t("generation.second_step_text", lang),
+            missing_prompt=t("errors.e002", lang).lower() + ".",
+            missing_media=t("generation.flow.image.missing", lang),
+            invalid_media=t("generation.flow.image.invalid", lang),
+            invalid_specific_media=t("generation.flow.image.invalid_specific", lang),
+        ),
+        "video_edit": FlowTexts(
+            initial_prompt=t("generation.flow.video_edit.initial", lang),
+            second_step_prompt=t("generation.second_step_text", lang),
+            missing_prompt=t("errors.e002", lang).lower() + ".",
+            missing_media=t("generation.flow.video.missing", lang),
+            invalid_media=t("generation.flow.video.invalid", lang),
+            invalid_specific_media=t("generation.flow.video.invalid_specific", lang),
+        ),
+        "lipsync": FlowTexts(
+            initial_prompt=t("generation.flow.lipsync.initial", lang),
+            second_step_prompt=t("generation.flow.lipsync.second", lang),
+            missing_prompt=t("errors.e002", lang).lower() + ".",
+        ),
+    }
+    return flows.get(generation_type, base)
 
 
-def get_prompt_for_generation_type(generation_type: str) -> str:
-    return get_flow_texts(generation_type).initial_prompt
+def get_prompt_for_generation_type(generation_type: str, lang: str = "en") -> str:
+    return get_flow_texts(generation_type, lang).initial_prompt
 
 
-def get_second_prompt_for_generation_type(generation_type: str) -> str:
-    return get_flow_texts(generation_type).second_step_prompt or "Теперь отправьте текстовое описание."
+def get_second_prompt_for_generation_type(generation_type: str, lang: str = "en") -> str:
+    return get_flow_texts(generation_type, lang).second_step_prompt or t("generation.second_step_text", lang)
 
 
 def extract_document_media_type(document: Any) -> str:
@@ -433,19 +456,19 @@ def get_waiting_state_for_input_type(required_input_type: str):
     return GenerationStates.waiting_for_prompt
 
 
-def build_invalid_input_message(required_input_type: str, generation_type: str, *, received_type: Optional[str] = None) -> str:
-    flow_texts = get_flow_texts(generation_type)
+def build_invalid_input_message(required_input_type: str, generation_type: str, *, received_type: Optional[str] = None, lang: str = "en") -> str:
+    flow_texts = get_flow_texts(generation_type, lang)
     if required_input_type == "text":
-        return format_user_error(ErrorCode.E001_INVALID_INPUT_TYPE, "на этом этапе нужен только текстовый prompt.")
+        return t("errors.formatted", lang, code=ErrorCode.E001_INVALID_INPUT_TYPE, message=t("errors.prompt_text_only", lang))
     if required_input_type == "image":
         if received_type == "video":
-            return format_user_error(ErrorCode.E001_INVALID_INPUT_TYPE, flow_texts.invalid_specific_media)
-        return format_user_error(ErrorCode.E001_INVALID_INPUT_TYPE, flow_texts.invalid_media)
+            return t("errors.formatted", lang, code=ErrorCode.E001_INVALID_INPUT_TYPE, message=flow_texts.invalid_specific_media)
+        return t("errors.formatted", lang, code=ErrorCode.E001_INVALID_INPUT_TYPE, message=flow_texts.invalid_media)
     if required_input_type == "video":
         if received_type == "image":
-            return format_user_error(ErrorCode.E001_INVALID_INPUT_TYPE, flow_texts.invalid_specific_media)
-        return format_user_error(ErrorCode.E001_INVALID_INPUT_TYPE, flow_texts.invalid_media)
-    return format_user_error(ErrorCode.E001_INVALID_INPUT_TYPE, "некорректный тип входных данных.")
+            return t("errors.formatted", lang, code=ErrorCode.E001_INVALID_INPUT_TYPE, message=flow_texts.invalid_specific_media)
+        return t("errors.formatted", lang, code=ErrorCode.E001_INVALID_INPUT_TYPE, message=flow_texts.invalid_media)
+    return t("errors.formatted", lang, code=ErrorCode.E001_INVALID_INPUT_TYPE, message=t("errors.invalid_input_generic", lang))
 
 
 def log_generation_error(
@@ -660,25 +683,26 @@ def is_supported_media_document(document: Any, *, is_lipsync: bool) -> bool:
 
 async def prompt_for_generation_input(message: Message, *, edit: bool, is_lipsync: bool) -> None:
     """Показать шаг загрузки media-входа с reply keyboard возврата к настройкам."""
-    prompt_text = get_media_input_prompt_text(is_lipsync=is_lipsync)
+    lang = get_actor_language(message.from_user)
+    prompt_text = get_media_input_prompt_text(is_lipsync=is_lipsync, lang=lang)
     if edit:
         await message.edit_text(prompt_text, reply_markup=None)
     else:
         await message.answer(prompt_text)
 
     await message.answer(
-        "Если передумали, можно вернуться к настройкам.",
-        reply_markup=build_back_to_settings_keyboard(),
+        t("generation.back_to_settings_hint", lang),
+        reply_markup=build_back_to_settings_keyboard(lang),
     )
 
 
-def build_generation_types_screen_text() -> str:
+def build_generation_types_screen_text(lang: str = "en") -> str:
     """Собрать текст экрана выбора типа генерации."""
     details = "\n".join(
-        f"• <b>{escape(GENERATION_TYPE_TITLES[generation_type])}</b> — {escape(GENERATION_TYPE_DESCRIPTIONS[generation_type])}"
+        f"• <b>{escape(get_generation_type_title(generation_type, lang))}</b> — {escape(get_generation_type_description(generation_type, lang))}"
         for generation_type in list_generation_types()
     )
-    return f"Выберите тип генерации:\n\n{details}"
+    return f"{t('generation.choose_type', lang)}:\n\n{details}"
 
 
 def build_generation_type_options() -> list[tuple[str, str]]:
@@ -721,26 +745,28 @@ def get_selected_models_for_state(state_data: dict[str, Any]) -> list[Generation
 
 async def render_models_screen(message: Message) -> None:
     """Показать список типов генерации."""
+    lang = get_actor_language(message.from_user)
     await message.answer(
-        build_generation_types_screen_text(),
-        reply_markup=build_generation_sections_keyboard(),
+        build_generation_types_screen_text(lang),
+        reply_markup=build_generation_sections_keyboard(lang),
         parse_mode="HTML",
     )
 
 
 async def render_provider_screen(message: Message, *, edit: bool) -> None:
     """Показать список провайдеров для выбора моделей."""
-    text = "Выберите провайдера:"
+    lang = get_actor_language(message.from_user)
+    text = t("generation.choose_provider", lang)
     if edit:
         await message.edit_text(
             text,
-            reply_markup=build_providers_keyboard(),
+            reply_markup=build_providers_keyboard(lang),
             parse_mode="HTML",
         )
         return
     await message.answer(
         text,
-        reply_markup=build_providers_keyboard(),
+        reply_markup=build_providers_keyboard(lang),
         parse_mode="HTML",
     )
 
@@ -754,16 +780,17 @@ async def render_model_list_screen(
     back_callback: str,
 ) -> None:
     """Показать список моделей для выбранного типа или провайдера."""
+    lang = get_actor_language(message.from_user)
     if edit:
         await message.edit_text(
             heading,
-            reply_markup=build_models_keyboard(models, back_callback),
+            reply_markup=build_models_keyboard(models, back_callback, lang),
             parse_mode="HTML",
         )
         return
     await message.answer(
         heading,
-        reply_markup=build_models_keyboard(models, back_callback),
+        reply_markup=build_models_keyboard(models, back_callback, lang),
         parse_mode="HTML",
     )
 
@@ -777,50 +804,54 @@ async def render_settings_screen_message(message: Message, state: FSMContext, *,
     """Показать экран настроек выбранной модели через edit или обычное сообщение."""
     state_data = await state.get_data()
     model_key = state_data.get("model_key")
+    lang = get_state_language(state_data, getattr(message, "from_user", None))
     if not model_key:
         if edit:
-            await message.edit_text("❌ Модель не выбрана. Начни заново.", reply_markup=None)
+            await message.edit_text(format_user_error(ErrorCode.E005_UNSUPPORTED_MODEL, t("errors.model_unavailable", lang), lang), reply_markup=None)
         else:
-            await message.answer("❌ Модель не выбрана. Начни заново.", reply_markup=get_main_menu_keyboard())
-        await message.answer("🏠 Главное меню", reply_markup=get_main_menu_keyboard())
+            await message.answer(format_user_error(ErrorCode.E005_UNSUPPORTED_MODEL, t("errors.model_unavailable", lang), lang), reply_markup=get_main_menu_keyboard(lang))
         return
 
     model = get_generation_model(model_key)
     user_settings = get_model_state_settings(state_data, model_key)
     if edit:
         await message.edit_text(
-            build_settings_text(model, user_settings),
-            reply_markup=build_model_settings_keyboard(model, user_settings),
+            build_settings_text(model, user_settings, lang),
+            reply_markup=build_model_settings_keyboard(model, user_settings, lang),
             parse_mode="HTML",
         )
         return
 
     await message.answer(
-        build_settings_text(model, user_settings),
-        reply_markup=build_model_settings_keyboard(model, user_settings),
+        build_settings_text(model, user_settings, lang),
+        reply_markup=build_model_settings_keyboard(model, user_settings, lang),
         parse_mode="HTML",
     )
 
 
 async def prompt_for_generation_image(message: Message, *, edit: bool, model: GenerationModel) -> None:
     """Показать шаг загрузки изображения с reply keyboard возврата к настройкам."""
-    prompt_text = f"Отправьте изображение для модели {model.title}."
+    lang = get_actor_language(message.from_user)
+    prompt_text = t("generation.image_for_model", lang, model=model.title)
     if edit:
         await message.edit_text(prompt_text, reply_markup=None)
     else:
         await message.answer(prompt_text)
 
     await message.answer(
-        "Если передумали, можно вернуться к настройкам.",
-        reply_markup=build_back_to_settings_keyboard(),
+        t("generation.back_to_settings_hint", lang),
+        reply_markup=build_back_to_settings_keyboard(lang),
     )
 
 
 async def prompt_for_generation_images(message: Message, *, edit: bool, model: GenerationModel) -> None:
-    prompt_text = (
-        f"Отправьте изображения для модели {model.title}.\n"
-        f"Можно загрузить от {model.min_images} до {model.max_images} файлов.\n"
-        "После загрузки нажмите ✅ Продолжить."
+    lang = get_actor_language(message.from_user)
+    prompt_text = t(
+        "generation.images_for_model",
+        lang,
+        model=model.title,
+        min_count=model.min_images,
+        max_count=model.max_images,
     )
     if edit:
         await message.edit_text(prompt_text, reply_markup=None)
@@ -828,22 +859,23 @@ async def prompt_for_generation_images(message: Message, *, edit: bool, model: G
         await message.answer(prompt_text)
 
     await message.answer(
-        "Если передумали, можно вернуться к настройкам.",
-        reply_markup=build_media_upload_reply_keyboard(show_continue=True),
+        t("generation.back_to_settings_hint", lang),
+        reply_markup=build_media_upload_reply_keyboard(show_continue=True, lang=lang),
     )
 
 
 async def prompt_for_generation_video(message: Message, *, edit: bool, model: GenerationModel) -> None:
     """Показать шаг загрузки видео с reply keyboard возврата к настройкам."""
-    prompt_text = f"Отправьте видео для модели {model.title}."
+    lang = get_actor_language(message.from_user)
+    prompt_text = t("generation.video_for_model", lang, model=model.title)
     if edit:
         await message.edit_text(prompt_text, reply_markup=None)
     else:
         await message.answer(prompt_text)
 
     await message.answer(
-        "Если передумали, можно вернуться к настройкам.",
-        reply_markup=build_back_to_settings_keyboard(),
+        t("generation.back_to_settings_hint", lang),
+        reply_markup=build_back_to_settings_keyboard(lang),
     )
 
 
@@ -851,18 +883,19 @@ async def show_setting_options(message: Message, state: FSMContext, setting_key:
     """Показать варианты значения конкретной настройки."""
     state_data = await state.get_data()
     model_key = state_data.get("model_key")
+    lang = get_state_language(state_data, getattr(message, "from_user", None))
     if not model_key:
-        await message.edit_text("❌ Модель не выбрана. Начни заново.", reply_markup=None)
+        await message.edit_text(format_user_error(ErrorCode.E005_UNSUPPORTED_MODEL, t("generation.model_not_selected", lang), lang), reply_markup=None)
         return
     model = get_generation_model(model_key)
     if setting_key not in model.user_settings:
-        await message.edit_text("❌ Настройка не найдена.", reply_markup=None)
+        await message.edit_text(format_user_error(ErrorCode.E010_INTERNAL_ERROR, t("generation.setting_not_found", lang), lang), reply_markup=None)
         return
     user_settings = get_model_state_settings(state_data, model_key)
     current_value = str(user_settings.get(setting_key, model.user_settings[setting_key].default))
     await message.edit_text(
-        build_setting_value_text(model, setting_key, current_value),
-        reply_markup=build_setting_options_keyboard(model, setting_key, current_value),
+        build_setting_value_text(model, setting_key, current_value, lang),
+        reply_markup=build_setting_options_keyboard(model, setting_key, current_value, lang),
         parse_mode="HTML",
     )
 
@@ -886,8 +919,12 @@ async def send_confirmation_screen(
     input_media_items = get_input_media_items(state_data)
     input_audio_or_text = state_data.get("input_audio_or_text")
 
+    user_repo = UserRepository(session)
+    user = await user_repo.get_or_create_user_from_telegram(telegram_user)
+    lang = get_user_preferred_language(user, telegram_user)
+
     if is_lipsync:
-        prompt = get_input_audio_or_text_display(input_audio_or_text)
+        prompt = get_input_audio_or_text_display(input_audio_or_text, lang)
         is_complete = bool(model_key and input_media and input_audio_or_text)
     else:
         is_complete = bool(model_key and prompt)
@@ -900,60 +937,57 @@ async def send_confirmation_screen(
             is_complete = is_complete and bool(input_media and input_media.get("type") == "video")
 
     if not is_complete:
-        flow_texts = get_flow_texts(model.generation_type) if model else FLOW_TEXTS["text_to_image"]
+        flow_texts = get_flow_texts(model.generation_type, lang) if model else get_flow_texts("text_to_image", lang)
         if not model:
-            error_text = format_user_error(ErrorCode.E005_UNSUPPORTED_MODEL, "модель недоступна.")
+            error_text = format_user_error(ErrorCode.E005_UNSUPPORTED_MODEL, t("errors.model_unavailable", lang), lang)
         elif is_lipsync:
-            error_text = get_lipsync_incomplete_error_text()
+            error_text = get_lipsync_incomplete_error_text(lang)
         elif not prompt:
-            error_text = format_user_error(ErrorCode.E002_MISSING_PROMPT, flow_texts.missing_prompt)
+            error_text = format_user_error(ErrorCode.E002_MISSING_PROMPT, flow_texts.missing_prompt, lang)
         elif model and model.input_media_field == "images":
-            error_text = format_user_error(ErrorCode.E003_MISSING_IMAGE, f"нужно загрузить минимум {model.min_images} изображение.")
+            error_text = format_user_error(ErrorCode.E003_MISSING_IMAGE, t("generation.need_min_images", lang, count=model.min_images), lang)
         elif required_input_type == "image":
-            error_text = format_user_error(ErrorCode.E003_MISSING_IMAGE, flow_texts.missing_media)
+            error_text = format_user_error(ErrorCode.E003_MISSING_IMAGE, flow_texts.missing_media, lang)
         elif required_input_type == "video":
-            error_text = format_user_error(ErrorCode.E004_MISSING_VIDEO, flow_texts.missing_media)
+            error_text = format_user_error(ErrorCode.E004_MISSING_VIDEO, flow_texts.missing_media, lang)
         else:
-            error_text = format_user_error(ErrorCode.E010_INTERNAL_ERROR, "данные генерации неполные. Начните заново.")
+            error_text = format_user_error(ErrorCode.E010_INTERNAL_ERROR, t("errors.incomplete_generation", lang), lang)
         if edit:
             await message.edit_text(
                 error_text,
                 reply_markup=None,
             )
         else:
-            await message.answer(
-                error_text,
-                reply_markup=get_main_menu_keyboard(),
-            )
+            await message.answer(error_text, reply_markup=get_main_menu_keyboard(lang))
         await reset_generation_state(state)
         return
 
     user_settings = get_model_state_settings(state_data, model_key)
-    user_repo = UserRepository(session)
-    user = await user_repo.get_or_create_user_from_telegram(telegram_user)
-    text = build_confirmation_text(model, user_settings, prompt, user.balance)
+    await state.update_data(user_language=lang)
+    text = build_confirmation_text(model, user_settings, prompt, user.balance, lang)
 
     await state.set_state(GenerationStates.waiting_for_confirmation)
     if edit:
-        await message.edit_text(text, reply_markup=build_generation_confirm_keyboard(), parse_mode="HTML")
+        await message.edit_text(text, reply_markup=build_generation_confirm_keyboard(lang), parse_mode="HTML")
     else:
-        await message.answer(text, reply_markup=build_generation_confirm_keyboard(), parse_mode="HTML")
+        await message.answer(text, reply_markup=build_generation_confirm_keyboard(lang), parse_mode="HTML")
 
 
-@router.message(GenerationStates.waiting_for_images, lambda message: message.text == "✅ Продолжить")
+@router.message(GenerationStates.waiting_for_images, lambda message: is_localized_button_text(message.text, "common.continue", getattr(message.from_user, "language_code", None)))
 async def continue_after_multi_image_upload(message: Message, state: FSMContext):
     """Перейти к prompt после multi-image upload, если набран минимальный набор изображений."""
     state_data = await state.get_data()
     model_key = state_data.get("model_key")
     model = get_generation_model(model_key) if model_key else None
     media_items = get_input_media_items(state_data)
+    lang = get_state_language(state_data, message.from_user)
     if not model:
-        await message.answer(format_user_error(ErrorCode.E005_UNSUPPORTED_MODEL, "модель недоступна."))
+        await message.answer(format_user_error(ErrorCode.E005_UNSUPPORTED_MODEL, t("errors.model_unavailable", lang), lang))
         return
     if len(media_items) < model.min_images:
         await message.answer(
-            format_user_error(ErrorCode.E003_MISSING_IMAGE, f"нужно загрузить минимум {model.min_images} изображение."),
-            reply_markup=build_media_upload_reply_keyboard(show_continue=True),
+            format_user_error(ErrorCode.E003_MISSING_IMAGE, t("generation.need_min_images", lang, count=model.min_images), lang),
+            reply_markup=build_media_upload_reply_keyboard(show_continue=True, lang=lang),
         )
         return
     await state.update_data(input_media={"type": "images", "count": len(media_items)})
@@ -963,8 +997,8 @@ async def continue_after_multi_image_upload(message: Message, state: FSMContext)
         incoming_text_type=get_incoming_text_type(message),
     )
     await message.answer(
-        get_second_prompt_for_generation_type(model.generation_type),
-        reply_markup=build_back_to_settings_keyboard(),
+        get_second_prompt_for_generation_type(model.generation_type, get_actor_language(message.from_user)),
+        reply_markup=build_back_to_settings_keyboard(get_actor_language(message.from_user)),
     )
 
 
@@ -1066,11 +1100,11 @@ def get_safe_telegram_document_size_bytes() -> int:
 
 def build_large_file_r2_message(short_url: str) -> str:
     return (
-        "⚠️ Файл слишком большой для Telegram.\n\n"
-        "Мы загрузили его в защищённое облачное хранилище Cloudflare R2.\n\n"
-        f"🔗 Скачать файл:\n{short_url}\n\n"
-        "🔒 Ссылка временная и безопасная. Она действует 30 минут.\n\n"
-        "Если сомневаетесь, можете проверить ссылку через любой AI, онлайн-анализатор ссылок или открыть её в браузере."
+        f"⚠️ {t('download.too_large')}\n\n"
+        f"{t('download.cloudflare_notice')}\n\n"
+        f"🔗 {t('common.download_file')}:\n{short_url}\n\n"
+        f"🔒 {t('download.safe_link')}\n\n"
+        f"{t('download.browser_notice')}"
     )
 
 
@@ -1101,7 +1135,7 @@ async def upload_output_to_r2_and_get_short_url(
     return short_url
 
 
-async def send_document_with_retry(*, bot, chat_id: int, file_path: str, caption: Optional[str]) -> None:
+async def send_document_with_retry(*, bot, chat_id: int, file_path: str, caption: Optional[str], reply_markup=None) -> None:
     """Отправить документ в Telegram c retry при сетевых ошибках."""
     normalized_filename = Path(file_path).name
     for attempt in range(1, DOCUMENT_SEND_RETRY_COUNT + 2):
@@ -1110,6 +1144,7 @@ async def send_document_with_retry(*, bot, chat_id: int, file_path: str, caption
                 chat_id,
                 FSInputFile(file_path, filename=normalized_filename),
                 caption=caption,
+                reply_markup=reply_markup,
                 request_timeout=DOCUMENT_SEND_REQUEST_TIMEOUT_SECONDS,
             )
             return
@@ -1128,14 +1163,15 @@ def get_output_delivery_kind(content_type: Optional[str]) -> str:
     return "document"
 
 
-async def send_photo_output(*, bot, chat_id: int, file_path: str) -> None:
-    await bot.send_photo(chat_id, FSInputFile(file_path, filename=Path(file_path).name))
+async def send_photo_output(*, bot, chat_id: int, file_path: str, reply_markup=None) -> None:
+    await bot.send_photo(chat_id, FSInputFile(file_path, filename=Path(file_path).name), reply_markup=reply_markup)
 
 
-async def send_video_output(*, bot, chat_id: int, file_path: str) -> None:
+async def send_video_output(*, bot, chat_id: int, file_path: str, reply_markup=None) -> None:
     await bot.send_video(
         chat_id,
         FSInputFile(file_path, filename=Path(file_path).name),
+        reply_markup=reply_markup,
         request_timeout=DOCUMENT_SEND_REQUEST_TIMEOUT_SECONDS,
     )
 
@@ -1143,6 +1179,19 @@ async def send_video_output(*, bot, chat_id: int, file_path: str) -> None:
 async def get_user_send_results_as_files(user_id: int) -> bool:
     async with db_manager.session_factory() as session:
         return await UserRepository(session).get_user_delivery_preference(user_id)
+
+
+async def get_user_keyboard_language(user_id: Optional[int]) -> str:
+    if user_id is None:
+        return "en"
+    try:
+        async with db_manager.session_factory() as session:
+            user = await UserRepository(session).get_user_profile(user_id)
+            if user is None:
+                return "en"
+            return get_user_language(user.language_code)
+    except Exception:
+        return "en"
 
 
 async def send_generation_outputs(
@@ -1159,6 +1208,8 @@ async def send_generation_outputs(
     send_results_as_files = delivery_preference if delivery_preference is not None else False
     if delivery_preference is None and user_id is not None:
         send_results_as_files = await get_user_send_results_as_files(user_id)
+    lang = await get_user_keyboard_language(user_id)
+    main_menu_keyboard = get_main_menu_keyboard(lang)
     for output_url in output_urls:
         temp_output_path: Optional[str] = None
         content_type: Optional[str] = None
@@ -1188,13 +1239,14 @@ async def send_generation_outputs(
                         await safe_send_bot_message(
                             bot,
                             chat_id,
-                            "❌ Не удалось загрузить файл. Попробуйте ещё раз позже",
+                            t("download.upload_failed", lang),
                         )
                         continue
                     await safe_send_bot_message(
                         bot,
                         chat_id,
                         build_large_file_r2_message(short_url),
+                        reply_markup=main_menu_keyboard,
                     )
                     log_generation_output_delivery(
                         "r2",
@@ -1217,13 +1269,14 @@ async def send_generation_outputs(
                 await safe_send_bot_message(
                     bot,
                     chat_id,
-                    "❌ Не удалось загрузить файл. Попробуйте ещё раз позже",
+                    t("download.upload_failed", lang),
+                    reply_markup=main_menu_keyboard,
                 )
                 continue
             delivery_kind = "document" if send_results_as_files else get_output_delivery_kind(content_type)
             if delivery_kind == "photo":
                 try:
-                    await send_photo_output(bot=bot, chat_id=chat_id, file_path=temp_output_path)
+                    await send_photo_output(bot=bot, chat_id=chat_id, file_path=temp_output_path, reply_markup=main_menu_keyboard)
                     log_generation_output_delivery(
                         "photo",
                         user_id=user_id,
@@ -1245,7 +1298,7 @@ async def send_generation_outputs(
                     )
             elif delivery_kind == "video":
                 try:
-                    await send_video_output(bot=bot, chat_id=chat_id, file_path=temp_output_path)
+                    await send_video_output(bot=bot, chat_id=chat_id, file_path=temp_output_path, reply_markup=main_menu_keyboard)
                     log_generation_output_delivery(
                         "video",
                         user_id=user_id,
@@ -1271,6 +1324,7 @@ async def send_generation_outputs(
                 chat_id=chat_id,
                 file_path=temp_output_path,
                 caption=None,
+                reply_markup=main_menu_keyboard,
             )
             log_generation_output_delivery(
                 "document",
@@ -1304,10 +1358,10 @@ async def send_generation_outputs(
                     await safe_send_bot_message(
                         bot,
                         chat_id,
-                        "❌ Не удалось загрузить файл. Попробуйте ещё раз позже",
+                        t("download.upload_failed", lang),
                     )
                     continue
-                await safe_send_bot_message(bot, chat_id, build_large_file_r2_message(short_url))
+                await safe_send_bot_message(bot, chat_id, build_large_file_r2_message(short_url), reply_markup=main_menu_keyboard)
                 log_generation_output_delivery(
                     "r2",
                     user_id=user_id,
@@ -1329,7 +1383,8 @@ async def send_generation_outputs(
             await safe_send_bot_message(
                 bot,
                 chat_id,
-                "❌ Не удалось загрузить файл. Попробуйте ещё раз позже",
+                t("download.upload_failed", lang),
+                reply_markup=main_menu_keyboard,
             )
         except Exception:
             logger.exception("Failed to deliver completed Wavespeed output as document")
@@ -1356,7 +1411,7 @@ async def send_generation_outputs(
                     await safe_send_bot_message(
                         bot,
                         chat_id,
-                        "❌ Не удалось загрузить файл. Попробуйте ещё раз позже",
+                        t("download.upload_failed", lang),
                     )
                     continue
                 log_generation_output_delivery(
@@ -1371,6 +1426,7 @@ async def send_generation_outputs(
                     bot,
                     chat_id,
                     build_large_file_r2_message(short_url),
+                    reply_markup=main_menu_keyboard,
                 )
                 continue
             delivered_successfully = False
@@ -1385,16 +1441,11 @@ async def send_generation_outputs(
             await safe_send_bot_message(
                 bot,
                 chat_id,
-                "Файл готов, но Telegram не смог его доставить",
+                t("download.telegram_failed", lang),
+                reply_markup=main_menu_keyboard,
             )
         finally:
             await cleanup_temp_output_file(temp_output_path)
-    await safe_send_bot_message(
-        bot,
-        chat_id,
-        "🏠 Главное меню",
-        reply_markup=get_main_menu_keyboard(),
-    )
     return OutputDeliveryResult(delivered_successfully=delivered_successfully, use_r2=use_r2)
 
 
@@ -1697,11 +1748,12 @@ async def _run_single_generation_request(
             refund_credit=True,
             status="timeout",
         )
+        lang = await get_user_keyboard_language(user_id)
         await safe_send_bot_message(
             bot,
             chat_id,
-            build_partial_generation_failed_message() if use_partial_failure_message else get_user_friendly_error_message(exc, result),
-            reply_markup=get_main_menu_keyboard(),
+            build_partial_generation_failed_message(lang) if use_partial_failure_message else get_user_friendly_error_message(exc, result, lang),
+            reply_markup=get_main_menu_keyboard(lang),
         )
     except WavespeedFailedError as exc:
         logger.exception("Wavespeed failed while polling generation result")
@@ -1724,14 +1776,15 @@ async def _run_single_generation_request(
             user_id=user_id,
             model_key=model_key,
             cost=cost,
-            error_message=safe_error_message or "Генерация завершилась с ошибкой.",
+            error_message=safe_error_message or t("errors.generation_failed_refund", await get_user_keyboard_language(user_id)),
             refund_credit=True,
         )
+        lang = await get_user_keyboard_language(user_id)
         await safe_send_bot_message(
             bot,
             chat_id,
-            build_partial_generation_failed_message() if use_partial_failure_message else get_user_friendly_error_message(exc, result),
-            reply_markup=get_main_menu_keyboard(),
+            build_partial_generation_failed_message(lang) if use_partial_failure_message else get_user_friendly_error_message(exc, result, lang),
+            reply_markup=get_main_menu_keyboard(lang),
         )
     except WavespeedNetworkError as exc:
         logger.exception("Wavespeed network error while polling generation result")
@@ -1751,11 +1804,12 @@ async def _run_single_generation_request(
             error_message=exc.user_message,
             refund_credit=True,
         )
+        lang = await get_user_keyboard_language(user_id)
         await safe_send_bot_message(
             bot,
             chat_id,
-            build_partial_generation_failed_message() if use_partial_failure_message else get_user_friendly_error_message(exc, result),
-            reply_markup=get_main_menu_keyboard(),
+            build_partial_generation_failed_message(lang) if use_partial_failure_message else get_user_friendly_error_message(exc, result, lang),
+            reply_markup=get_main_menu_keyboard(lang),
         )
     except Exception as exc:
         logger.exception("Error while polling generation result")
@@ -1771,14 +1825,15 @@ async def _run_single_generation_request(
             user_id=user_id,
             model_key=model_key,
             cost=cost,
-            error_message="Не удалось завершить генерацию. Попробуйте позже.",
+            error_message=t("errors.finish_generation_failed", await get_user_keyboard_language(user_id)),
             refund_credit=True,
         )
+        lang = await get_user_keyboard_language(user_id)
         await safe_send_bot_message(
             bot,
             chat_id,
-            build_partial_generation_failed_message() if use_partial_failure_message else get_user_friendly_error_message(exc, result),
-            reply_markup=get_main_menu_keyboard(),
+            build_partial_generation_failed_message(lang) if use_partial_failure_message else get_user_friendly_error_message(exc, result, lang),
+            reply_markup=get_main_menu_keyboard(lang),
         )
     finally:
         if clear_active_generation:
@@ -1835,23 +1890,24 @@ async def poll_generation_results_batch(
         await reset_generation_state(state)
 
 
-@router.message(lambda msg: msg.text == "🎨 Генерации")
+@router.message(lambda msg: is_localized_button_text(msg.text, "main.generations", getattr(msg.from_user, "language_code", None)))
 async def show_generation_menu(message: Message, state: FSMContext):
     """Показать меню генерации."""
     try:
+        lang = get_actor_language(message.from_user)
         current_state = await state.get_state()
         if message.from_user.id in ACTIVE_GENERATIONS:
             await message.answer(
-                "⚠️ У вас уже есть активный сценарий генерации. Дождитесь завершения или вернитесь в главное меню через /start.",
-                reply_markup=get_main_menu_keyboard(),
+                t("generation.active_scenario", lang),
+                reply_markup=get_main_menu_keyboard(lang),
             )
             return
 
         if is_generation_flow_state(current_state):
             await reset_generation_flow(state, reason="main_menu_generations")
             await message.answer(
-                "Сценарий генерации сброшен. Вы вернулись в главное меню.",
-                reply_markup=get_main_menu_keyboard(),
+                t("generation.scenario_reset", lang),
+                reply_markup=get_main_menu_keyboard(lang),
             )
         elif current_state is not None:
             await state.clear()
@@ -1864,7 +1920,7 @@ async def show_generation_menu(message: Message, state: FSMContext):
         logger.debug(f"Generation menu shown for user {message.from_user.id}")
     except Exception as e:
         logger.exception("Error in show_generation_menu: %s", e)
-        await message.answer("❌ Произошла ошибка при открытии меню генерации")
+        await message.answer(t("generation.menu_open_error", get_actor_language(message.from_user)))
 
 
 @router.callback_query(lambda cb: cb.data.startswith(MODEL_PREFIX))
@@ -1873,7 +1929,7 @@ async def choose_generation_model(callback: CallbackQuery, state: FSMContext):
     log_generation_callback(callback)
     model_token = callback.data.removeprefix(MODEL_PREFIX)
     if callback.from_user.id in ACTIVE_GENERATIONS:
-        await callback.answer("У вас уже запущена генерация", show_alert=True)
+        await callback.answer(t("generation.already_running", get_actor_language(callback.from_user)), show_alert=True)
         return
 
     state_data = await state.get_data()
@@ -1906,9 +1962,10 @@ async def choose_generation_section(callback: CallbackQuery, state: FSMContext):
     await state.set_state(GenerationStates.choosing_generation_type)
     await state.update_data(selected_generation_type=generation_type, selected_provider=None)
     if not models:
+        lang = get_actor_language(callback.from_user)
         await callback.message.edit_text(
-            "В этом разделе пока нет подключённых моделей",
-            reply_markup=build_models_keyboard([], BACK_TO_SECTIONS),
+            t("generation.no_models_in_section", lang),
+            reply_markup=build_models_keyboard([], BACK_TO_SECTIONS, lang),
             parse_mode="HTML",
         )
         await callback.answer()
@@ -1918,7 +1975,7 @@ async def choose_generation_section(callback: CallbackQuery, state: FSMContext):
         callback.message,
         models=models,
         edit=True,
-        heading="Выберите модель:",
+        heading=f"{t('generation.choose_model', get_actor_language(callback.from_user))}:",
         back_callback=BACK_TO_SECTIONS,
     )
     await callback.answer()
@@ -1940,9 +1997,10 @@ async def back_to_generation_sections(callback: CallbackQuery, state: FSMContext
     log_generation_callback(callback)
     await state.set_state(GenerationStates.choosing_generation_type)
     await state.update_data(selected_generation_type=None, selected_provider=None)
+    lang = get_actor_language(callback.from_user)
     await callback.message.edit_text(
-        build_generation_types_screen_text(),
-        reply_markup=build_generation_sections_keyboard(),
+        build_generation_types_screen_text(lang),
+        reply_markup=build_generation_sections_keyboard(lang),
         parse_mode="HTML",
     )
     await callback.answer()
@@ -1954,15 +2012,16 @@ async def choose_provider(callback: CallbackQuery, state: FSMContext):
     log_generation_callback(callback)
     provider = callback.data.removeprefix(PROVIDER_PREFIX)
     if provider not in list_providers():
-        await callback.answer("Провайдер недоступен", show_alert=True)
+        await callback.answer(t("generation.provider_unavailable", get_actor_language(callback.from_user)), show_alert=True)
         return
     models = list_models_by_provider(provider)
     if not models:
         await state.set_state(GenerationStates.choosing_provider)
         await state.update_data(selected_generation_type="all", selected_provider=None)
+        lang = get_actor_language(callback.from_user)
         await callback.message.edit_text(
-            "У этого провайдера пока нет подключённых моделей",
-            reply_markup=build_providers_keyboard(),
+            t("generation.no_models_in_provider", lang),
+            reply_markup=build_providers_keyboard(lang),
             parse_mode="HTML",
         )
         await callback.answer()
@@ -1974,7 +2033,7 @@ async def choose_provider(callback: CallbackQuery, state: FSMContext):
         callback.message,
         models=models,
         edit=True,
-        heading="Выберите модель:",
+        heading=f"{t('generation.choose_model', get_actor_language(callback.from_user))}:",
         back_callback=BACK_TO_PROVIDERS,
     )
     await callback.answer()
@@ -2009,7 +2068,7 @@ async def back_to_generation_models(callback: CallbackQuery, state: FSMContext):
             callback.message,
             models=list_models_by_provider(str(selected_provider)),
             edit=True,
-            heading="Выберите модель:",
+            heading=f"{t('generation.choose_model', get_actor_language(callback.from_user))}:",
             back_callback=BACK_TO_PROVIDERS,
         )
         await callback.answer()
@@ -2021,7 +2080,7 @@ async def back_to_generation_models(callback: CallbackQuery, state: FSMContext):
             callback.message,
             models=list_models_by_type(str(selected_generation_type)),
             edit=True,
-            heading="Выберите модель:",
+            heading=f"{t('generation.choose_model', get_actor_language(callback.from_user))}:",
             back_callback=BACK_TO_SECTIONS,
         )
         await callback.answer()
@@ -2044,19 +2103,20 @@ async def back_to_generation_providers(callback: CallbackQuery, state: FSMContex
 async def open_setting_selector(callback: CallbackQuery, state: FSMContext):
     """Открыть выбор значения настройки модели."""
     log_generation_callback(callback)
+    lang = get_actor_language(callback.from_user)
     setting_key = callback.data.removeprefix(SETTINGS_OPEN_PREFIX)
     if not setting_key:
-        await callback.answer("Настройка не найдена", show_alert=True)
+        await callback.answer(t("generation.setting_not_found", lang), show_alert=True)
         return
     state_data = await state.get_data()
     model_key = state_data.get("model_key")
     if not model_key:
-        await callback.message.edit_text("❌ Модель не выбрана. Начни заново.", reply_markup=None)
+        await callback.message.edit_text(format_user_error(ErrorCode.E005_UNSUPPORTED_MODEL, t("generation.model_not_selected", lang), lang), reply_markup=None)
         await callback.answer()
         return
     model = get_generation_model(model_key)
     if setting_key not in model.user_settings:
-        await callback.answer("Настройка не найдена", show_alert=True)
+        await callback.answer(t("generation.setting_not_found", lang), show_alert=True)
         return
     setting = model.user_settings[setting_key]
     await state.update_data(current_setting_key=setting_key)
@@ -2065,7 +2125,7 @@ async def open_setting_selector(callback: CallbackQuery, state: FSMContext):
         current_value = str(user_settings.get(setting_key, setting.default))
         await state.set_state(GenerationStates.waiting_for_setting_text)
         await callback.message.edit_text(
-            build_setting_value_text(model, setting_key, current_value),
+            build_setting_value_text(model, setting_key, current_value, lang),
             reply_markup=None,
             parse_mode="HTML",
         )
@@ -2086,12 +2146,13 @@ async def back_to_settings(callback: CallbackQuery, state: FSMContext):
     await callback.answer()
 
 
-@router.message(GenerationStates.waiting_for_setting_text, lambda message: message.text == "⬅️ Назад к настройкам")
+@router.message(GenerationStates.waiting_for_setting_text, lambda message: is_localized_button_text(message.text, "common.back_to_settings", getattr(message.from_user, "language_code", None)))
 async def back_to_settings_from_text_setting(message: Message, state: FSMContext):
     """Вернуться с текстового ввода настройки к экрану настроек модели."""
     await state.set_state(GenerationStates.choosing_settings)
     await state.update_data(current_setting_key=None)
-    await message.answer("Возвращаю к настройкам модели.", reply_markup=get_main_menu_keyboard())
+    lang = get_actor_language(message.from_user)
+    await message.answer(t("generation.back_to_model_settings", lang), reply_markup=get_main_menu_keyboard(lang))
     await render_settings_screen_message(message, state, edit=False)
 
 
@@ -2101,18 +2162,19 @@ async def process_text_setting_value(message: Message, state: FSMContext):
     state_data = await state.get_data()
     model_key = state_data.get("model_key")
     setting_key = state_data.get("current_setting_key")
+    lang = get_state_language(state_data, message.from_user)
     if not model_key or not setting_key:
-        await message.answer(format_user_error(ErrorCode.E010_INTERNAL_ERROR, "настройка не выбрана."))
+        await message.answer(format_user_error(ErrorCode.E010_INTERNAL_ERROR, t("errors.setting_not_selected", lang), lang))
         return
 
     model = get_generation_model(model_key)
     if setting_key not in model.user_settings:
-        await message.answer(format_user_error(ErrorCode.E010_INTERNAL_ERROR, "настройка недоступна."))
+        await message.answer(format_user_error(ErrorCode.E010_INTERNAL_ERROR, t("errors.setting_unavailable", lang), lang))
         return
 
     if message_contains_file(message):
         await message.answer(
-            format_user_error(ErrorCode.E001_INVALID_INPUT_TYPE, "нужно отправить текстовое значение настройки."),
+            format_user_error(ErrorCode.E001_INVALID_INPUT_TYPE, t("errors.setting_text_required", lang), lang),
         )
         return
 
@@ -2122,7 +2184,7 @@ async def process_text_setting_value(message: Message, state: FSMContext):
     user_settings[str(setting_key)] = value
     await state.update_data(user_settings=user_settings, current_setting_key=None)
     await state.set_state(GenerationStates.choosing_settings)
-    await message.answer("Значение сохранено.", reply_markup=get_main_menu_keyboard())
+    await message.answer(t("generation.value_saved", lang), reply_markup=get_main_menu_keyboard(lang))
     await render_settings_screen_message(message, state, edit=False)
 
 
@@ -2130,31 +2192,32 @@ async def process_text_setting_value(message: Message, state: FSMContext):
 async def choose_setting_value(callback: CallbackQuery, state: FSMContext):
     """Сохранить выбранное значение настройки и вернуться к экрану настроек."""
     log_generation_callback(callback)
+    lang = get_actor_language(callback.from_user)
     setting_payload = callback.data.removeprefix(SETTINGS_VALUE_PREFIX)
     if ":" not in setting_payload:
-        await callback.answer("Некорректное значение", show_alert=True)
+        await callback.answer(t("generation.invalid_value", lang), show_alert=True)
         return
     setting_key, option_index_raw = setting_payload.rsplit(":", 1)
     if not option_index_raw.isdigit():
-        await callback.answer("Некорректное значение", show_alert=True)
+        await callback.answer(t("generation.invalid_value", lang), show_alert=True)
         return
     state_data = await state.get_data()
     model_key = state_data.get("model_key")
     if not model_key:
-        await callback.message.edit_text("❌ Модель не выбрана. Начни заново.", reply_markup=None)
+        await callback.message.edit_text(format_user_error(ErrorCode.E005_UNSUPPORTED_MODEL, t("generation.model_not_selected", lang), lang), reply_markup=None)
         await callback.answer()
         return
 
     model = get_generation_model(model_key)
     if setting_key not in model.user_settings:
-        await callback.answer("Настройка не найдена", show_alert=True)
+        await callback.answer(t("generation.setting_not_found", lang), show_alert=True)
         return
 
     user_settings = get_model_state_settings(state_data, model_key)
     option_index = int(option_index_raw)
     options = model.user_settings[setting_key].options
     if option_index < 0 or option_index >= len(options):
-        await callback.answer("Некорректное значение", show_alert=True)
+        await callback.answer(t("generation.invalid_value", lang), show_alert=True)
         return
     selected_value = str(options[option_index].value)
     user_settings[setting_key] = selected_value
@@ -2169,6 +2232,7 @@ async def continue_after_settings(callback: CallbackQuery, state: FSMContext):
     """Перейти от настроек к следующему шагу ввода по типу модели."""
     log_generation_callback(callback)
     state_data = await state.get_data()
+    lang = get_state_language(state_data, callback.from_user)
     model_key = state_data.get("model_key")
     model = get_generation_model(model_key) if model_key else None
     if not model:
@@ -2178,7 +2242,7 @@ async def continue_after_settings(callback: CallbackQuery, state: FSMContext):
             await callback.answer()
             return
         await callback.message.edit_text(
-            format_user_error(ErrorCode.E005_UNSUPPORTED_MODEL, "модель недоступна."),
+            format_user_error(ErrorCode.E005_UNSUPPORTED_MODEL, t("errors.model_unavailable", lang), lang),
             reply_markup=None,
         )
         await callback.answer()
@@ -2191,10 +2255,10 @@ async def continue_after_settings(callback: CallbackQuery, state: FSMContext):
             user_id=callback.from_user.id,
             incoming_text_type=get_incoming_text_type(is_callback=True),
         )
-        await callback.message.edit_text(get_prompt_for_generation_type(model.generation_type), reply_markup=None)
+        await callback.message.edit_text(get_prompt_for_generation_type(model.generation_type, lang), reply_markup=None)
         await callback.message.answer(
-            "Если передумали, можно вернуться к настройкам.",
-            reply_markup=build_back_to_settings_keyboard(),
+            t("generation.back_to_settings_hint", lang),
+            reply_markup=build_back_to_settings_keyboard(lang),
         )
     elif required_input_type == "image":
         if model.supports_multiple_images and model.input_media_field == "images":
@@ -2248,7 +2312,7 @@ async def navigate_back_to_settings(message: Message, state: FSMContext) -> None
         await reset_generation_state(state)
         await state.set_state(GenerationStates.choosing_generation_type)
         await state.update_data(selected_generation_type=None, selected_provider=None)
-        await message.answer("Возвращаю к выбору разделов генерации.", reply_markup=get_main_menu_keyboard())
+        await message.answer(t("generation.back_to_sections", get_actor_language(message.from_user)), reply_markup=get_main_menu_keyboard(get_actor_language(message.from_user)))
         await render_models_screen(message)
         return
 
@@ -2260,10 +2324,10 @@ async def navigate_back_to_settings(message: Message, state: FSMContext) -> None
         user_settings=selected_settings,
     )
     await state.set_state(GenerationStates.choosing_settings)
-    await message.answer("Возвращаю к настройкам модели.", reply_markup=get_main_menu_keyboard())
+    await message.answer(t("generation.back_to_model_settings", get_actor_language(message.from_user)), reply_markup=get_main_menu_keyboard(get_actor_language(message.from_user)))
     await message.answer(
-        build_settings_text(model, selected_settings),
-        reply_markup=build_model_settings_keyboard(model, selected_settings),
+        build_settings_text(model, selected_settings, get_actor_language(message.from_user)),
+        reply_markup=build_model_settings_keyboard(model, selected_settings, get_actor_language(message.from_user)),
         parse_mode="HTML",
     )
 
@@ -2275,7 +2339,7 @@ async def navigate_back_to_settings(message: Message, state: FSMContext) -> None
         GenerationStates.waiting_for_video,
         GenerationStates.waiting_for_prompt,
     ),
-    F.text == "⬅️ Назад к настройкам",
+    lambda message: is_localized_button_text(message.text, "common.back_to_settings", getattr(message.from_user, "language_code", None)),
 )
 async def back_to_settings_from_input_step(message: Message, state: FSMContext):
     """Вернуться с этапа ввода к настройкам модели без запуска генерации."""
@@ -2286,6 +2350,7 @@ async def back_to_settings_from_input_step(message: Message, state: FSMContext):
 async def process_generation_image(message: Message, state: FSMContext):
     """Принять изображение для генерации."""
     state_data = await state.get_data()
+    lang = get_state_language(state_data, message.from_user)
     is_lipsync = is_lipsync_generation_state(state_data)
     model_generation_type = str(state_data.get("model_generation_type") or "image_edit")
     if is_lipsync:
@@ -2295,8 +2360,8 @@ async def process_generation_image(message: Message, state: FSMContext):
 
         if document and not is_supported_media_document(document, is_lipsync=True):
             await message.answer(
-                "❌ Нужны фото лица или видео. Отправь фото, video или document с форматом image/* или video/*.",
-                reply_markup=build_back_to_settings_keyboard(),
+                t("generation.lipsync_need_face_media", lang),
+                reply_markup=build_back_to_settings_keyboard(lang),
             )
             return
 
@@ -2316,8 +2381,8 @@ async def process_generation_image(message: Message, state: FSMContext):
             incoming_text_type=get_incoming_text_type(message),
         )
         await message.answer(
-            get_second_step_prompt_text(is_lipsync=True),
-            reply_markup=build_back_to_settings_keyboard(),
+            get_second_step_prompt_text(is_lipsync=True, lang=lang),
+            reply_markup=build_back_to_settings_keyboard(lang),
         )
         return
 
@@ -2326,8 +2391,8 @@ async def process_generation_image(message: Message, state: FSMContext):
         received_type = "video"
     if not is_supported_image_input(message):
         await message.answer(
-            build_invalid_input_message("image", model_generation_type, received_type=received_type),
-            reply_markup=build_back_to_settings_keyboard(),
+            build_invalid_input_message("image", model_generation_type, received_type=received_type, lang=get_actor_language(message.from_user)),
+            reply_markup=build_back_to_settings_keyboard(get_actor_language(message.from_user)),
         )
         return
 
@@ -2336,8 +2401,8 @@ async def process_generation_image(message: Message, state: FSMContext):
     except ImageUploadError:
         log_generation_error(ErrorCode.E012_MEDIA_UPLOAD_FAILED, user_id=message.from_user.id, status="failed")
         await message.answer(
-            format_user_error(ErrorCode.E012_MEDIA_UPLOAD_FAILED, "не удалось подготовить изображение."),
-            reply_markup=build_back_to_settings_keyboard(),
+            format_user_error(ErrorCode.E012_MEDIA_UPLOAD_FAILED, t("errors.prepare_image_failed", lang), lang),
+            reply_markup=build_back_to_settings_keyboard(lang),
         )
         return
 
@@ -2352,8 +2417,8 @@ async def process_generation_image(message: Message, state: FSMContext):
         incoming_text_type=get_incoming_text_type(message),
     )
     await message.answer(
-        get_second_prompt_for_generation_type(model_generation_type),
-        reply_markup=build_back_to_settings_keyboard(),
+        get_second_prompt_for_generation_type(model_generation_type, lang),
+        reply_markup=build_back_to_settings_keyboard(lang),
     )
 
 
@@ -2361,6 +2426,7 @@ async def process_generation_image(message: Message, state: FSMContext):
 async def process_generation_images(message: Message, state: FSMContext):
     """Принять очередное изображение для multi-image модели."""
     state_data = await state.get_data()
+    lang = get_state_language(state_data, message.from_user)
     model_key = state_data.get("model_key")
     model = get_generation_model(model_key) if model_key else None
     model_generation_type = str(state_data.get("model_generation_type") or "image_edit")
@@ -2368,20 +2434,20 @@ async def process_generation_images(message: Message, state: FSMContext):
     if message.video or (message.document and extract_document_media_type(message.document) == "video"):
         received_type = "video"
     if not model:
-        await message.answer(format_user_error(ErrorCode.E005_UNSUPPORTED_MODEL, "модель недоступна."))
+        await message.answer(format_user_error(ErrorCode.E005_UNSUPPORTED_MODEL, t("errors.model_unavailable", lang), lang))
         return
     if not is_supported_image_input(message):
         await message.answer(
-            build_invalid_input_message("image", model_generation_type, received_type=received_type),
-            reply_markup=build_media_upload_reply_keyboard(show_continue=True),
+            build_invalid_input_message("image", model_generation_type, received_type=received_type, lang=get_actor_language(message.from_user)),
+            reply_markup=build_media_upload_reply_keyboard(show_continue=True, lang=get_actor_language(message.from_user)),
         )
         return
 
     media_items = get_input_media_items(state_data)
     if len(media_items) >= model.max_images:
         await message.answer(
-            f"Достигнут лимит {model.max_images} изображений.",
-            reply_markup=build_media_upload_reply_keyboard(show_continue=True),
+            t("generation.image_limit_reached", lang, count=model.max_images),
+            reply_markup=build_media_upload_reply_keyboard(show_continue=True, lang=lang),
         )
         return
 
@@ -2390,8 +2456,8 @@ async def process_generation_images(message: Message, state: FSMContext):
     except ImageUploadError:
         log_generation_error(ErrorCode.E012_MEDIA_UPLOAD_FAILED, user_id=message.from_user.id, status="failed")
         await message.answer(
-            format_user_error(ErrorCode.E012_MEDIA_UPLOAD_FAILED, "не удалось подготовить изображение."),
-            reply_markup=build_media_upload_reply_keyboard(show_continue=True),
+            format_user_error(ErrorCode.E012_MEDIA_UPLOAD_FAILED, t("errors.prepare_image_failed", lang), lang),
+            reply_markup=build_media_upload_reply_keyboard(show_continue=True, lang=lang),
         )
         return
 
@@ -2408,14 +2474,14 @@ async def process_generation_images(message: Message, state: FSMContext):
             incoming_text_type=get_incoming_text_type(message),
         )
         await message.answer(
-            get_second_prompt_for_generation_type(model_generation_type),
-            reply_markup=build_back_to_settings_keyboard(),
+            get_second_prompt_for_generation_type(model_generation_type, get_actor_language(message.from_user)),
+            reply_markup=build_back_to_settings_keyboard(get_actor_language(message.from_user)),
         )
         return
 
     await message.answer(
-        f"Загружено {len(media_items)} из {model.max_images}. Отправьте ещё изображение или нажмите ✅ Продолжить.",
-        reply_markup=build_media_upload_reply_keyboard(show_continue=True),
+        t("generation.images_uploaded_progress", lang, count=len(media_items), max_count=model.max_images),
+        reply_markup=build_media_upload_reply_keyboard(show_continue=True, lang=lang),
     )
 
 
@@ -2423,12 +2489,11 @@ async def process_generation_images(message: Message, state: FSMContext):
 async def invalid_generation_image(message: Message, state: FSMContext):
     """Сообщить, что ожидается изображение."""
     state_data = await state.get_data()
+    lang = get_state_language(state_data, message.from_user)
     is_lipsync = is_lipsync_generation_state(state_data)
     await message.answer(
-        "❌ Я жду фото лица или видео. Отправь фото, video или document с форматом image/* или video/*."
-        if is_lipsync
-        else "❌ Я жду изображение. Отправь фото Telegram или document с форматом image/*.",
-        reply_markup=build_back_to_settings_keyboard(),
+        t("generation.invalid_wait_lipsync", lang) if is_lipsync else t("generation.invalid_wait_image", lang),
+        reply_markup=build_back_to_settings_keyboard(lang),
     )
 
 
@@ -2436,12 +2501,13 @@ async def invalid_generation_image(message: Message, state: FSMContext):
 async def invalid_generation_images(message: Message, state: FSMContext):
     """Сообщить, что ожидается изображение для multi-image flow."""
     state_data = await state.get_data()
+    lang = get_state_language(state_data, message.from_user)
     model_key = state_data.get("model_key")
     model = get_generation_model(model_key) if model_key else None
     max_images = model.max_images if model else 1
     await message.answer(
-        format_user_error(ErrorCode.E001_INVALID_INPUT_TYPE, "нужно отправить изображение."),
-        reply_markup=build_media_upload_reply_keyboard(show_continue=True if max_images else False),
+        format_user_error(ErrorCode.E001_INVALID_INPUT_TYPE, t("generation.flow.image.invalid", lang), lang),
+        reply_markup=build_media_upload_reply_keyboard(show_continue=True if max_images else False, lang=lang),
     )
 
 
@@ -2449,6 +2515,7 @@ async def invalid_generation_images(message: Message, state: FSMContext):
 async def process_generation_video(message: Message, state: FSMContext):
     """Принять видео для генерации."""
     state_data = await state.get_data()
+    lang = get_state_language(state_data, message.from_user)
     model_generation_type = str(state_data.get("model_generation_type") or "video_edit")
     received_type = None
     if message.photo or (message.document and extract_document_media_type(message.document) == "image"):
@@ -2456,8 +2523,8 @@ async def process_generation_video(message: Message, state: FSMContext):
 
     if not is_supported_video_input(message):
         await message.answer(
-            build_invalid_input_message("video", model_generation_type, received_type=received_type),
-            reply_markup=build_back_to_settings_keyboard(),
+            build_invalid_input_message("video", model_generation_type, received_type=received_type, lang=get_actor_language(message.from_user)),
+            reply_markup=build_back_to_settings_keyboard(get_actor_language(message.from_user)),
         )
         return
 
@@ -2466,8 +2533,8 @@ async def process_generation_video(message: Message, state: FSMContext):
     except ImageUploadError:
         log_generation_error(ErrorCode.E012_MEDIA_UPLOAD_FAILED, user_id=message.from_user.id, status="failed")
         await message.answer(
-            format_user_error(ErrorCode.E012_MEDIA_UPLOAD_FAILED, "не удалось подготовить видео."),
-            reply_markup=build_back_to_settings_keyboard(),
+            format_user_error(ErrorCode.E012_MEDIA_UPLOAD_FAILED, t("errors.prepare_video_failed", lang), lang),
+            reply_markup=build_back_to_settings_keyboard(lang),
         )
         return
 
@@ -2482,8 +2549,8 @@ async def process_generation_video(message: Message, state: FSMContext):
         incoming_text_type=get_incoming_text_type(message),
     )
     await message.answer(
-        get_second_prompt_for_generation_type(model_generation_type),
-        reply_markup=build_back_to_settings_keyboard(),
+        get_second_prompt_for_generation_type(model_generation_type, get_actor_language(message.from_user)),
+        reply_markup=build_back_to_settings_keyboard(get_actor_language(message.from_user)),
     )
 
 
@@ -2493,8 +2560,8 @@ async def invalid_generation_video(message: Message, state: FSMContext):
     state_data = await state.get_data()
     model_generation_type = str(state_data.get("model_generation_type") or "video_edit")
     await message.answer(
-        build_invalid_input_message("video", model_generation_type),
-        reply_markup=build_back_to_settings_keyboard(),
+        build_invalid_input_message("video", model_generation_type, lang=get_actor_language(message.from_user)),
+        reply_markup=build_back_to_settings_keyboard(get_actor_language(message.from_user)),
     )
 
 
@@ -2507,6 +2574,7 @@ async def process_prompt(
     """Обработать промпт для генерации."""
     try:
         state_data = await state.get_data()
+        lang = get_state_language(state_data, message.from_user)
         model_key = state_data.get("model_key", "nano_banana")
         model = get_generation_model(model_key)
         is_lipsync = is_lipsync_generation_state(state_data)
@@ -2526,52 +2594,55 @@ async def process_prompt(
         
         if is_lipsync:
             input_audio_or_text = build_input_audio_or_text_payload(message)
-            prompt = get_input_audio_or_text_display(input_audio_or_text)
+            prompt = get_input_audio_or_text_display(input_audio_or_text, lang)
             if not input_audio_or_text:
-                await message.answer("❌ Отправь текст, голосовое сообщение или аудиофайл для озвучки.")
+                await message.answer(format_user_error(ErrorCode.E001_INVALID_INPUT_TYPE, t("generation.lipsync_need_text", lang), lang))
                 return
             if not input_media:
-                await message.answer("❌ Сначала отправь фото лица или видео.", reply_markup=build_back_to_settings_keyboard())
+                await message.answer(
+                    format_user_error(ErrorCode.E003_MISSING_IMAGE, t("generation.lipsync_need_media", lang), lang),
+                    reply_markup=build_back_to_settings_keyboard(lang),
+                )
                 await state.set_state(GenerationStates.waiting_for_image)
                 return
         else:
             if message_contains_file(message):
                 await message.answer(
-                    build_invalid_input_message("text", model.generation_type),
-                    reply_markup=build_back_to_settings_keyboard(),
+                    build_invalid_input_message("text", model.generation_type, lang=lang),
+                    reply_markup=build_back_to_settings_keyboard(lang),
                 )
                 return
             prompt = (message.text or "").strip()
             if not prompt:
                 await message.answer(
-                    format_user_error(ErrorCode.E002_MISSING_PROMPT, get_flow_texts(model.generation_type).missing_prompt),
-                    reply_markup=build_back_to_settings_keyboard(),
+                    format_user_error(ErrorCode.E002_MISSING_PROMPT, get_flow_texts(model.generation_type, lang).missing_prompt, lang),
+                    reply_markup=build_back_to_settings_keyboard(lang),
                 )
                 return
             if len(prompt) < 10:
                 await message.answer(
-                    format_user_error(ErrorCode.E002_MISSING_PROMPT, "описание слишком короткое."),
-                    reply_markup=build_back_to_settings_keyboard(),
+                    format_user_error(ErrorCode.E002_MISSING_PROMPT, t("errors.short_description", lang), lang),
+                    reply_markup=build_back_to_settings_keyboard(lang),
                 )
                 return
             if model.input_media_field == "images" and len(input_media_items) < model.min_images and not input_media:
                 await message.answer(
-                    format_user_error(ErrorCode.E003_MISSING_IMAGE, f"нужно загрузить минимум {model.min_images} изображение."),
-                    reply_markup=build_media_upload_reply_keyboard(show_continue=True),
+                    format_user_error(ErrorCode.E003_MISSING_IMAGE, t("generation.need_min_images", lang, count=model.min_images), lang),
+                    reply_markup=build_media_upload_reply_keyboard(show_continue=True, lang=lang),
                 )
                 await state.set_state(GenerationStates.waiting_for_images)
                 return
             if required_input_type == "image" and not input_media:
                 await message.answer(
-                    format_user_error(ErrorCode.E003_MISSING_IMAGE, get_flow_texts(model.generation_type).missing_media),
-                    reply_markup=build_back_to_settings_keyboard(),
+                    format_user_error(ErrorCode.E003_MISSING_IMAGE, get_flow_texts(model.generation_type, lang).missing_media, lang),
+                    reply_markup=build_back_to_settings_keyboard(lang),
                 )
                 await state.set_state(GenerationStates.waiting_for_image)
                 return
             if required_input_type == "video" and not input_media:
                 await message.answer(
-                    format_user_error(ErrorCode.E004_MISSING_VIDEO, get_flow_texts(model.generation_type).missing_media),
-                    reply_markup=build_back_to_settings_keyboard(),
+                    format_user_error(ErrorCode.E004_MISSING_VIDEO, get_flow_texts(model.generation_type, lang).missing_media, lang),
+                    reply_markup=build_back_to_settings_keyboard(lang),
                 )
                 await state.set_state(GenerationStates.waiting_for_video)
                 return
@@ -2580,8 +2651,9 @@ async def process_prompt(
         user = await user_repo.get_or_create_user_from_telegram(message.from_user)
         
         if not user:
-            await message.answer(format_user_error(ErrorCode.E010_INTERNAL_ERROR, "пользователь не найден."))
+            await message.answer(format_user_error(ErrorCode.E010_INTERNAL_ERROR, t("errors.user_not_found", lang), lang))
             return
+        lang = get_user_preferred_language(user, message.from_user)
         
         user_settings = get_model_state_settings(state_data, model_key)
         total_cost = get_total_generation_cost(model, user_settings)
@@ -2601,12 +2673,13 @@ async def process_prompt(
             await message.answer(
                 format_user_error(
                     ErrorCode.E006_INSUFFICIENT_BALANCE,
-                    f"недостаточно кредитов. Нужно {total_cost}, у вас {user.balance}.",
+                    t("errors.insufficient_balance_details", lang, cost=total_cost, balance=user.balance),
+                    lang,
                 ),
             )
             await message.answer(
-                "Измените количество генераций или пополните баланс.",
-                reply_markup=get_main_menu_keyboard(),
+                t("generation.adjust_or_top_up", lang),
+                reply_markup=get_main_menu_keyboard(lang),
             )
             await render_settings_screen_message(message, state, edit=False)
             return
@@ -2627,7 +2700,7 @@ async def process_prompt(
             model_key=state_data.get("model_key"),
             status="failed",
         )
-        await message.answer(format_user_error(ErrorCode.E010_INTERNAL_ERROR, "ошибка при обработке запроса."))
+        await message.answer(format_user_error(ErrorCode.E010_INTERNAL_ERROR, t("errors.request_processing_failed", lang), lang))
 
 
 @router.callback_query(lambda cb: cb.data == GENERATION_CONFIRM)
@@ -2635,11 +2708,12 @@ async def confirm_generation(callback: CallbackQuery, state: FSMContext, session
     """Запустить генерацию после подтверждения."""
     log_generation_callback(callback)
     user_id = callback.from_user.id
+    state_data = await state.get_data()
+    lang = get_state_language(state_data, callback.from_user)
     if user_id in ACTIVE_GENERATIONS:
-        await callback.answer("Генерация уже запущена", show_alert=True)
+        await callback.answer(t("generation.already_running", lang), show_alert=True)
         return
 
-    state_data = await state.get_data()
     model_key = state_data.get("model_key")
     model_title = state_data.get("model_title")
     model_endpoint = state_data.get("model_endpoint")
@@ -2665,8 +2739,8 @@ async def confirm_generation(callback: CallbackQuery, state: FSMContext, session
     except ValueError:
         log_generation_error(ErrorCode.E011_INVALID_MODEL_SETTINGS, user_id=user_id, model_key=model_key, status="rejected")
         await callback.message.answer(
-            format_user_error(ErrorCode.E011_INVALID_MODEL_SETTINGS, "некорректные настройки модели."),
-            reply_markup=get_main_menu_keyboard(),
+            format_user_error(ErrorCode.E011_INVALID_MODEL_SETTINGS, t("errors.invalid_model_settings", lang), lang),
+            reply_markup=get_main_menu_keyboard(lang),
         )
         await reset_generation_state(state)
         await callback.answer()
@@ -2683,22 +2757,22 @@ async def confirm_generation(callback: CallbackQuery, state: FSMContext, session
 
     if not is_complete:
         if not model:
-            error_text = format_user_error(ErrorCode.E005_UNSUPPORTED_MODEL, "модель недоступна.")
+            error_text = format_user_error(ErrorCode.E005_UNSUPPORTED_MODEL, t("errors.model_unavailable", lang), lang)
         elif is_lipsync:
-            error_text = get_lipsync_incomplete_error_text()
+            error_text = get_lipsync_incomplete_error_text(lang)
         elif not prompt:
-            error_text = format_user_error(ErrorCode.E002_MISSING_PROMPT, get_flow_texts(model.generation_type).missing_prompt)
+            error_text = format_user_error(ErrorCode.E002_MISSING_PROMPT, get_flow_texts(model.generation_type, lang).missing_prompt, lang)
         elif model and model.input_media_field == "images":
-            error_text = format_user_error(ErrorCode.E003_MISSING_IMAGE, f"нужно загрузить минимум {model.min_images} изображение.")
+            error_text = format_user_error(ErrorCode.E003_MISSING_IMAGE, t("generation.need_min_images", lang, count=model.min_images), lang)
         elif required_input_type == "image":
-            error_text = format_user_error(ErrorCode.E003_MISSING_IMAGE, get_flow_texts(model.generation_type).missing_media)
+            error_text = format_user_error(ErrorCode.E003_MISSING_IMAGE, get_flow_texts(model.generation_type, lang).missing_media, lang)
         elif required_input_type == "video":
-            error_text = format_user_error(ErrorCode.E004_MISSING_VIDEO, get_flow_texts(model.generation_type).missing_media)
+            error_text = format_user_error(ErrorCode.E004_MISSING_VIDEO, get_flow_texts(model.generation_type, lang).missing_media, lang)
         else:
-            error_text = format_user_error(ErrorCode.E010_INTERNAL_ERROR, "данные генерации неполные. Начните заново.")
+            error_text = format_user_error(ErrorCode.E010_INTERNAL_ERROR, t("errors.incomplete_generation", lang), lang)
         await callback.message.answer(
             error_text,
-            reply_markup=get_main_menu_keyboard(),
+            reply_markup=get_main_menu_keyboard(lang),
         )
         await reset_generation_state(state)
         await callback.answer()
@@ -2716,6 +2790,8 @@ async def confirm_generation(callback: CallbackQuery, state: FSMContext, session
         user_repo = UserRepository(session)
         generation_repo = GenerationRepository(session)
         user = await user_repo.get_or_create_user_from_telegram(callback.from_user)
+        lang = get_user_preferred_language(user, callback.from_user)
+        await state.update_data(user_language=lang)
         debited_user_id = user.id
         num_generations = get_model_num_generations(model, user_settings)
         total_cost = get_total_generation_cost(model, user_settings)
@@ -2735,9 +2811,10 @@ async def confirm_generation(callback: CallbackQuery, state: FSMContext, session
             await callback.message.answer(
                 format_user_error(
                     ErrorCode.E006_INSUFFICIENT_BALANCE,
-                    f"Недостаточно кредитов. Нужно {total_cost}, у вас {user.balance}.",
+                    t("errors.insufficient_balance_details", lang, cost=total_cost, balance=user.balance),
+                    lang,
                 ),
-                reply_markup=get_main_menu_keyboard(),
+                reply_markup=get_main_menu_keyboard(lang),
             )
             await reset_generation_state(state)
             await callback.answer()
@@ -2814,14 +2891,14 @@ async def confirm_generation(callback: CallbackQuery, state: FSMContext, session
 
         await callback.message.edit_text(
             (
-                f"Запущено генераций: {num_generations}. Результаты будут приходить по мере готовности.\n\n"
-                f"Модель: <b>{escape(model_title)}</b>"
+                f"{t('generation.started_count', lang, count=num_generations)}\n\n"
+                f"{t('generation.model_label', lang, model=escape(model_title))}"
             ),
             parse_mode="HTML",
         )
         await callback.message.answer(
-            f"Запущено генераций: {num_generations}. Результаты будут приходить по мере готовности.",
-            reply_markup=get_main_menu_keyboard(),
+            t("generation.started_count", lang, count=num_generations),
+            reply_markup=get_main_menu_keyboard(lang),
         )
         await callback.answer()
     except ImageUploadError as exc:
@@ -2851,8 +2928,8 @@ async def confirm_generation(callback: CallbackQuery, state: FSMContext, session
         waiting_state = GenerationStates.waiting_for_images if model and model.supports_multiple_images else get_waiting_state_for_input_type(required_input_type)
         await state.set_state(waiting_state)
         await callback.message.answer(
-            format_user_error(ErrorCode.E012_MEDIA_UPLOAD_FAILED, "не удалось подготовить медиа для генерации."),
-            reply_markup=get_main_menu_keyboard(),
+            format_user_error(ErrorCode.E012_MEDIA_UPLOAD_FAILED, t("errors.prepare_media_failed", lang), lang),
+            reply_markup=get_main_menu_keyboard(lang),
         )
         await callback.answer()
     except ValueError:
@@ -2871,8 +2948,8 @@ async def confirm_generation(callback: CallbackQuery, state: FSMContext, session
                 logger.exception("Error while refunding balance after invalid payload")
         await state.clear()
         await callback.message.answer(
-            format_user_error(ErrorCode.E011_INVALID_MODEL_SETTINGS, "некорректные настройки модели."),
-            reply_markup=get_main_menu_keyboard(),
+            format_user_error(ErrorCode.E011_INVALID_MODEL_SETTINGS, t("errors.invalid_model_settings", lang), lang),
+            reply_markup=get_main_menu_keyboard(lang),
         )
         await callback.answer()
     except Exception:
@@ -2890,7 +2967,7 @@ async def confirm_generation(callback: CallbackQuery, state: FSMContext, session
                 await generation_repo.update_generation_status(
                     current_generation_request_id,
                     "failed",
-                    error_message="Не удалось запустить генерацию. Попробуйте позже.",
+                    error_message=t("errors.finish_generation_failed", lang),
                 )
         if debited_balance and debited_user_id is not None:
             try:
@@ -2900,19 +2977,20 @@ async def confirm_generation(callback: CallbackQuery, state: FSMContext, session
                 logger.exception("Error while refunding balance after launch failure: %s", refund_exc)
         await state.clear()
         await callback.message.answer(
-            format_user_error(ErrorCode.E010_INTERNAL_ERROR, "не удалось запустить генерацию."),
-            reply_markup=get_main_menu_keyboard(),
+            format_user_error(ErrorCode.E010_INTERNAL_ERROR, t("errors.launch_generation_failed", lang), lang),
+            reply_markup=get_main_menu_keyboard(lang),
         )
         await callback.answer()
 @router.callback_query(F.data.startswith("gen:"))
 async def handle_unknown_generation_callback(callback: CallbackQuery, state: FSMContext):
     """Fallback для устаревших или неподдерживаемых inline-кнопок генераций."""
     log_generation_callback(callback)
+    lang = get_actor_language(callback.from_user)
     await state.set_state(GenerationStates.choosing_generation_type)
     await state.update_data(selected_generation_type=None, selected_provider=None)
-    await callback.answer("Кнопка устарела. Откройте Генерации заново.", show_alert=True)
+    await callback.answer(t("generation.legacy_button", lang), show_alert=True)
     await callback.message.edit_text(
-        build_generation_types_screen_text(),
-        reply_markup=build_generation_sections_keyboard(),
+        build_generation_types_screen_text(lang),
+        reply_markup=build_generation_sections_keyboard(lang),
         parse_mode="HTML",
     )
