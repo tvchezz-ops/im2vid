@@ -17,6 +17,7 @@ from app.bot.keyboards import (
     build_back_to_settings_reply_keyboard,
     build_generation_confirm_keyboard,
     build_generation_sections_keyboard,
+    build_main_menu_keyboard,
     build_model_settings_keyboard,
     build_models_keyboard,
     build_providers_keyboard,
@@ -127,3 +128,14 @@ def test_build_back_to_settings_reply_keyboard_uses_expected_text() -> None:
     keyboard = build_back_to_settings_reply_keyboard()
 
     assert keyboard.keyboard[0][0].text == "⬅️ Назад к настройкам"
+
+
+def test_build_main_menu_keyboard_uses_expected_layout() -> None:
+    keyboard = build_main_menu_keyboard()
+
+    assert keyboard.keyboard[0][0].text == "🎨 Генерации"
+    assert keyboard.keyboard[1][0].text == "👤 Профиль"
+    assert keyboard.keyboard[1][1].text == "🛒 Магазин"
+    assert keyboard.resize_keyboard is True
+    assert keyboard.one_time_keyboard is False
+    assert keyboard.input_field_placeholder == "Выберите раздел"

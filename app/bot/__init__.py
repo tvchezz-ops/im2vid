@@ -4,6 +4,7 @@ from app.bot.keyboards import (
     build_back_to_settings_reply_keyboard,
     build_generation_confirm_keyboard,
     build_generation_sections_keyboard,
+    build_main_menu_keyboard,
     build_generation_type_keyboard,
     build_generation_type_selection_keyboard,
     build_models_keyboard,
@@ -23,6 +24,7 @@ from app.bot.states import GenerationStates, ShopStates, UserStates
 
 __all__ = [
     "get_main_menu_keyboard",
+    "build_main_menu_keyboard",
     "build_back_to_settings_keyboard",
     "build_back_to_settings_reply_keyboard",
     "build_generation_type_keyboard",

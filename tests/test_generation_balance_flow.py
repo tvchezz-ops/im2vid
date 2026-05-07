@@ -12,15 +12,13 @@ import pytest_asyncio
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 
-from aiogram.types import ReplyKeyboardRemove
-
-
 os.environ.setdefault("BOT_TOKEN", "test-bot-token")
 os.environ.setdefault("WAVESPEED_API_KEY", "test-api-key")
 os.environ.setdefault("PUBLIC_BASE_URL", "https://example.com")
 
 
 from app.bot.routers import generations
+from app.bot.keyboards import build_main_menu_keyboard
 from app.db.base import Base
 from app.db.models import GenerationRequest, GenerationRequestStatus, User
 from app.db.repositories import GenerationRepository, UserRepository
@@ -112,6 +110,7 @@ class FakeBot:
         self.photos: list[dict[str, object]] = []
         self.videos: list[dict[str, object]] = []
         self.messages: list[str] = []
+        self.message_markups: list[object] = []
 
     async def send_document(self, chat_id, document, caption=None, request_timeout=None):
         self.documents.append(
@@ -144,6 +143,7 @@ class FakeBot:
 
     async def send_message(self, chat_id, text, reply_markup=None):
         self.messages.append(text)
+        self.message_markups.append(reply_markup)
 
 
 @pytest_asyncio.fixture
@@ -644,7 +644,7 @@ async def test_process_prompt_insufficient_balance_returns_to_settings(session_f
         assert state.data.get("prompt") is None
         assert message.answers[0] == "❌ Ошибка E006: недостаточно кредитов. Нужно 4, у вас 0."
         assert message.answers[1] == "Измените количество генераций или пополните баланс."
-        assert isinstance(message.answer_markups[1], ReplyKeyboardRemove)
+        assert message.answer_markups[1].keyboard[0][0].text == "🎨 Генерации"
         assert message.answers[2].startswith("Настройки модели:")
         assert any(
             isinstance(record.msg, dict)
@@ -723,7 +723,7 @@ async def test_back_to_settings_from_waiting_for_prompt_restores_settings_and_lo
     assert state.data["prompt"] is None
     assert state.data["selected_model_key"] == "alibaba_wan_2_6_text_to_image"
     assert state.data["selected_settings"] == {}
-    assert isinstance(message.answer_markups[0], ReplyKeyboardRemove)
+    assert message.answer_markups[0].keyboard[0][0].text == "🎨 Генерации"
     assert message.answers[0] == "Возвращаю к настройкам модели."
     assert message.answers[1].startswith("Настройки модели:")
     assert any(
@@ -758,9 +758,27 @@ async def test_back_to_settings_from_waiting_for_prompt_without_model_shows_sect
         "selected_generation_type": None,
         "selected_provider": None,
     }
-    assert isinstance(message.answer_markups[0], ReplyKeyboardRemove)
+    assert message.answer_markups[0].keyboard[0][0].text == "🎨 Генерации"
     assert message.answers[0] == "Возвращаю к выбору разделов генерации."
     assert "Выберите тип генерации:" in message.answers[1]
+
+
+@pytest.mark.asyncio
+async def test_send_generation_outputs_restores_main_menu_keyboard(monkeypatch, tmp_path) -> None:
+    output_path = tmp_path / "output.jpg"
+    output_path.write_bytes(b"image")
+
+    async def fake_download_output_file_to_temp(output_url: str):
+        return str(output_path), "image/jpeg", 5
+
+    monkeypatch.setattr(generations, "download_output_file_to_temp", fake_download_output_file_to_temp)
+
+    bot = FakeBot()
+    delivered = await generations.send_generation_outputs(bot, 1, ["https://example.com/output.jpg"])
+
+    assert delivered.delivered_successfully is True
+    assert bot.messages[-1] == "🏠 Главное меню"
+    assert bot.message_markups[-1].keyboard[0][0].text == "🎨 Генерации"
 
 
 @pytest.mark.asyncio

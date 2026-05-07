@@ -962,7 +962,10 @@ async def continue_after_multi_image_upload(message: Message, state: FSMContext)
         user_id=message.from_user.id,
         incoming_text_type=get_incoming_text_type(message),
     )
-    await message.answer(get_second_prompt_for_generation_type(model.generation_type), reply_markup=ReplyKeyboardRemove())
+    await message.answer(
+        get_second_prompt_for_generation_type(model.generation_type),
+        reply_markup=build_back_to_settings_keyboard(),
+    )
 
 
 async def log_generation_event(
@@ -1386,6 +1389,12 @@ async def send_generation_outputs(
             )
         finally:
             await cleanup_temp_output_file(temp_output_path)
+    await safe_send_bot_message(
+        bot,
+        chat_id,
+        "🏠 Главное меню",
+        reply_markup=get_main_menu_keyboard(),
+    )
     return OutputDeliveryResult(delivered_successfully=delivered_successfully, use_r2=use_r2)
 
 
@@ -1840,7 +1849,10 @@ async def show_generation_menu(message: Message, state: FSMContext):
 
         if is_generation_flow_state(current_state):
             await reset_generation_flow(state, reason="main_menu_generations")
-            await message.answer("Сценарий генерации сброшен. Вы вернулись в главное меню.")
+            await message.answer(
+                "Сценарий генерации сброшен. Вы вернулись в главное меню.",
+                reply_markup=get_main_menu_keyboard(),
+            )
         elif current_state is not None:
             await state.clear()
 
@@ -2079,7 +2091,7 @@ async def back_to_settings_from_text_setting(message: Message, state: FSMContext
     """Вернуться с текстового ввода настройки к экрану настроек модели."""
     await state.set_state(GenerationStates.choosing_settings)
     await state.update_data(current_setting_key=None)
-    await message.answer("Возвращаю к настройкам модели.", reply_markup=ReplyKeyboardRemove())
+    await message.answer("Возвращаю к настройкам модели.", reply_markup=get_main_menu_keyboard())
     await render_settings_screen_message(message, state, edit=False)
 
 
@@ -2110,7 +2122,7 @@ async def process_text_setting_value(message: Message, state: FSMContext):
     user_settings[str(setting_key)] = value
     await state.update_data(user_settings=user_settings, current_setting_key=None)
     await state.set_state(GenerationStates.choosing_settings)
-    await message.answer("Значение сохранено.", reply_markup=ReplyKeyboardRemove())
+    await message.answer("Значение сохранено.", reply_markup=get_main_menu_keyboard())
     await render_settings_screen_message(message, state, edit=False)
 
 
@@ -2236,7 +2248,7 @@ async def navigate_back_to_settings(message: Message, state: FSMContext) -> None
         await reset_generation_state(state)
         await state.set_state(GenerationStates.choosing_generation_type)
         await state.update_data(selected_generation_type=None, selected_provider=None)
-        await message.answer("Возвращаю к выбору разделов генерации.", reply_markup=ReplyKeyboardRemove())
+        await message.answer("Возвращаю к выбору разделов генерации.", reply_markup=get_main_menu_keyboard())
         await render_models_screen(message)
         return
 
@@ -2248,7 +2260,7 @@ async def navigate_back_to_settings(message: Message, state: FSMContext) -> None
         user_settings=selected_settings,
     )
     await state.set_state(GenerationStates.choosing_settings)
-    await message.answer("Возвращаю к настройкам модели.", reply_markup=ReplyKeyboardRemove())
+    await message.answer("Возвращаю к настройкам модели.", reply_markup=get_main_menu_keyboard())
     await message.answer(
         build_settings_text(model, selected_settings),
         reply_markup=build_model_settings_keyboard(model, selected_settings),
@@ -2305,7 +2317,7 @@ async def process_generation_image(message: Message, state: FSMContext):
         )
         await message.answer(
             get_second_step_prompt_text(is_lipsync=True),
-            reply_markup=ReplyKeyboardRemove(),
+            reply_markup=build_back_to_settings_keyboard(),
         )
         return
 
@@ -2341,7 +2353,7 @@ async def process_generation_image(message: Message, state: FSMContext):
     )
     await message.answer(
         get_second_prompt_for_generation_type(model_generation_type),
-        reply_markup=ReplyKeyboardRemove(),
+        reply_markup=build_back_to_settings_keyboard(),
     )
 
 
@@ -2397,7 +2409,7 @@ async def process_generation_images(message: Message, state: FSMContext):
         )
         await message.answer(
             get_second_prompt_for_generation_type(model_generation_type),
-            reply_markup=ReplyKeyboardRemove(),
+            reply_markup=build_back_to_settings_keyboard(),
         )
         return
 
@@ -2471,7 +2483,7 @@ async def process_generation_video(message: Message, state: FSMContext):
     )
     await message.answer(
         get_second_prompt_for_generation_type(model_generation_type),
-        reply_markup=ReplyKeyboardRemove(),
+        reply_markup=build_back_to_settings_keyboard(),
     )
 
 
@@ -2594,7 +2606,7 @@ async def process_prompt(
             )
             await message.answer(
                 "Измените количество генераций или пополните баланс.",
-                reply_markup=ReplyKeyboardRemove(),
+                reply_markup=get_main_menu_keyboard(),
             )
             await render_settings_screen_message(message, state, edit=False)
             return

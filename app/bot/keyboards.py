@@ -105,15 +105,22 @@ def resolve_model_key_from_token(models: Sequence[Any], token: str) -> str | Non
     return None
 
 
-def get_main_menu_keyboard() -> ReplyKeyboardMarkup:
-    """Главное меню."""
+def build_main_menu_keyboard() -> ReplyKeyboardMarkup:
+    """Главное меню Telegram reply keyboard."""
     return ReplyKeyboardMarkup(
         keyboard=[
             [KeyboardButton(text="🎨 Генерации")],
             [KeyboardButton(text="👤 Профиль"), KeyboardButton(text="🛒 Магазин")],
         ],
         resize_keyboard=True,
+        one_time_keyboard=False,
+        input_field_placeholder="Выберите раздел",
     )
+
+
+def get_main_menu_keyboard() -> ReplyKeyboardMarkup:
+    """Совместимость со старым именем главного меню."""
+    return build_main_menu_keyboard()
 
 
 def get_back_to_menu_keyboard() -> ReplyKeyboardMarkup:

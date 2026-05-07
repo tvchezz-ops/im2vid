@@ -16,6 +16,7 @@ os.environ.setdefault("PUBLIC_BASE_URL", "https://example.com")
 
 
 from app.bot.routers import generations, profile, shop, start
+from app.bot.keyboards import build_main_menu_keyboard
 from app.bot.states import GenerationStates
 from app.db.base import Base
 
@@ -62,6 +63,13 @@ class FakeMessage:
     async def answer(self, text: str, reply_markup=None, parse_mode=None) -> None:
         self.answers.append(text)
         self.answer_markups.append(reply_markup)
+
+
+def _assert_main_menu_keyboard(markup) -> None:
+    assert markup is not None
+    assert markup.keyboard[0][0].text == "🎨 Генерации"
+    assert markup.keyboard[1][0].text == "👤 Профиль"
+    assert markup.keyboard[1][1].text == "🛒 Магазин"
 
 
 @pytest_asyncio.fixture
@@ -123,6 +131,32 @@ async def test_cancel_command_resets_generation_flow_and_shows_main_menu(session
         assert state.data == {}
         assert message.answers[0] == "Сценарий генерации сброшен. Вы вернулись в главное меню."
         assert message.answers[1] == "🏠 Главное меню"
+        _assert_main_menu_keyboard(message.answer_markups[0])
+        _assert_main_menu_keyboard(message.answer_markups[1])
+
+
+@pytest.mark.asyncio
+async def test_start_command_always_shows_main_menu(session_factory) -> None:
+    async with session_factory() as session:
+        state = FakeState()
+        message = FakeMessage(user_id=704, text="/start")
+
+        await start.start_command(message, state, session)
+
+        assert "Привет" in message.answers[-1]
+        _assert_main_menu_keyboard(message.answer_markups[-1])
+
+
+@pytest.mark.asyncio
+async def test_menu_command_always_shows_main_menu(session_factory) -> None:
+    async with session_factory() as session:
+        state = FakeState()
+        message = FakeMessage(user_id=705, text="/menu")
+
+        await start.menu_command(message, state, session)
+
+        assert message.answers[-1] == "🏠 Главное меню"
+        _assert_main_menu_keyboard(message.answer_markups[-1])
 
 
 @pytest.mark.asyncio
@@ -136,6 +170,7 @@ async def test_generations_button_resets_generation_flow_before_opening_menu() -
     assert state.state == GenerationStates.choosing_generation_type
     assert message.answers[0] == "Сценарий генерации сброшен. Вы вернулись в главное меню."
     assert "Выберите тип генерации:" in message.answers[1]
+    _assert_main_menu_keyboard(message.answer_markups[0])
 
 
 @pytest.mark.asyncio
@@ -165,4 +200,5 @@ async def test_main_menu_buttons_reset_generation_flow_before_navigation(
         assert state.state is None
         assert state.data == {}
         assert message.answers[0] == "Сценарий генерации сброшен. Вы вернулись в главное меню."
+        _assert_main_menu_keyboard(message.answer_markups[0])
         assert expected_text in message.answers[1]
