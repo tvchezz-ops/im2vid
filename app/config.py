@@ -96,6 +96,10 @@ class Settings(BaseSettings):
         default="",
         description="Username текущего бота для возврата из wallet bot без @",
     )
+    wallet_bot_username: str = Field(
+        default="",
+        description="Username отдельного wallet bot для Telegram Stars без @",
+    )
     crypto_provider: str = Field(
         default="",
         description="Имя будущего crypto payment provider",
@@ -189,6 +193,7 @@ except Exception as e:
         f"- TELEGRAM_SAFE_DOCUMENT_SIZE_MB (опционально, по умолчанию 45)\n"
         f"- TELEGRAM_STARS_WALLET_BOT_USERNAME (опционально, для внешнего wallet bot)\n"
         f"- TELEGRAM_STARS_RETURN_BOT_USERNAME (опционально, для возврата из wallet bot)\n"
+        f"- WALLET_BOT_USERNAME (опционально, username отдельного wallet bot)\n"
         f"- CRYPTO_PROVIDER (опционально, для будущего crypto provider)\n"
         f"- CRYPTO_WEBHOOK_SECRET (опционально, для будущих crypto webhooks)\n"
         f"- CRYPTO_WALLET_BTC (опционально)\n"

@@ -1,6 +1,7 @@
 """Репозитории для работы с БД."""
 from __future__ import annotations
 
+from dataclasses import dataclass
 from datetime import datetime, timezone
 from typing import Any, Optional
 
@@ -19,6 +20,14 @@ from app.db.models import (
     UserEvent,
 )
 from app.utils import logger
+
+
+@dataclass(frozen=True)
+class PaymentCompletionResult:
+    """Result of an idempotent payment completion attempt."""
+
+    order: Optional[PaymentOrder]
+    already_paid: bool = False
 
 
 class UserRepository:
@@ -401,6 +410,60 @@ class PaymentRepository:
             select(PaymentOrder).where(PaymentOrder.payload == payload)
         )
         return result.scalars().first()
+
+    async def complete_payment_and_credit_user(
+        self,
+        payload: str,
+        telegram_payment_charge_id: str,
+        total_amount: int,
+    ) -> PaymentCompletionResult:
+        """Atomically mark a payment order paid and credit the user once."""
+        try:
+            result = await self.session.execute(
+                select(PaymentOrder)
+                .where(PaymentOrder.payload == payload)
+                .with_for_update()
+            )
+            order = result.scalars().first()
+            if order is None:
+                await self.session.commit()
+                return PaymentCompletionResult(order=None, already_paid=False)
+
+            if order.status == PaymentOrderStatus.PAID.value:
+                await self.session.commit()
+                return PaymentCompletionResult(order=order, already_paid=True)
+
+            if total_amount != order.amount:
+                raise ValueError("Payment order amount mismatch")
+
+            paid_at = datetime.now(timezone.utc)
+            update_result = await self.session.execute(
+                update(PaymentOrder)
+                .where(
+                    PaymentOrder.id == order.id,
+                    PaymentOrder.status != PaymentOrderStatus.PAID.value,
+                )
+                .values(
+                    status=PaymentOrderStatus.PAID.value,
+                    telegram_payment_charge_id=telegram_payment_charge_id,
+                    paid_at=paid_at,
+                )
+            )
+            if update_result.rowcount and update_result.rowcount > 0:
+                balance_result = await self.session.execute(
+                    update(User)
+                    .where(User.id == order.user_id)
+                    .values(balance=User.balance + order.credits)
+                )
+                if not balance_result.rowcount or balance_result.rowcount <= 0:
+                    raise ValueError("Payment order user not found")
+
+            await self.session.commit()
+            await self.session.refresh(order)
+            return PaymentCompletionResult(order=order, already_paid=False)
+        except Exception:
+            await self.session.rollback()
+            raise
 
     async def mark_payment_order_paid(
         self,

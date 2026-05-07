@@ -230,6 +230,23 @@ async def test_start_paid_payload_reports_confirmed_external_payment(session_fac
 
 
 @pytest.mark.asyncio
+async def test_start_payment_success_shows_refreshed_profile_without_crediting(session_factory) -> None:
+    async with session_factory() as session:
+        session.add(User(id=713, balance=205))
+        await session.commit()
+        state = FakeState()
+        message = FakeMessage(user_id=713, text="/start payment_success")
+
+        await start.start_command(message, state, session, command=SimpleNamespace(args="payment_success"))
+
+        result = await session.execute(select(User.balance).where(User.id == 713))
+        assert result.scalar_one() == 205
+        assert len(message.answers) == 1
+        assert message.answers[0].startswith("👤 <b>Профиль</b>")
+        assert "Баланс: 205" in message.answers[0]
+
+
+@pytest.mark.asyncio
 async def test_menu_command_always_shows_main_menu(session_factory) -> None:
     async with session_factory() as session:
         state = FakeState()

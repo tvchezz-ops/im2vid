@@ -24,6 +24,7 @@ from app.bot.keyboards import (
     build_setting_options_keyboard,
     build_stars_payment_method_keyboard,
     build_stars_top_up_keyboard,
+    build_wallet_bot_payment_keyboard,
     resolve_model_key_from_token,
     validate_callback_length,
 )
@@ -193,3 +194,14 @@ def test_build_stars_payment_method_keyboard_uses_wallet_and_invoice_fallback() 
     assert keyboard.inline_keyboard[1][0].text == "⭐ Оплатить здесь"
     assert keyboard.inline_keyboard[1][0].callback_data == "pay:invoice:11111111-1111-1111-1111-111111111111"
     assert keyboard.inline_keyboard[2][0].text == "⬅️ Назад в профиль"
+
+
+def test_build_wallet_bot_payment_keyboard_uses_single_pay_url_button() -> None:
+    keyboard = build_wallet_bot_payment_keyboard(
+        amount=500,
+        wallet_payment_url="https://t.me/wallet_bot?start=500credits",
+    )
+
+    assert len(keyboard.inline_keyboard) == 1
+    assert keyboard.inline_keyboard[0][0].text == "Pay 500 ⭐"
+    assert keyboard.inline_keyboard[0][0].url == "https://t.me/wallet_bot?start=500credits"

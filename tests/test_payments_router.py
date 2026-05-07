@@ -16,8 +16,7 @@ os.environ.setdefault("PUBLIC_BASE_URL", "https://example.com")
 
 from app.bot.routers import payments
 from app.db.base import Base
-from app.db.models import PaymentOrder, PaymentOrderStatus, User
-from app.services.payments import PaymentService
+from app.db.models import PaymentOrder, User
 
 
 class FakeMessage:
@@ -147,7 +146,8 @@ async def test_back_to_profile_restores_profile_screen(session_factory) -> None:
 
 
 @pytest.mark.asyncio
-async def test_stars_amount_callback_creates_order_and_sends_invoice(session_factory, monkeypatch) -> None:
+async def test_stars_amount_callback_opens_wallet_bot_without_creating_order_or_invoice(session_factory, monkeypatch) -> None:
+    monkeypatch.setattr(payments.settings, "wallet_bot_username", "@wallet_bot")
     monkeypatch.setattr(payments.settings, "telegram_stars_wallet_bot_username", "")
     async with session_factory() as session:
         session.add(User(id=803, balance=0))
@@ -155,78 +155,64 @@ async def test_stars_amount_callback_creates_order_and_sends_invoice(session_fac
         message = FakeMessage(user_id=803)
         callback = FakeCallback(user_id=803, message=message, data="pay:stars:500")
 
-        await payments.choose_stars_amount(callback, session)
+        await payments.choose_stars_amount(callback)
 
         result = await session.execute(select(PaymentOrder).where(PaymentOrder.user_id == 803))
-        order = result.scalar_one()
-        assert order.provider == "telegram_stars"
-        assert order.amount == 500
-        assert order.credits == 500
-        assert order.currency == "XTR"
-        assert order.status == PaymentOrderStatus.CREATED.value
-        assert order.payload is not None
-        assert order.payload.startswith(f"stars_{order.id.hex}_")
-        assert message.invoices == [
-            {
-                "title": "Credits",
-                "description": "500 credits for IMai",
-                "payload": order.payload,
-                "provider_token": "",
-                "currency": "XTR",
-                "prices": message.invoices[0]["prices"],
-            }
+        assert result.scalars().all() == []
+        assert message.invoices == []
+        assert message.edits == [
+            "To pay with Telegram Stars, open the wallet bot.\nAfter payment, return here and your credits will already be added."
         ]
-        price = message.invoices[0]["prices"][0]
-        assert price.label == "500 credits"
-        assert price.amount == 500
+        keyboard = message.edit_markups[-1]
+        assert len(keyboard.inline_keyboard) == 1
+        assert keyboard.inline_keyboard[0][0].text == "Pay 500 ⭐"
+        assert keyboard.inline_keyboard[0][0].url == "https://t.me/wallet_bot?start=500credits"
         assert callback.answers[-1] is None
 
 
 @pytest.mark.asyncio
-async def test_stars_amount_callback_with_wallet_bot_shows_external_and_fallback_buttons(session_factory, monkeypatch) -> None:
-    monkeypatch.setattr(payments.settings, "telegram_stars_wallet_bot_username", "@wallet_bot")
+async def test_stars_amount_callback_uses_legacy_wallet_username_fallback(session_factory, monkeypatch) -> None:
+    monkeypatch.setattr(payments.settings, "wallet_bot_username", "")
+    monkeypatch.setattr(payments.settings, "telegram_stars_wallet_bot_username", "@legacy_wallet_bot")
     async with session_factory() as session:
         session.add(User(id=809, balance=0))
         await session.commit()
         message = FakeMessage(user_id=809)
         callback = FakeCallback(user_id=809, message=message, data="pay:stars:300")
 
-        await payments.choose_stars_amount(callback, session)
+        await payments.choose_stars_amount(callback)
 
         result = await session.execute(select(PaymentOrder).where(PaymentOrder.user_id == 809))
-        order = result.scalar_one()
+        assert result.scalars().all() == []
         assert message.invoices == []
-        assert message.edits == ["Выберите способ оплаты:"]
+        assert message.edits == [
+            "To pay with Telegram Stars, open the wallet bot.\nAfter payment, return here and your credits will already be added."
+        ]
         keyboard = message.edit_markups[-1]
-        assert keyboard.inline_keyboard[0][0].text == "Перейти к оплате"
-        assert keyboard.inline_keyboard[0][0].url == f"https://t.me/wallet_bot?start={order.payload}"
-        assert keyboard.inline_keyboard[1][0].text == "⭐ Оплатить здесь"
-        assert keyboard.inline_keyboard[1][0].callback_data == f"pay:invoice:{order.id}"
+        assert keyboard.inline_keyboard[0][0].text == "Pay 300 ⭐"
+        assert keyboard.inline_keyboard[0][0].url == "https://t.me/legacy_wallet_bot?start=300credits"
         assert callback.answers[-1] is None
 
 
 @pytest.mark.asyncio
-async def test_pay_stars_invoice_fallback_sends_invoice_for_existing_order(session_factory) -> None:
+async def test_stars_amount_callback_requires_wallet_bot_username(session_factory, monkeypatch) -> None:
+    monkeypatch.setattr(payments.settings, "wallet_bot_username", "")
+    monkeypatch.setattr(payments.settings, "telegram_stars_wallet_bot_username", "")
     async with session_factory() as session:
-        session.add(User(id=810, balance=0))
-        await session.commit()
-        order = await PaymentService(session).create_stars_order(user_id=810, stars_amount=100)
-        message = FakeMessage(user_id=810)
-        callback = FakeCallback(user_id=810, message=message, data=f"pay:invoice:{order.id}")
+        callback = FakeCallback(user_id=810, data="pay:stars:100")
 
-        await payments.pay_stars_invoice_fallback(callback, session)
+        await payments.choose_stars_amount(callback)
 
-        assert message.invoices[0]["payload"] == order.payload
-        assert message.invoices[0]["currency"] == "XTR"
-        assert message.invoices[0]["provider_token"] == ""
-        assert message.invoices[0]["prices"][0].amount == 100
-        assert callback.answers[-1] is None
+        result = await session.execute(select(PaymentOrder).where(PaymentOrder.user_id == 810))
+        assert result.scalars().all() == []
+        assert callback.answers[-1] == "Не удалось создать счёт на оплату. Попробуйте позже."
+        assert callback.answer_alerts[-1] is True
 
 
 def test_wallet_deep_link_helpers_normalize_usernames(monkeypatch) -> None:
     monkeypatch.setattr(payments.settings, "telegram_stars_return_bot_username", "@our_bot")
 
-    assert payments.build_wallet_payment_url("@wallet_bot", "stars_token") == "https://t.me/wallet_bot?start=stars_token"
+    assert payments.build_wallet_payment_url("@wallet_bot", 100) == "https://t.me/wallet_bot?start=100credits"
     assert payments.build_wallet_return_url("stars_token") == "https://t.me/our_bot?start=paid_stars_token"
 
 
@@ -235,89 +221,7 @@ async def test_stars_amount_callback_rejects_invalid_amount(session_factory) -> 
     async with session_factory() as session:
         callback = FakeCallback(user_id=804, data="pay:stars:250")
 
-        await payments.choose_stars_amount(callback, session)
+        await payments.choose_stars_amount(callback)
 
         assert callback.answers[-1] == "Недоступное количество Telegram Stars."
         assert callback.answer_alerts[-1] is True
-
-
-@pytest.mark.asyncio
-async def test_pre_checkout_query_accepts_matching_order(session_factory) -> None:
-    async with session_factory() as session:
-        session.add(User(id=805, balance=0))
-        await session.commit()
-        order = await PaymentService(session).create_stars_order(user_id=805, stars_amount=300)
-        query = FakePreCheckoutQuery(user_id=805, invoice_payload=order.payload, total_amount=300)
-
-        await payments.process_pre_checkout_query(query, session)
-
-        assert query.answers == [{"ok": True, "error_message": None}]
-
-
-@pytest.mark.asyncio
-async def test_pre_checkout_query_rejects_missing_or_mismatched_order(session_factory) -> None:
-    async with session_factory() as session:
-        query = FakePreCheckoutQuery(user_id=806, invoice_payload="missing", total_amount=300)
-
-        await payments.process_pre_checkout_query(query, session)
-
-        assert query.answers == [{"ok": False, "error_message": "Payment order not found"}]
-
-
-@pytest.mark.asyncio
-async def test_pre_checkout_query_rejects_existing_payload_with_mismatched_amount(session_factory) -> None:
-    async with session_factory() as session:
-        session.add(User(id=812, balance=0))
-        await session.commit()
-        order = await PaymentService(session).create_stars_order(user_id=812, stars_amount=300)
-        query = FakePreCheckoutQuery(user_id=812, invoice_payload=order.payload, total_amount=500)
-
-        await payments.process_pre_checkout_query(query, session)
-
-        assert query.answers == [{"ok": False, "error_message": "Payment order not found"}]
-
-
-@pytest.mark.asyncio
-async def test_successful_payment_adds_credits_once_and_reports_balance(session_factory) -> None:
-    async with session_factory() as session:
-        session.add(User(id=807, balance=10))
-        await session.commit()
-        service = PaymentService(session)
-        order = await service.create_stars_order(user_id=807, stars_amount=100)
-        message = FakeMessage(user_id=807)
-        message.successful_payment = SimpleNamespace(
-            invoice_payload=order.payload,
-            total_amount=100,
-            telegram_payment_charge_id="charge-807",
-        )
-
-        await payments.process_successful_payment(message, session)
-        await payments.process_successful_payment(message, session)
-
-        result = await session.execute(select(User.balance).where(User.id == 807))
-        assert result.scalar_one() == 110
-        order_result = await session.execute(select(PaymentOrder).where(PaymentOrder.id == order.id))
-        paid_order = order_result.scalar_one()
-        assert paid_order.telegram_payment_charge_id == "charge-807"
-        assert paid_order.status == PaymentOrderStatus.PAID.value
-        assert message.answers == [
-            "✅ Платёж получен. Добавлено кредитов: 100. Баланс: 110",
-            "✅ Платёж получен. Добавлено кредитов: 100. Баланс: 110",
-        ]
-
-
-@pytest.mark.asyncio
-async def test_successful_payment_shows_safe_error_for_invalid_payload(session_factory) -> None:
-    async with session_factory() as session:
-        message = FakeMessage(user_id=808)
-        message.successful_payment = SimpleNamespace(
-            invoice_payload="missing",
-            total_amount=100,
-            telegram_payment_charge_id="charge-808",
-        )
-
-        await payments.process_successful_payment(message, session)
-
-        assert message.answers == [
-            "Не удалось обработать платёж. Если кредиты не добавились, обратитесь в поддержку."
-        ]

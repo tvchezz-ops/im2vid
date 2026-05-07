@@ -70,21 +70,19 @@ class PaymentService:
         if order.provider != PaymentProvider.TELEGRAM_STARS.value:
             raise ValueError("Payment order provider is not Telegram Stars")
 
-        if order.status == PaymentOrderStatus.PAID.value:
-            return order
-
         if total_amount != order.amount:
             raise ValueError("Telegram Stars payment amount mismatch")
 
-        was_paid = order.status == PaymentOrderStatus.PAID.value
-        paid_order = await self.payment_repo.mark_payment_order_paid(
-            order.id,
+        result = await self.payment_repo.complete_payment_and_credit_user(
+            payload,
             telegram_payment_charge_id=telegram_payment_charge_id,
+            total_amount=total_amount,
         )
+        paid_order = result.order
         if paid_order is None:
             raise PaymentOrderNotFoundError("Payment order not found")
         self._log_payment_paid(paid_order)
-        if not was_paid:
+        if not result.already_paid:
             self._log_credits_added(paid_order)
         return paid_order
 

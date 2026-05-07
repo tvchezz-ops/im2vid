@@ -9,8 +9,9 @@ from aiogram.fsm.context import FSMContext
 from aiogram.types import Message
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.bot.keyboards import get_button_text, get_main_menu_keyboard, is_localized_button_text
+from app.bot.keyboards import get_button_text, get_main_menu_keyboard, get_profile_keyboard, is_localized_button_text
 from app.bot.routers.generations import is_generation_flow_state, reset_generation_flow
+from app.bot.routers.profile import build_profile_text
 from app.db import PaymentOrderStatus, UserRepository
 from app.i18n import get_user_language, t
 from app.services.payments import PaymentService
@@ -52,6 +53,17 @@ async def start_command(
         lang = get_user_language(user.language_code)
 
         start_payload = (command.args or "").strip() if command is not None else ""
+        if start_payload == "payment_success":
+            fresh_user = await user_repo.get_user_profile(user.id)
+            profile_user = fresh_user or user
+            total_spent_credits = await user_repo.get_total_spent_credits(user.id)
+            await message.answer(
+                build_profile_text(profile_user, total_spent_credits, lang),
+                reply_markup=get_profile_keyboard(send_results_as_files=profile_user.send_results_as_files, lang=lang),
+                parse_mode="HTML",
+            )
+            return
+
         if start_payload.startswith("paid_"):
             await message.answer(t("payments.checking_payment", lang))
             payload = start_payload.removeprefix("paid_")
