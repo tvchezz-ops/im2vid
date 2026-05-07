@@ -16,7 +16,7 @@ os.environ.setdefault("WAVESPEED_API_KEY", "test-api-key")
 os.environ.setdefault("PUBLIC_BASE_URL", "https://example.com")
 
 
-from app.bot.routers import generations, profile, shop, start
+from app.bot.routers import generations, profile, start
 from app.bot.keyboards import build_main_menu_keyboard, get_button_text
 from app.bot.states import GenerationStates
 from app.db.base import Base
@@ -70,8 +70,9 @@ class FakeMessage:
 def _assert_main_menu_keyboard(markup, lang: str = "ru") -> None:
     assert markup is not None
     assert markup.keyboard[0][0].text == get_button_text("main.generations", lang)
-    assert markup.keyboard[1][0].text == get_button_text("main.profile", lang)
-    assert markup.keyboard[1][1].text == get_button_text("main.shop", lang)
+    assert markup.keyboard[0][1].text == get_button_text("main.profile", lang)
+    assert len(markup.keyboard) == 1
+    assert all("Магазин" not in button.text and "Shop" not in button.text for row in markup.keyboard for button in row)
 
 
 @pytest_asyncio.fixture
@@ -218,7 +219,6 @@ async def test_generations_button_resets_generation_flow_before_opening_menu() -
     ("label", "handler", "expected_text"),
     [
         ("👤 Профиль", profile.show_profile, "👤 <b>Профиль</b>"),
-        ("🛒 Магазин", shop.show_shop, "🛍 <b>Магазин</b>"),
     ],
 )
 async def test_main_menu_buttons_reset_generation_flow_before_navigation(

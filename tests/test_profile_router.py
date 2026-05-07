@@ -104,13 +104,14 @@ async def test_show_profile_displays_delivery_mode_and_toggle_button(session_fac
         assert "Premium" not in message.answers[-1]
         assert "Дата регистрации" not in message.answers[-1]
         assert "Последняя активность" not in message.answers[-1]
+        assert "История" not in message.answers[-1]
         assert "📦 Способ отправки: Обычный формат" in message.answers[-1]
         assert "💰 Потрачено кредитов: 0" in message.answers[-1]
         keyboard = message.answer_markups[-1]
         assert keyboard.inline_keyboard[0][0].text == "💳 Пополнить баланс"
         assert keyboard.inline_keyboard[1][0].text == "📎 Переключить способ отправки"
-        assert keyboard.inline_keyboard[2][0].text == "📜 История генераций"
-        assert keyboard.inline_keyboard[3][0].text == "⬅️ Назад"
+        assert keyboard.inline_keyboard[2][0].text == "⬅️ Назад"
+        assert all(row[0].text != "📜 История генераций" for row in keyboard.inline_keyboard)
 
 
 @pytest.mark.asyncio
@@ -125,6 +126,7 @@ async def test_toggle_delivery_mode_updates_profile_message(session_factory) -> 
         assert "📦 Способ отправки: Файлом без сжатия" in message.edits[-1]
         keyboard = message.edit_markups[-1]
         assert keyboard.inline_keyboard[1][0].text == "📎 Переключить способ отправки"
+        assert keyboard.inline_keyboard[2][0].text == "⬅️ Назад"
 
 
 @pytest.mark.asyncio

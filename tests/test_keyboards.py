@@ -134,8 +134,19 @@ def test_build_main_menu_keyboard_uses_expected_layout() -> None:
     keyboard = build_main_menu_keyboard("ru")
 
     assert keyboard.keyboard[0][0].text == "🎨 Генерации"
-    assert keyboard.keyboard[1][0].text == "👤 Профиль"
-    assert keyboard.keyboard[1][1].text == "🛒 Магазин"
+    assert keyboard.keyboard[0][1].text == "👤 Профиль"
+    assert len(keyboard.keyboard) == 1
+    assert all(button.text != "🛒 Магазин" for row in keyboard.keyboard for button in row)
     assert keyboard.resize_keyboard is True
     assert keyboard.one_time_keyboard is False
     assert keyboard.input_field_placeholder == "Выберите раздел"
+
+
+def test_build_profile_keyboard_has_no_history_button() -> None:
+    from app.bot.keyboards import get_profile_keyboard
+
+    keyboard = get_profile_keyboard(send_results_as_files=False, lang="ru")
+    button_texts = [button.text for row in keyboard.inline_keyboard for button in row]
+
+    assert button_texts == ["💳 Пополнить баланс", "📎 Переключить способ отправки", "⬅️ Назад"]
+    assert "📜 История генераций" not in button_texts

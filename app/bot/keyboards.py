@@ -23,7 +23,6 @@ SECTION_KEYS = {
 BUTTON_ICONS = {
     "main.generations": "🎨",
     "main.profile": "👤",
-    "main.shop": "🛒",
     "common.back": "⬅️",
     "common.back_to_settings": "⬅️",
     "common.continue": "✅",
@@ -31,7 +30,6 @@ BUTTON_ICONS = {
     "common.change_settings": "⚙️",
     "profile.top_up": "💳",
     "profile.toggle_delivery": "📎",
-    "profile.history": "📜",
     "generation.text_to_image": "🖼",
     "generation.text_to_video": "🎬",
     "generation.image_edit": "🛠",
@@ -150,10 +148,9 @@ def build_main_menu_keyboard(lang: str = "en") -> ReplyKeyboardMarkup:
     """Главное меню Telegram reply keyboard."""
     return ReplyKeyboardMarkup(
         keyboard=[
-            [KeyboardButton(text=get_button_text("main.generations", lang))],
             [
+                KeyboardButton(text=get_button_text("main.generations", lang)),
                 KeyboardButton(text=get_button_text("main.profile", lang)),
-                KeyboardButton(text=get_button_text("main.shop", lang)),
             ],
         ],
         resize_keyboard=True,
@@ -366,7 +363,6 @@ def get_profile_keyboard(*, send_results_as_files: bool, lang: str = "en") -> In
         inline_keyboard=[
             [InlineKeyboardButton(text=get_button_text("profile.top_up", lang), callback_data="profile:top_up_balance")],
             [InlineKeyboardButton(text=get_button_text("profile.toggle_delivery", lang), callback_data="profile:toggle_delivery_mode")],
-            [InlineKeyboardButton(text=get_button_text("profile.history", lang), callback_data="profile:generation_history")],
             [InlineKeyboardButton(text=get_button_text("common.back", lang), callback_data="back_to_menu")],
         ]
     )

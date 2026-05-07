@@ -14,7 +14,6 @@ from app.bot.routers import (
     errors_router,
     generations_router,
     profile_router,
-    shop_router,
     start_router,
 )
 from app.config import settings
@@ -57,7 +56,6 @@ class TelegramBot:
         self.dp.include_router(start_router)
         self.dp.include_router(profile_router)
         self.dp.include_router(generations_router)
-        self.dp.include_router(shop_router)
         logger.info("Handlers installed")
 
     async def create_tables(self):
