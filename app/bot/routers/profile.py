@@ -3,10 +3,12 @@ from datetime import datetime
 from typing import Optional
 
 from aiogram import Router
+from aiogram.fsm.context import FSMContext
 from aiogram.types import CallbackQuery, Message
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.bot.keyboards import get_main_menu_keyboard, get_profile_keyboard
+from app.bot.routers.generations import is_generation_flow_state, reset_generation_flow
 from app.db import UserRepository
 from app.utils import logger
 
@@ -53,9 +55,18 @@ def build_profile_text(user) -> str:
 
 
 @router.message(lambda msg: msg.text == "👤 Профиль")
-async def show_profile(message: Message, session: AsyncSession):
+async def show_profile(message: Message, state: FSMContext, session: AsyncSession):
     """Показать профиль пользователя."""
     try:
+        current_state = await state.get_state()
+        if is_generation_flow_state(current_state):
+            await state.update_data(last_user_id=message.from_user.id)
+            await reset_generation_flow(state, reason="main_menu_profile")
+            await message.answer(
+                "Сценарий генерации сброшен. Вы вернулись в главное меню.",
+                reply_markup=get_main_menu_keyboard(),
+            )
+
         user_repo = UserRepository(session)
         user = await user_repo.get_or_create_user_from_telegram(message.from_user)
         

@@ -8,6 +8,7 @@ from aiogram.types import Message
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.bot.keyboards import get_main_menu_keyboard
+from app.bot.routers.generations import is_generation_flow_state, reset_generation_flow
 from app.db import UserRepository
 from app.utils import logger
 
@@ -30,9 +31,15 @@ async def start_command(message: Message, state: FSMContext, session: AsyncSessi
     """Обработчик команды /start."""
     try:
         current_state = await state.get_state()
-        if current_state is not None:
+        if is_generation_flow_state(current_state):
+            await state.update_data(last_user_id=message.from_user.id)
+            await reset_generation_flow(state, reason="command_start")
+            await message.answer(
+                "Сценарий генерации сброшен. Вы вернулись в главное меню.",
+                reply_markup=get_main_menu_keyboard(),
+            )
+        elif current_state is not None:
             await state.clear()
-            logger.info({"action": "generation_flow_reset", "user_id": message.from_user.id})
 
         user_repo = UserRepository(session)
         
@@ -51,14 +58,21 @@ async def start_command(message: Message, state: FSMContext, session: AsyncSessi
 
 
 @router.message(Command("menu"))
+@router.message(Command("cancel"))
 @router.message(lambda msg: msg.text == "⬅️ Назад в меню")
 async def menu_command(message: Message, state: FSMContext, session: AsyncSession):
     """Вернуть пользователя в главное меню."""
     try:
         current_state = await state.get_state()
-        if current_state is not None:
+        if is_generation_flow_state(current_state):
+            await state.update_data(last_user_id=message.from_user.id)
+            await reset_generation_flow(state, reason=f"command_{(message.text or '').lstrip('/').lower() or 'menu_button'}")
+            await message.answer(
+                "Сценарий генерации сброшен. Вы вернулись в главное меню.",
+                reply_markup=get_main_menu_keyboard(),
+            )
+        elif current_state is not None:
             await state.clear()
-            logger.info({"action": "generation_flow_reset", "user_id": message.from_user.id})
 
         user_repo = UserRepository(session)
         await user_repo.update_user_seen(message.from_user.id)

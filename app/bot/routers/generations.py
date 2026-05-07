@@ -13,6 +13,7 @@ import uuid
 
 from aiogram import F, Router
 from aiogram.exceptions import TelegramBadRequest, TelegramNetworkError
+from aiogram.filters import StateFilter
 from aiogram.fsm.context import FSMContext
 from aiogram.types import CallbackQuery, FSInputFile, Message, ReplyKeyboardRemove
 import aiohttp
@@ -74,6 +75,20 @@ GENERATION_COST = 1
 DOCUMENT_SEND_REQUEST_TIMEOUT_SECONDS = 3600
 DOCUMENT_SEND_RETRY_COUNT = 3
 OUTPUT_DOWNLOAD_TIMEOUT_SECONDS = 300
+
+GENERATION_FLOW_STATE_NAMES = {
+    GenerationStates.choosing_generation_type.state,
+    GenerationStates.choosing_provider.state,
+    GenerationStates.choosing_settings.state,
+    GenerationStates.choosing_setting_value.state,
+    GenerationStates.waiting_for_setting_text.state,
+    GenerationStates.waiting_for_images.state,
+    GenerationStates.waiting_for_image.state,
+    GenerationStates.waiting_for_video.state,
+    GenerationStates.waiting_for_prompt.state,
+    GenerationStates.waiting_for_confirmation.state,
+    GenerationStates.generating.state,
+}
 
 MODEL_PREFIX = "gen:model:"
 GENERATION_SECTION_PREFIX = "gen:section:"
@@ -455,6 +470,109 @@ def log_generation_error(
     )
 
 
+def get_incoming_text_type(message: Optional[Message] = None, *, is_callback: bool = False) -> str:
+    if is_callback:
+        return "callback"
+    if message is None:
+        return "unknown"
+    if message.text is not None:
+        return "text"
+    if message.photo:
+        return "photo"
+    if message.video:
+        return "video"
+    if message.voice:
+        return "voice"
+    if message.audio:
+        return "audio"
+    if message.document:
+        return "document"
+    return "unknown"
+
+
+def build_generation_diagnostic_payload(
+    *,
+    action: str,
+    user_id: Optional[int],
+    state_value: Any,
+    state_data: dict[str, Any],
+    incoming_text_type: str,
+    prompt: Optional[str] = None,
+    total_cost: Optional[int] = None,
+    extra: Optional[dict[str, Any]] = None,
+) -> dict[str, Any]:
+    model_key = state_data.get("selected_model_key") or state_data.get("model_key")
+    selected_generation_type = state_data.get("selected_generation_type") or state_data.get("model_generation_type")
+    user_settings: dict[str, Any] = {}
+    if isinstance(state_data.get("selected_settings"), dict):
+        user_settings = dict(state_data.get("selected_settings") or {})
+    elif model_key:
+        user_settings = get_model_state_settings(state_data, str(model_key))
+    elif isinstance(state_data.get("user_settings"), dict):
+        user_settings = dict(state_data.get("user_settings") or {})
+
+    model = None
+    if model_key:
+        try:
+            model = get_generation_model(str(model_key))
+        except ValueError:
+            model = None
+
+    num_generations: Optional[int] = None
+    if model is not None:
+        num_generations = get_model_num_generations(model, user_settings)
+        if total_cost is None:
+            total_cost = get_total_generation_cost(model, user_settings)
+    elif "num_generations" in user_settings:
+        try:
+            num_generations = int(str(user_settings.get("num_generations") or "0"))
+        except (TypeError, ValueError):
+            num_generations = None
+
+    prompt_value = prompt if prompt is not None else state_data.get("prompt")
+    payload = {
+        "action": action,
+        "user_id": user_id,
+        "state": normalize_generation_state(state_value),
+        "current_state": normalize_generation_state(state_value),
+        "incoming_text_type": incoming_text_type,
+        "model_key": model_key,
+        "selected_model_key": model_key,
+        "selected_generation_type": selected_generation_type,
+        "num_generations": num_generations,
+        "total_cost": total_cost,
+        "prompt_length": len(prompt_value) if prompt_value else 0,
+    }
+    if extra:
+        payload.update(extra)
+    return payload
+
+
+def log_generation_diagnostic(
+    *,
+    action: str,
+    user_id: Optional[int],
+    state_value: Any,
+    state_data: dict[str, Any],
+    incoming_text_type: str,
+    prompt: Optional[str] = None,
+    total_cost: Optional[int] = None,
+    extra: Optional[dict[str, Any]] = None,
+) -> None:
+    logger.info(
+        build_generation_diagnostic_payload(
+            action=action,
+            user_id=user_id,
+            state_value=state_value,
+            state_data=state_data,
+            incoming_text_type=incoming_text_type,
+            prompt=prompt,
+            total_cost=total_cost,
+            extra=extra,
+        )
+    )
+
+
 def build_input_media_payload(message: Message) -> dict[str, str]:
     """Собрать метаданные входного media-файла из Telegram message."""
     if message.photo:
@@ -487,6 +605,23 @@ async def cleanup_state_media(state: FSMContext) -> None:
     media_items = get_input_media_items(state_data)
     await cleanup_media_items(media_items)
     await state.update_data(input_media=None, input_media_items=[], input_image_file_id=None)
+
+
+async def set_waiting_for_prompt_with_diagnostic(
+    state: FSMContext,
+    *,
+    user_id: int,
+    incoming_text_type: str,
+) -> None:
+    await state.set_state(GenerationStates.waiting_for_prompt)
+    state_data = await state.get_data()
+    log_generation_diagnostic(
+        action="enter_waiting_for_prompt",
+        user_id=user_id,
+        state_value=GenerationStates.waiting_for_prompt.state,
+        state_data=state_data,
+        incoming_text_type=incoming_text_type,
+    )
 
 
 async def upload_message_media_item(message: Message) -> dict[str, str]:
@@ -822,7 +957,11 @@ async def continue_after_multi_image_upload(message: Message, state: FSMContext)
         )
         return
     await state.update_data(input_media={"type": "images", "count": len(media_items)})
-    await state.set_state(GenerationStates.waiting_for_prompt)
+    await set_waiting_for_prompt_with_diagnostic(
+        state,
+        user_id=message.from_user.id,
+        incoming_text_type=get_incoming_text_type(message),
+    )
     await message.answer(get_second_prompt_for_generation_type(model.generation_type), reply_markup=ReplyKeyboardRemove())
 
 
@@ -1427,6 +1566,32 @@ async def reset_generation_state(state: FSMContext) -> None:
     await state.clear()
 
 
+def normalize_generation_state(state_value: Any) -> Optional[str]:
+    if state_value is None:
+        return None
+    return getattr(state_value, "state", state_value)
+
+
+def is_generation_flow_state(state_value: Any) -> bool:
+    return normalize_generation_state(state_value) in GENERATION_FLOW_STATE_NAMES
+
+
+async def reset_generation_flow(state: FSMContext, reason: str) -> None:
+    """Безопасно очистить FSM generation flow и временные файлы."""
+    current_state = normalize_generation_state(await state.get_state())
+    state_data = await state.get_data()
+    await cleanup_state_media(state)
+    await state.clear()
+    log_generation_diagnostic(
+        action="generation_flow_reset",
+        user_id=state_data.get("last_user_id"),
+        state_value=current_state,
+        state_data=state_data,
+        incoming_text_type="system",
+        extra={"reason": reason},
+    )
+
+
 async def poll_generation_result(
     *,
     bot,
@@ -1666,12 +1831,18 @@ async def show_generation_menu(message: Message, state: FSMContext):
     """Показать меню генерации."""
     try:
         current_state = await state.get_state()
-        if current_state is not None or message.from_user.id in ACTIVE_GENERATIONS:
+        if message.from_user.id in ACTIVE_GENERATIONS:
             await message.answer(
                 "⚠️ У вас уже есть активный сценарий генерации. Дождитесь завершения или вернитесь в главное меню через /start.",
                 reply_markup=get_main_menu_keyboard(),
             )
             return
+
+        if is_generation_flow_state(current_state):
+            await reset_generation_flow(state, reason="main_menu_generations")
+            await message.answer("Сценарий генерации сброшен. Вы вернулись в главное меню.")
+        elif current_state is not None:
+            await state.clear()
 
         await reset_generation_state(state)
         await state.set_state(GenerationStates.choosing_generation_type)
@@ -1886,10 +2057,6 @@ async def open_setting_selector(callback: CallbackQuery, state: FSMContext):
             reply_markup=None,
             parse_mode="HTML",
         )
-        await callback.message.answer(
-            "Если передумали, можно вернуться к настройкам.",
-            reply_markup=build_back_to_settings_keyboard(),
-        )
         await callback.answer()
         return
     await state.set_state(GenerationStates.choosing_setting_value)
@@ -1934,7 +2101,6 @@ async def process_text_setting_value(message: Message, state: FSMContext):
     if message_contains_file(message):
         await message.answer(
             format_user_error(ErrorCode.E001_INVALID_INPUT_TYPE, "нужно отправить текстовое значение настройки."),
-            reply_markup=build_back_to_settings_keyboard(),
         )
         return
 
@@ -2008,7 +2174,11 @@ async def continue_after_settings(callback: CallbackQuery, state: FSMContext):
 
     required_input_type = get_required_input_type(model.generation_type)
     if required_input_type == "text":
-        await state.set_state(GenerationStates.waiting_for_prompt)
+        await set_waiting_for_prompt_with_diagnostic(
+            state,
+            user_id=callback.from_user.id,
+            incoming_text_type=get_incoming_text_type(is_callback=True),
+        )
         await callback.message.edit_text(get_prompt_for_generation_type(model.generation_type), reply_markup=None)
         await callback.message.answer(
             "Если передумали, можно вернуться к настройкам.",
@@ -2030,15 +2200,74 @@ async def continue_after_settings(callback: CallbackQuery, state: FSMContext):
     await callback.answer()
 
 
-@router.message(GenerationStates.waiting_for_images, lambda message: message.text == "⬅️ Назад к настройкам")
-@router.message(GenerationStates.waiting_for_image, lambda message: message.text == "⬅️ Назад к настройкам")
-@router.message(GenerationStates.waiting_for_video, lambda message: message.text == "⬅️ Назад к настройкам")
-async def back_to_settings_from_image_step(message: Message, state: FSMContext):
-    """Вернуться с этапа загрузки изображения к настройкам модели без потери выбранных значений."""
+async def navigate_back_to_settings(message: Message, state: FSMContext) -> None:
+    """Вернуть пользователя к настройкам модели или к выбору раздела генерации."""
+    state_data = await state.get_data()
+    from_state = await state.get_state()
+    selected_model_key = state_data.get("selected_model_key") or state_data.get("model_key")
+    selected_settings = dict(state_data.get("selected_settings") or state_data.get("user_settings") or {})
+
+    log_generation_diagnostic(
+        action="back_to_settings",
+        user_id=message.from_user.id,
+        state_value=from_state,
+        state_data=state_data,
+        incoming_text_type=get_incoming_text_type(message),
+    )
+
     await cleanup_state_media(state)
+    await state.update_data(
+        prompt=None,
+        input_audio_or_text=None,
+        input_media_urls=[],
+        input_media_paths=[],
+        selected_model_key=selected_model_key,
+        selected_settings=selected_settings,
+    )
+
+    model = None
+    if selected_model_key:
+        try:
+            model = get_generation_model(str(selected_model_key))
+        except ValueError:
+            model = None
+
+    if model is None:
+        await reset_generation_state(state)
+        await state.set_state(GenerationStates.choosing_generation_type)
+        await state.update_data(selected_generation_type=None, selected_provider=None)
+        await message.answer("Возвращаю к выбору разделов генерации.", reply_markup=ReplyKeyboardRemove())
+        await render_models_screen(message)
+        return
+
+    await state.update_data(
+        model_key=model.key,
+        model_title=model.title,
+        model_endpoint=model.endpoint,
+        model_generation_type=model.generation_type,
+        user_settings=selected_settings,
+    )
     await state.set_state(GenerationStates.choosing_settings)
     await message.answer("Возвращаю к настройкам модели.", reply_markup=ReplyKeyboardRemove())
-    await render_settings_screen_message(message, state, edit=False)
+    await message.answer(
+        build_settings_text(model, selected_settings),
+        reply_markup=build_model_settings_keyboard(model, selected_settings),
+        parse_mode="HTML",
+    )
+
+
+@router.message(
+    StateFilter(
+        GenerationStates.waiting_for_image,
+        GenerationStates.waiting_for_images,
+        GenerationStates.waiting_for_video,
+        GenerationStates.waiting_for_prompt,
+    ),
+    F.text == "⬅️ Назад к настройкам",
+)
+async def back_to_settings_from_input_step(message: Message, state: FSMContext):
+    """Вернуться с этапа ввода к настройкам модели без запуска генерации."""
+    await navigate_back_to_settings(message, state)
 
 
 @router.message(GenerationStates.waiting_for_image, lambda message: bool(message.photo) or bool(message.document) or bool(message.video))
@@ -2069,7 +2298,11 @@ async def process_generation_image(message: Message, state: FSMContext):
             input_image_file_id = input_media.get("file_id")
 
         await state.update_data(input_media=input_media, input_image_file_id=input_image_file_id)
-        await state.set_state(GenerationStates.waiting_for_prompt)
+        await set_waiting_for_prompt_with_diagnostic(
+            state,
+            user_id=message.from_user.id,
+            incoming_text_type=get_incoming_text_type(message),
+        )
         await message.answer(
             get_second_step_prompt_text(is_lipsync=True),
             reply_markup=ReplyKeyboardRemove(),
@@ -2101,7 +2334,11 @@ async def process_generation_image(message: Message, state: FSMContext):
         input_media_items=[media_item],
         input_image_file_id=media_item.get("file_id"),
     )
-    await state.set_state(GenerationStates.waiting_for_prompt)
+    await set_waiting_for_prompt_with_diagnostic(
+        state,
+        user_id=message.from_user.id,
+        incoming_text_type=get_incoming_text_type(message),
+    )
     await message.answer(
         get_second_prompt_for_generation_type(model_generation_type),
         reply_markup=ReplyKeyboardRemove(),
@@ -2153,7 +2390,11 @@ async def process_generation_images(message: Message, state: FSMContext):
         input_image_file_id=media_items[0].get("file_id"),
     )
     if len(media_items) >= model.max_images:
-        await state.set_state(GenerationStates.waiting_for_prompt)
+        await set_waiting_for_prompt_with_diagnostic(
+            state,
+            user_id=message.from_user.id,
+            incoming_text_type=get_incoming_text_type(message),
+        )
         await message.answer(
             get_second_prompt_for_generation_type(model_generation_type),
             reply_markup=ReplyKeyboardRemove(),
@@ -2223,7 +2464,11 @@ async def process_generation_video(message: Message, state: FSMContext):
         input_media_items=[media_item],
         input_image_file_id=media_item.get("file_id"),
     )
-    await state.set_state(GenerationStates.waiting_for_prompt)
+    await set_waiting_for_prompt_with_diagnostic(
+        state,
+        user_id=message.from_user.id,
+        incoming_text_type=get_incoming_text_type(message),
+    )
     await message.answer(
         get_second_prompt_for_generation_type(model_generation_type),
         reply_markup=ReplyKeyboardRemove(),
@@ -2258,6 +2503,14 @@ async def process_prompt(
         input_media_items = get_input_media_items(state_data)
         input_audio_or_text = None
         prompt = ""
+        log_generation_diagnostic(
+            action="process_prompt",
+            user_id=message.from_user.id,
+            state_value=await state.get_state(),
+            state_data=state_data,
+            incoming_text_type=get_incoming_text_type(message),
+            prompt=(message.text or "").strip(),
+        )
         
         if is_lipsync:
             input_audio_or_text = build_input_audio_or_text_payload(message)
@@ -2322,12 +2575,28 @@ async def process_prompt(
         total_cost = get_total_generation_cost(model, user_settings)
         if not await user_repo.has_enough_balance(user.id, total_cost):
             log_generation_error(ErrorCode.E006_INSUFFICIENT_BALANCE, user_id=user.id, model_key=model_key, status="rejected")
+            log_generation_diagnostic(
+                action="insufficient_balance",
+                user_id=user.id,
+                state_value=await state.get_state(),
+                state_data=state_data,
+                incoming_text_type=get_incoming_text_type(message),
+                prompt=prompt,
+                total_cost=total_cost,
+            )
+            await state.update_data(prompt=None, input_audio_or_text=None)
+            await state.set_state(GenerationStates.choosing_settings)
             await message.answer(
                 format_user_error(
                     ErrorCode.E006_INSUFFICIENT_BALANCE,
-                    f"Недостаточно кредитов. Нужно {total_cost}, у вас {user.balance}.",
-                )
+                    f"недостаточно кредитов. Нужно {total_cost}, у вас {user.balance}.",
+                ),
             )
+            await message.answer(
+                "Измените количество генераций или пополните баланс.",
+                reply_markup=ReplyKeyboardRemove(),
+            )
+            await render_settings_screen_message(message, state, edit=False)
             return
 
         await state.update_data(prompt=prompt, input_audio_or_text=input_audio_or_text)
@@ -2369,6 +2638,13 @@ async def confirm_generation(callback: CallbackQuery, state: FSMContext, session
     is_lipsync = is_lipsync_generation_state(state_data)
     model = get_generation_model(model_key) if model_key else None
     required_input_type = get_required_input_type(model.generation_type) if model else "text"
+    log_generation_diagnostic(
+        action="confirm_generation",
+        user_id=user_id,
+        state_value=await state.get_state(),
+        state_data=state_data,
+        incoming_text_type=get_incoming_text_type(is_callback=True),
+    )
     if not input_media and input_image_file_id:
         legacy_media_type = "image" if required_input_type != "video" else "video"
         input_media = {"type": legacy_media_type, "file_id": input_image_file_id}
@@ -2435,6 +2711,15 @@ async def confirm_generation(callback: CallbackQuery, state: FSMContext, session
         if not await user_repo.decrease_balance(user.id, total_cost):
             log_balance_event("insufficient_balance", user.id, total_cost)
             log_generation_error(ErrorCode.E006_INSUFFICIENT_BALANCE, user_id=user.id, model_key=model_key, status="rejected")
+            log_generation_diagnostic(
+                action="insufficient_balance",
+                user_id=user.id,
+                state_value=await state.get_state(),
+                state_data=state_data,
+                incoming_text_type=get_incoming_text_type(is_callback=True),
+                prompt=str(prompt or ""),
+                total_cost=total_cost,
+            )
             await callback.message.answer(
                 format_user_error(
                     ErrorCode.E006_INSUFFICIENT_BALANCE,

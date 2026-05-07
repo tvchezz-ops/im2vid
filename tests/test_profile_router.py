@@ -14,6 +14,7 @@ os.environ.setdefault("PUBLIC_BASE_URL", "https://example.com")
 
 
 from app.bot.routers import profile
+from app.bot.states import GenerationStates
 from app.db.base import Base
 
 
@@ -62,6 +63,17 @@ class FakeCallback:
         self.answers.append(text)
 
 
+class FakeState:
+    def __init__(self):
+        self.state = None
+
+    async def get_state(self):
+        return self.state
+
+    async def clear(self) -> None:
+        self.state = None
+
+
 @pytest_asyncio.fixture
 async def session_factory(tmp_path):
     db_path = tmp_path / "profile-router.sqlite3"
@@ -79,9 +91,10 @@ async def session_factory(tmp_path):
 @pytest.mark.asyncio
 async def test_show_profile_displays_delivery_mode_and_toggle_button(session_factory) -> None:
     async with session_factory() as session:
+        state = FakeState()
         message = FakeMessage(user_id=601)
 
-        await profile.show_profile(message, session)
+        await profile.show_profile(message, state, session)
 
         assert "Способ отправки: Обычный формат" in message.answers[-1]
         keyboard = message.answer_markups[-1]

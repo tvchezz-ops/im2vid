@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 import os
 from pathlib import Path
 from types import SimpleNamespace
@@ -10,6 +11,8 @@ import pytest
 import pytest_asyncio
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
+
+from aiogram.types import ReplyKeyboardRemove
 
 
 os.environ.setdefault("BOT_TOKEN", "test-bot-token")
@@ -605,6 +608,159 @@ async def test_process_prompt_saves_lipsync_voice_input(session_factory) -> None
             "file_id": "voice-file-id",
         }
         assert state.data["prompt"] == "Голосовое сообщение"
+
+
+@pytest.mark.asyncio
+async def test_process_prompt_insufficient_balance_returns_to_settings(session_factory, monkeypatch, caplog) -> None:
+    async with session_factory() as session:
+        await create_user(session, user_id=411, balance=0)
+        confirmation_opened = False
+
+        async def fake_send_confirmation_screen(**kwargs) -> None:
+            nonlocal confirmation_opened
+            confirmation_opened = True
+
+        monkeypatch.setattr(generations, "send_confirmation_screen", fake_send_confirmation_screen)
+
+        state = FakeState(
+            {
+                "model_key": "alibaba_wan_2_6_text_to_image",
+                "model_generation_type": "text_to_image",
+                "model_title": "Alibaba Wan 2.6 Text To Image",
+                "user_settings": {
+                    "num_generations": "4",
+                },
+            }
+        )
+        state.state = GenerationStates.waiting_for_prompt
+        message = FakeMessage(chat_id=411)
+        message.text = "Generate four variants with dramatic lighting"
+
+        with caplog.at_level(logging.INFO):
+            await generations.process_prompt(message, state, session)
+
+        assert confirmation_opened is False
+        assert state.state == GenerationStates.choosing_settings
+        assert state.data.get("prompt") is None
+        assert message.answers[0] == "❌ Ошибка E006: недостаточно кредитов. Нужно 4, у вас 0."
+        assert message.answers[1] == "Измените количество генераций или пополните баланс."
+        assert isinstance(message.answer_markups[1], ReplyKeyboardRemove)
+        assert message.answers[2].startswith("Настройки модели:")
+        assert any(
+            isinstance(record.msg, dict)
+            and record.msg.get("action") == "insufficient_balance"
+            and record.msg.get("user_id") == 411
+            and record.msg.get("state") == GenerationStates.waiting_for_prompt.state
+            and record.msg.get("model_key") == "alibaba_wan_2_6_text_to_image"
+            and record.msg.get("total_cost") == 4
+            for record in caplog.records
+        )
+
+
+@pytest.mark.asyncio
+async def test_insufficient_balance_exits_waiting_for_prompt_so_back_text_cannot_retrigger_e006(session_factory, monkeypatch) -> None:
+    async with session_factory() as session:
+        await create_user(session, user_id=412, balance=0)
+        logged_codes: list[str] = []
+        original_log_generation_error = generations.log_generation_error
+
+        def fake_log_generation_error(code: str, **kwargs) -> None:
+            logged_codes.append(code)
+            original_log_generation_error(code, **kwargs)
+
+        monkeypatch.setattr(generations, "log_generation_error", fake_log_generation_error)
+
+        state = FakeState(
+            {
+                "model_key": "alibaba_wan_2_6_text_to_image",
+                "model_generation_type": "text_to_image",
+                "model_title": "Alibaba Wan 2.6 Text To Image",
+                "user_settings": {
+                    "num_generations": "4",
+                },
+            }
+        )
+        state.state = GenerationStates.waiting_for_prompt
+        message = FakeMessage(chat_id=412)
+        message.text = "Generate four variants with dramatic lighting"
+
+        await generations.process_prompt(message, state, session)
+
+        assert state.state == GenerationStates.choosing_settings
+        assert logged_codes.count(generations.ErrorCode.E006_INSUFFICIENT_BALANCE) == 1
+        assert state.state != GenerationStates.waiting_for_prompt
+
+
+@pytest.mark.asyncio
+async def test_back_to_settings_from_waiting_for_prompt_restores_settings_and_logs(caplog) -> None:
+    state = FakeState(
+        {
+            "model_key": "alibaba_wan_2_6_text_to_image",
+            "model_generation_type": "text_to_image",
+            "model_title": "Alibaba Wan 2.6 Text To Image",
+            "user_settings": {},
+            "input_media": {"type": "image", "count": 1},
+            "input_media_items": [],
+            "input_image_file_id": "photo-file-id",
+            "input_media_urls": ["https://example.com/input.png"],
+            "input_media_paths": ["/tmp/input.png"],
+            "prompt": "old prompt",
+        }
+    )
+    state.state = GenerationStates.waiting_for_prompt
+    message = FakeMessage(chat_id=476)
+    message.text = "⬅️ Назад к настройкам"
+
+    with caplog.at_level(logging.INFO):
+        await generations.back_to_settings_from_input_step(message, state)
+
+    assert state.state == GenerationStates.choosing_settings
+    assert state.data["input_media"] is None
+    assert state.data["input_media_items"] == []
+    assert state.data["input_image_file_id"] is None
+    assert state.data["input_media_urls"] == []
+    assert state.data["input_media_paths"] == []
+    assert state.data["prompt"] is None
+    assert state.data["selected_model_key"] == "alibaba_wan_2_6_text_to_image"
+    assert state.data["selected_settings"] == {}
+    assert isinstance(message.answer_markups[0], ReplyKeyboardRemove)
+    assert message.answers[0] == "Возвращаю к настройкам модели."
+    assert message.answers[1].startswith("Настройки модели:")
+    assert any(
+        isinstance(record.msg, dict)
+        and record.msg.get("action") == "back_to_settings"
+        and record.msg.get("user_id") == 476
+        and record.msg.get("state") == GenerationStates.waiting_for_prompt.state
+        and record.msg.get("model_key") == "alibaba_wan_2_6_text_to_image"
+        and record.msg.get("incoming_text_type") == "text"
+        for record in caplog.records
+    )
+
+
+@pytest.mark.asyncio
+async def test_back_to_settings_from_waiting_for_prompt_without_model_shows_sections() -> None:
+    state = FakeState(
+        {
+            "user_settings": {},
+            "input_media": {"type": "image", "count": 1},
+            "input_media_items": [],
+            "input_image_file_id": "photo-file-id",
+        }
+    )
+    state.state = GenerationStates.waiting_for_prompt
+    message = FakeMessage(chat_id=477)
+    message.text = "⬅️ Назад к настройкам"
+
+    await generations.back_to_settings_from_input_step(message, state)
+
+    assert state.state == GenerationStates.choosing_generation_type
+    assert state.data == {
+        "selected_generation_type": None,
+        "selected_provider": None,
+    }
+    assert isinstance(message.answer_markups[0], ReplyKeyboardRemove)
+    assert message.answers[0] == "Возвращаю к выбору разделов генерации."
+    assert "Выберите тип генерации:" in message.answers[1]
 
 
 @pytest.mark.asyncio
