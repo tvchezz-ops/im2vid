@@ -209,6 +209,47 @@ async def test_start_paid_payload_checks_payment_without_crediting_pending_order
 
 
 @pytest.mark.asyncio
+async def test_start_paid_payload_does_not_trust_unknown_payload(session_factory) -> None:
+    async with session_factory() as session:
+        session.add(User(id=714, balance=33))
+        await session.commit()
+        state = FakeState()
+        message = FakeMessage(user_id=714, text="/start paid_not-a-real-payment")
+
+        await start.start_command(message, state, session, command=SimpleNamespace(args="paid_not-a-real-payment"))
+
+        result = await session.execute(select(User.balance).where(User.id == 714))
+        assert result.scalar_one() == 33
+        assert message.answers == [
+            "Проверяем оплату...",
+            "Платёж пока не подтверждён. Если вы уже оплатили, подождите немного и откройте бота ещё раз.",
+        ]
+
+
+@pytest.mark.asyncio
+async def test_start_paid_payload_does_not_confirm_another_users_paid_order(session_factory) -> None:
+    async with session_factory() as session:
+        session.add_all([User(id=715, balance=5), User(id=716, balance=20)])
+        await session.commit()
+        service = PaymentService(session)
+        order = await service.create_stars_order(user_id=715, stars_amount=100)
+        await service.mark_external_stars_payment_paid(order.payload, "wallet-payment-715")
+        state = FakeState()
+        message = FakeMessage(user_id=716, text=f"/start paid_{order.payload}")
+
+        await start.start_command(message, state, session, command=SimpleNamespace(args=f"paid_{order.payload}"))
+
+        owner_balance = (await session.execute(select(User.balance).where(User.id == 715))).scalar_one()
+        requester_balance = (await session.execute(select(User.balance).where(User.id == 716))).scalar_one()
+        assert owner_balance == 105
+        assert requester_balance == 20
+        assert message.answers == [
+            "Проверяем оплату...",
+            "Платёж пока не подтверждён. Если вы уже оплатили, подождите немного и откройте бота ещё раз.",
+        ]
+
+
+@pytest.mark.asyncio
 async def test_start_paid_payload_reports_confirmed_external_payment(session_factory) -> None:
     async with session_factory() as session:
         session.add(User(id=712, balance=5))

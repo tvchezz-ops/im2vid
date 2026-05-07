@@ -38,7 +38,7 @@ class PaymentService:
             metadata={},
         )
 
-        order.payload = f"stars_{order.id.hex}_{secrets.token_urlsafe(12)}"
+        order.payload = f"stars:{order.id}:{secrets.token_urlsafe(12)}"
         await self.session.commit()
         await self.session.refresh(order)
 
@@ -69,6 +69,10 @@ class PaymentService:
 
         if order.provider != PaymentProvider.TELEGRAM_STARS.value:
             raise ValueError("Payment order provider is not Telegram Stars")
+
+        if order.status == PaymentOrderStatus.PAID.value:
+            self._log_payment_paid(order)
+            return order
 
         if total_amount != order.amount:
             raise ValueError("Telegram Stars payment amount mismatch")

@@ -19,6 +19,9 @@ from app.db.models import CryptoPaymentOrder, PaymentOrderStatus, PaymentProvide
 from app.services.payments import ALLOWED_STARS_AMOUNTS, PaymentService
 
 
+EXPECTED_STARS_AMOUNTS = (100, 300, 500, 1000, 3000, 5000)
+
+
 @pytest_asyncio.fixture
 async def session_factory(tmp_path):
     db_path = tmp_path / "payment-service.sqlite3"
@@ -47,8 +50,8 @@ async def test_create_stars_order_uses_one_star_to_one_credit(session_factory, c
         assert order.credits == 300
         assert order.currency == "XTR"
         assert order.payload is not None
-        assert order.payload.startswith(f"stars_{order.id.hex}_")
-        assert re.fullmatch(r"[A-Za-z0-9_-]+", order.payload)
+        assert order.payload.startswith(f"stars:{order.id}:")
+        assert re.fullmatch(r"stars:[0-9a-f-]{36}:[A-Za-z0-9_-]+", order.payload)
         assert any(
             isinstance(record.msg, dict)
             and record.msg.get("action") == "payment_order_created"
@@ -60,6 +63,8 @@ async def test_create_stars_order_uses_one_star_to_one_credit(session_factory, c
 @pytest.mark.asyncio
 @pytest.mark.parametrize("stars_amount", ALLOWED_STARS_AMOUNTS)
 async def test_create_stars_order_accepts_only_allowed_amounts(session_factory, stars_amount: int) -> None:
+    assert ALLOWED_STARS_AMOUNTS == EXPECTED_STARS_AMOUNTS
+
     async with session_factory() as session:
         session.add(User(id=220 + stars_amount, balance=0))
         await session.commit()
@@ -83,16 +88,17 @@ async def test_create_stars_order_generates_unique_payloads(session_factory) -> 
 
         payloads = [order.payload for order in orders]
         assert len(payloads) == len(set(payloads))
-        assert all(payload is not None and payload.startswith("stars_") for payload in payloads)
+        assert all(payload is not None and payload.startswith("stars:") for payload in payloads)
 
 
 @pytest.mark.asyncio
-async def test_create_stars_order_rejects_unsupported_amount(session_factory) -> None:
+@pytest.mark.parametrize("stars_amount", [0, 99, 101, 250, 299, 301, 499, 501, 999, 1001, 2999, 3001, 4999, 5001])
+async def test_create_stars_order_rejects_unsupported_amount(session_factory, stars_amount: int) -> None:
     async with session_factory() as session:
         service = PaymentService(session)
 
         with pytest.raises(ValueError):
-            await service.create_stars_order(user_id=202, stars_amount=250)
+            await service.create_stars_order(user_id=202, stars_amount=stars_amount)
 
 
 @pytest.mark.asyncio
@@ -127,9 +133,36 @@ async def test_complete_stars_payment_credits_user_once(session_factory, caplog)
         assert len(credit_logs) == 1
         payment_logs = [record.msg for record in caplog.records if isinstance(record.msg, dict)]
         assert any(log.get("action") == "payment_paid" and log.get("order_id") == str(order.id) for log in payment_logs)
+        assert all("order_id" in log for log in payment_logs if log.get("action") in {"payment_paid", "credits_added"})
         assert all("payload" not in log for log in payment_logs)
         assert all("telegram_payment_charge_id" not in log for log in payment_logs)
+        assert all(order.payload not in str(log) for log in payment_logs)
         assert all("charge-203" not in str(log) for log in payment_logs)
+
+
+@pytest.mark.asyncio
+async def test_complete_stars_payment_returns_paid_order_without_recrediting(session_factory) -> None:
+    async with session_factory() as session:
+        session.add(User(id=207, balance=2))
+        await session.commit()
+        service = PaymentService(session)
+        order = await service.create_stars_order(user_id=207, stars_amount=100)
+        await service.complete_stars_payment(
+            payload=order.payload,
+            telegram_payment_charge_id="charge-207",
+            total_amount=100,
+        )
+
+        repeated_order = await service.complete_stars_payment(
+            payload=order.payload,
+            telegram_payment_charge_id="duplicate-charge-207",
+            total_amount=300,
+        )
+
+        result = await session.execute(select(User.balance).where(User.id == 207))
+        assert result.scalar_one() == 102
+        assert repeated_order.status == PaymentOrderStatus.PAID.value
+        assert repeated_order.telegram_payment_charge_id == "charge-207"
 
 
 @pytest.mark.asyncio

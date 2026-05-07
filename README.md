@@ -143,25 +143,19 @@ CRYPTO_WALLET_BTC=
 CRYPTO_WALLET_ETH=
 CRYPTO_WALLET_USDT_TRC20=
 CRYPTO_WALLET_USDT_ERC20=
-NOWPAYMENTS_API_KEY=
-NOWPAYMENTS_IPN_SECRET=
-NOWPAYMENTS_BASE_URL=https://api.nowpayments.io/v1
-NOWPAYMENTS_IPN_CALLBACK_URL=
 ```
 
-## Crypto Payments With NOWPayments
+## Crypto payment integration TODO
 
-Crypto top-ups use NOWPayments. The balance top-up screen shows a `₿ Crypto` option, creates a NOWPayments payment for the selected credit package, and credits the user only after a verified IPN webhook confirms the payment.
+Crypto payments are prepared as a future integration only. The balance top-up screen shows a `₿ Crypto` button and responds with `Crypto payments are coming soon.`
 
-Required env for production crypto payments:
+Current scaffolding:
 
-- `MAIN_BOT_USERNAME`: username of the main generation bot without `@`. NOWPayments `success_url` and `cancel_url` are built automatically as `https://t.me/{MAIN_BOT_USERNAME}`. If it is empty, the service logs a warning and falls back to `https://t.me`.
-- `NOWPAYMENTS_API_KEY`: API key for creating payments.
-- `NOWPAYMENTS_IPN_SECRET`: secret used to verify `x-nowpayments-sig`.
-- `NOWPAYMENTS_BASE_URL`: defaults to `https://api.nowpayments.io/v1`.
-- `NOWPAYMENTS_IPN_CALLBACK_URL`: public callback URL, usually `https://your-public-host.example.com/webhooks/nowpayments`.
+- `CRYPTO_PROVIDER` and `CRYPTO_WEBHOOK_SECRET` are placeholders for a future provider.
+- `app/services/crypto_payments.py` defines `CryptoPaymentProvider`, `CryptoInvoice`, `CryptoPaymentStatus`, and `StubCryptoPaymentProvider`.
+- The stub provider creates draft crypto orders in the database and never credits balances automatically.
 
-The webhook endpoint is `POST /webhooks/nowpayments`. It verifies the IPN signature, treats `finished` and `confirmed` as paid, marks `failed`, `expired`, and `refunded` as failed, and keeps `waiting`, `confirming`, `sending`, and `partially_paid` pending. Return links from NOWPayments are informational only; the webhook is the source of truth for crediting.
+Before enabling real crypto payments, connect a trusted provider webhook/API verification path and credit users only after a verified paid callback. Return flows or draft orders must never be treated as proof of payment.
 
 Для больших результатов генерации бот показывает короткую ссылку вида `PUBLIC_BASE_URL/d/{token}`, а не прямой длинный Cloudflare R2 presigned URL. По этой короткой ссылке пользователь сначала попадает на отдельную HTML-страницу скачивания с названием файла, сроком действия ссылки и кнопкой `Скачать файл`; только route `PUBLIC_BASE_URL/d/{token}/download` генерирует свежий временный signed URL и делает redirect. В базе хранится только token, `r2_object_key`, имя файла, размер, content type, срок жизни и счётчик использований; полный signed URL не сохраняется и не логируется.
 

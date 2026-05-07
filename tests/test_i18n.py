@@ -9,6 +9,7 @@ os.environ.setdefault("BOT_TOKEN", "test-bot-token")
 os.environ.setdefault("WAVESPEED_API_KEY", "test-api-key")
 os.environ.setdefault("PUBLIC_BASE_URL", "https://example.com")
 
+import app.i18n as i18n
 from app.i18n import SUPPORTED_LANGUAGES, TRANSLATIONS, get_user_language, t
 
 
@@ -34,6 +35,7 @@ PAYMENT_TRANSLATION_KEYS = {
 
 
 def test_supported_languages_match_translation_catalog() -> None:
+    assert len(SUPPORTED_LANGUAGES) == 10
     assert set(SUPPORTED_LANGUAGES) == set(TRANSLATIONS)
 
 
@@ -70,6 +72,16 @@ def test_translate_falls_back_to_english_for_missing_language_key() -> None:
     assert t("main.profile", "pt-BR") == "Perfil"
     assert t("main.profile", "ja") == "Profile"
     assert t("payments.choose_method", "ja") == "Choose a payment method:"
+
+
+def test_translate_falls_back_to_english_for_missing_supported_language_key(monkeypatch) -> None:
+    ru_without_payment_key = dict(TRANSLATIONS["ru"])
+    ru_without_payment_key.pop("payments.choose_method")
+    patched_translations = {**TRANSLATIONS, "ru": ru_without_payment_key}
+
+    monkeypatch.setattr(i18n, "TRANSLATIONS", patched_translations)
+
+    assert i18n.t("payments.choose_method", "ru") == "Choose a payment method:"
 
 
 def test_translate_falls_back_to_english_for_missing_key() -> None:

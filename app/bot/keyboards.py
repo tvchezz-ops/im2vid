@@ -427,11 +427,11 @@ def build_stars_payment_method_keyboard(
     )
 
 
-def build_wallet_bot_payment_keyboard(*, amount: int, wallet_payment_url: str) -> InlineKeyboardMarkup:
+def build_wallet_bot_payment_keyboard(*, amount: int, wallet_payment_url: str, lang: str = "en") -> InlineKeyboardMarkup:
     """Клавиатура перехода во внешний wallet bot для оплаты Stars."""
     return InlineKeyboardMarkup(
         inline_keyboard=[
-            [InlineKeyboardButton(text=f"Pay {amount} ⭐", url=wallet_payment_url)],
+            [InlineKeyboardButton(text=t("payments.open_wallet_bot", lang), url=wallet_payment_url)],
         ]
     )
 

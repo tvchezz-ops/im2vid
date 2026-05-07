@@ -203,5 +203,5 @@ def test_build_wallet_bot_payment_keyboard_uses_single_pay_url_button() -> None:
     )
 
     assert len(keyboard.inline_keyboard) == 1
-    assert keyboard.inline_keyboard[0][0].text == "Pay 500 ⭐"
+    assert keyboard.inline_keyboard[0][0].text == "Go to payment"
     assert keyboard.inline_keyboard[0][0].url == "https://t.me/wallet_bot?start=500credits"
