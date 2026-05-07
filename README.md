@@ -136,28 +136,32 @@ TEMP_MEDIA_DIR=tmp/media
 TEMP_MEDIA_TTL_MINUTES=30
 STORE_INPUT_MEDIA=false
 STORE_OUTPUT_URLS=false
+MAIN_BOT_USERNAME=
 CRYPTO_PROVIDER=
 CRYPTO_WEBHOOK_SECRET=
 CRYPTO_WALLET_BTC=
 CRYPTO_WALLET_ETH=
 CRYPTO_WALLET_USDT_TRC20=
 CRYPTO_WALLET_USDT_ERC20=
+NOWPAYMENTS_API_KEY=
+NOWPAYMENTS_IPN_SECRET=
+NOWPAYMENTS_BASE_URL=https://api.nowpayments.io/v1
+NOWPAYMENTS_IPN_CALLBACK_URL=
 ```
 
-## Crypto payment integration TODO
+## Crypto Payments With NOWPayments
 
-Crypto payments are prepared as a future integration only. The current UI shows a `₿ Crypto` button in balance top-up and responds with `Crypto payments are coming soon.`
+Crypto top-ups use NOWPayments. The balance top-up screen shows a `₿ Crypto` option, creates a NOWPayments payment for the selected credit package, and credits the user only after a verified IPN webhook confirms the payment.
 
-Before enabling real crypto payments:
+Required env for production crypto payments:
 
-- implement a concrete `CryptoPaymentProvider` in `app/services/crypto_payments.py`;
-- create invoices through the selected provider from `CRYPTO_PROVIDER`;
-- verify paid invoices only through a trusted webhook/API callback protected by `CRYPTO_WEBHOOK_SECRET`;
-- mark payment orders paid only after verified provider confirmation;
-- keep `/start` or user-return flows informational only, never as proof of payment;
-- add provider-specific tests for paid, pending, expired, failed, duplicate webhook, and partial amount cases.
+- `MAIN_BOT_USERNAME`: username of the main generation bot without `@`. NOWPayments `success_url` and `cancel_url` are built automatically as `https://t.me/{MAIN_BOT_USERNAME}`. If it is empty, the service logs a warning and falls back to `https://t.me`.
+- `NOWPAYMENTS_API_KEY`: API key for creating payments.
+- `NOWPAYMENTS_IPN_SECRET`: secret used to verify `x-nowpayments-sig`.
+- `NOWPAYMENTS_BASE_URL`: defaults to `https://api.nowpayments.io/v1`.
+- `NOWPAYMENTS_IPN_CALLBACK_URL`: public callback URL, usually `https://your-public-host.example.com/webhooks/nowpayments`.
 
-Until that webhook/API path exists, crypto orders stay draft/pending and do not credit user balances automatically.
+The webhook endpoint is `POST /webhooks/nowpayments`. It verifies the IPN signature, treats `finished` and `confirmed` as paid, marks `failed`, `expired`, and `refunded` as failed, and keeps `waiting`, `confirming`, `sending`, and `partially_paid` pending. Return links from NOWPayments are informational only; the webhook is the source of truth for crediting.
 
 Для больших результатов генерации бот показывает короткую ссылку вида `PUBLIC_BASE_URL/d/{token}`, а не прямой длинный Cloudflare R2 presigned URL. По этой короткой ссылке пользователь сначала попадает на отдельную HTML-страницу скачивания с названием файла, сроком действия ссылки и кнопкой `Скачать файл`; только route `PUBLIC_BASE_URL/d/{token}/download` генерирует свежий временный signed URL и делает redirect. В базе хранится только token, `r2_object_key`, имя файла, размер, content type, срок жизни и счётчик использований; полный signed URL не сохраняется и не логируется.
 

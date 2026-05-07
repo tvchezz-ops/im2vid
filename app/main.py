@@ -83,7 +83,7 @@ class TelegramBot:
         deleted_links = await DownloadLinkService().delete_expired_download_links()
         if deleted_links:
             logger.info("Deleted expired download links: %s", deleted_links)
-        app = create_media_app()
+        app = create_media_app(self.bot)
         self.media_runner = web.AppRunner(app)
         await self.media_runner.setup()
         site = web.TCPSite(self.media_runner, host=MEDIA_BIND_HOST, port=port)

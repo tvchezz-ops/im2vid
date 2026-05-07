@@ -119,13 +119,64 @@ async def test_top_up_button_opens_stars_menu() -> None:
 
 
 @pytest.mark.asyncio
-async def test_crypto_button_shows_coming_soon_alert() -> None:
-    callback = FakeCallback(user_id=811, data="pay:crypto")
+async def test_crypto_button_shows_package_menu() -> None:
+    message = FakeMessage(user_id=811)
+    callback = FakeCallback(user_id=811, message=message, data="pay:crypto")
 
-    await payments.show_crypto_payments_soon(callback)
+    await payments.show_crypto_packages(callback)
 
-    assert callback.answers[-1] == "Crypto payments are coming soon."
-    assert callback.answer_alerts[-1] is True
+    assert message.edits[-1] == "Выберите способ оплаты:"
+    keyboard = message.edit_markups[-1]
+    buttons = [row[0] for row in keyboard.inline_keyboard]
+    assert [button.callback_data for button in buttons] == [
+        "pay:crypto:100",
+        "pay:crypto:300",
+        "pay:crypto:500",
+        "pay:crypto:1000",
+        "pay:crypto:3000",
+        "pay:crypto:5000",
+        "pay:back:profile",
+    ]
+    assert callback.answers[-1] is None
+
+
+@pytest.mark.asyncio
+async def test_crypto_amount_callback_creates_nowpayments_order(session_factory, monkeypatch) -> None:
+    class FakeNowPaymentsService:
+        async def create_payment(self, *, order_id, credits, amount_usd, pay_currency=None):
+            return {
+                "payment_id": "np-router-1",
+                "payment_url": "https://nowpayments.test/pay/np-router-1",
+                "pay_address": "wallet-address",
+                "pay_currency": "usdttrc20",
+                "price_amount": amount_usd,
+                "price_currency": "usd",
+            }
+
+    monkeypatch.setattr(payments, "is_nowpayments_configured", lambda: True)
+    monkeypatch.setattr(payments, "NowPaymentsService", FakeNowPaymentsService)
+    async with session_factory() as session:
+        session.add(User(id=812, balance=0))
+        await session.commit()
+        message = FakeMessage(user_id=812)
+        callback = FakeCallback(user_id=812, message=message, data="pay:crypto:100")
+
+        await payments.choose_crypto_amount(callback, session)
+
+        result = await session.execute(select(PaymentOrder).where(PaymentOrder.user_id == 812))
+        order = result.scalars().one()
+        assert order.provider == "crypto"
+        assert order.amount == 100
+        assert order.credits == 100
+        assert order.currency == "USD"
+        assert order.nowpayments_payment_id == "np-router-1"
+        assert message.edits[-1] == "Оплата готова. Выберите способ оплаты:"
+        keyboard = message.edit_markups[-1]
+        assert keyboard.inline_keyboard[0][0].text == "Перейти к оплате"
+        assert keyboard.inline_keyboard[0][0].url == "https://nowpayments.test/pay/np-router-1"
+        assert keyboard.inline_keyboard[1][0].text == "Проверяем оплату..."
+        assert keyboard.inline_keyboard[1][0].callback_data == f"pay:crypto:check:{order.id}"
+        assert callback.answers[-1] is None
 
 
 @pytest.mark.asyncio

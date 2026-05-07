@@ -18,6 +18,8 @@ from app.utils import ImageUploadError, logger
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
 MEDIA_ROUTE_PREFIX = "/media"
 MEDIA_BIND_HOST = "0.0.0.0"
+DB_SESSION_FACTORY_APP_KEY = web.AppKey("db_session_factory", object)
+TELEGRAM_BOT_APP_KEY = web.AppKey("telegram_bot", Bot)
 
 
 @dataclass(frozen=True)
@@ -62,8 +64,24 @@ def build_public_media_path(filename: str) -> str:
     return f"{MEDIA_ROUTE_PREFIX}/{filename}"
 
 
-def create_media_app() -> web.Application:
+async def handle_nowpayments_webhook(request: web.Request) -> web.Response:
+    """Handle NOWPayments IPN callbacks."""
+    from app.services.nowpayments_webhook import process_nowpayments_ipn
+
+    raw_body = await request.read()
+    signature = request.headers.get("x-nowpayments-sig", "")
+    status, payload = await process_nowpayments_ipn(
+        raw_body=raw_body,
+        signature=signature,
+        session_factory=request.app[DB_SESSION_FACTORY_APP_KEY],
+        bot=request.app.get(TELEGRAM_BOT_APP_KEY),
+    )
+    return web.json_response(payload, status=status)
+
+
+def create_media_app(bot: Bot | None = None) -> web.Application:
     """Создать aiohttp-приложение для публикации временных media-файлов."""
+    from app.db import db_manager
     from app.services.download_links import (
         DOWNLOAD_LINK_SERVICE_APP_KEY,
         DOWNLOAD_ROUTE_PREFIX,
@@ -75,8 +93,12 @@ def create_media_app() -> web.Application:
     temp_media_dir = ensure_temp_media_dir()
     app = web.Application()
     app[DOWNLOAD_LINK_SERVICE_APP_KEY] = DownloadLinkService()
+    app[DB_SESSION_FACTORY_APP_KEY] = db_manager.session_factory
+    if bot is not None:
+        app[TELEGRAM_BOT_APP_KEY] = bot
     app.router.add_get(f"{DOWNLOAD_ROUTE_PREFIX}/{{token}}", handle_download_landing)
     app.router.add_get(f"{DOWNLOAD_ROUTE_PREFIX}/{{token}}/download", handle_download_redirect)
+    app.router.add_post("/webhooks/nowpayments", handle_nowpayments_webhook)
     app.router.add_static(f"{MEDIA_ROUTE_PREFIX}/", path=str(temp_media_dir), show_index=False)
     return app
 

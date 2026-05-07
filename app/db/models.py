@@ -149,6 +149,7 @@ class PaymentOrder(BaseModel):
     currency: Mapped[str] = mapped_column(String(20))
     external_payment_id: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
     telegram_payment_charge_id: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
+    nowpayments_payment_id: Mapped[Optional[str]] = mapped_column(String(255), nullable=True, index=True)
     payload: Mapped[Optional[str]] = mapped_column(String(255), unique=True, nullable=True)
     metadata_: Mapped[Optional[dict[str, Any]]] = mapped_column(
         "metadata",
@@ -175,7 +176,14 @@ class CryptoPaymentOrder(Base):
     asset: Mapped[Optional[str]] = mapped_column(String(100), nullable=True)
     wallet_address: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
     expected_amount: Mapped[Optional[str]] = mapped_column(String(100), nullable=True)
+    nowpayments_payment_id: Mapped[Optional[str]] = mapped_column(String(255), unique=True, nullable=True)
+    payment_url: Mapped[Optional[str]] = mapped_column(String(1024), nullable=True)
+    pay_address: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
+    pay_currency: Mapped[Optional[str]] = mapped_column(String(50), nullable=True)
+    price_amount: Mapped[Optional[str]] = mapped_column(String(100), nullable=True)
+    price_currency: Mapped[str] = mapped_column(String(20), default="usd", server_default="usd")
     tx_hash: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
+    expires_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
     status: Mapped[str] = mapped_column(String(50), default="draft", server_default="draft")
     metadata_: Mapped[dict[str, Any]] = mapped_column("metadata", JSON, default=dict, server_default="{}")
 

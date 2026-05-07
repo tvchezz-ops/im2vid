@@ -28,6 +28,7 @@ from app.services.generation_service import (
 from app.services.telegram_files import TelegramFilesService
 from app.services.download_links import DownloadLinkService
 from app.services.crypto_payments import CryptoInvoice, CryptoPaymentProvider, CryptoPaymentStatus, StubCryptoPaymentProvider
+from app.services.nowpayments import NowPaymentsService
 from app.services.payments import ALLOWED_STARS_AMOUNTS, PaymentOrderNotFoundError, PaymentService
 from app.services.r2_storage import R2StorageService
 from app.services.wavespeed import (
@@ -54,6 +55,7 @@ __all__ = [
     "CryptoPaymentProvider",
     "CryptoPaymentStatus",
     "StubCryptoPaymentProvider",
+    "NowPaymentsService",
     "PaymentService",
     "PaymentOrderNotFoundError",
     "ALLOWED_STARS_AMOUNTS",

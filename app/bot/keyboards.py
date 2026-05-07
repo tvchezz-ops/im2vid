@@ -434,3 +434,25 @@ def build_wallet_bot_payment_keyboard(*, amount: int, wallet_payment_url: str) -
             [InlineKeyboardButton(text=f"Pay {amount} ⭐", url=wallet_payment_url)],
         ]
     )
+
+
+def build_crypto_top_up_keyboard(lang: str = "en") -> InlineKeyboardMarkup:
+    """Клавиатура выбора crypto-пакета кредитов."""
+    rows = [
+        [InlineKeyboardButton(text=f"{amount} credits", callback_data=validate_callback_length(f"pay:crypto:{amount}"))]
+        for amount in ALLOWED_STARS_AMOUNTS
+    ]
+    rows.append(
+        [InlineKeyboardButton(text=get_button_text("payments.back_to_profile", lang), callback_data="pay:back:profile")]
+    )
+    return InlineKeyboardMarkup(inline_keyboard=rows)
+
+
+def build_crypto_payment_keyboard(*, payment_url: str, order_id: str, lang: str = "en") -> InlineKeyboardMarkup:
+    """Клавиатура оплаты crypto через NOWPayments."""
+    return InlineKeyboardMarkup(
+        inline_keyboard=[
+            [InlineKeyboardButton(text=t("payments.external_open", lang), url=payment_url)],
+            [InlineKeyboardButton(text=t("payments.checking_payment", lang), callback_data=validate_callback_length(f"pay:crypto:check:{order_id}"))],
+        ]
+    )

@@ -547,6 +547,14 @@ class PaymentRepository:
         network: Optional[str] = None,
         wallet_address: Optional[str] = None,
         expected_amount: Optional[str] = None,
+        nowpayments_payment_id: Optional[str] = None,
+        payment_url: Optional[str] = None,
+        pay_address: Optional[str] = None,
+        pay_currency: Optional[str] = None,
+        price_amount: Optional[str] = None,
+        price_currency: str = "usd",
+        tx_hash: Optional[str] = None,
+        expires_at: Optional[datetime] = None,
         status: str = "draft",
     ) -> CryptoPaymentOrder:
         """Создать draft-детали крипто-платежа."""
@@ -556,6 +564,14 @@ class PaymentRepository:
             network=network,
             wallet_address=wallet_address,
             expected_amount=expected_amount,
+            nowpayments_payment_id=nowpayments_payment_id,
+            payment_url=payment_url,
+            pay_address=pay_address,
+            pay_currency=pay_currency,
+            price_amount=price_amount,
+            price_currency=price_currency,
+            tx_hash=tx_hash,
+            expires_at=expires_at,
             status=status,
             metadata_={},
         )
@@ -563,6 +579,122 @@ class PaymentRepository:
         await self.session.commit()
         await self.session.refresh(crypto_order)
         return crypto_order
+
+    async def get_crypto_payment_order_by_nowpayments_id(self, payment_id: str) -> Optional[CryptoPaymentOrder]:
+        """Получить crypto payment details по NOWPayments payment id."""
+        result = await self.session.execute(
+            select(CryptoPaymentOrder).where(CryptoPaymentOrder.nowpayments_payment_id == payment_id)
+        )
+        return result.scalars().first()
+
+    async def attach_nowpayments_payment_details(
+        self,
+        payment_order_id: Any,
+        *,
+        nowpayments_payment_id: str,
+        payment_url: Optional[str] = None,
+        pay_address: Optional[str] = None,
+        pay_currency: Optional[str] = None,
+        price_amount: Optional[str] = None,
+        price_currency: str = "usd",
+        status: str = PaymentOrderStatus.PENDING.value,
+    ) -> Optional[CryptoPaymentOrder]:
+        """Сохранить details созданного NOWPayments платежа."""
+        crypto_order = await self.get_crypto_payment_order_by_payment_order_id(payment_order_id)
+        if crypto_order is None:
+            return None
+
+        crypto_order.nowpayments_payment_id = nowpayments_payment_id
+        crypto_order.payment_url = payment_url
+        crypto_order.pay_address = pay_address
+        crypto_order.pay_currency = pay_currency
+        crypto_order.price_amount = price_amount
+        crypto_order.price_currency = price_currency
+        crypto_order.status = status
+        order = await self.get_payment_order_by_id(payment_order_id)
+        if order is not None:
+            order.nowpayments_payment_id = nowpayments_payment_id
+            order.external_payment_id = nowpayments_payment_id
+            order.status = status
+        await self.session.commit()
+        await self.session.refresh(crypto_order)
+        return crypto_order
+
+    async def get_crypto_payment_order_by_payment_order_id(self, payment_order_id: Any) -> Optional[CryptoPaymentOrder]:
+        result = await self.session.execute(
+            select(CryptoPaymentOrder).where(CryptoPaymentOrder.payment_order_id == payment_order_id)
+        )
+        return result.scalars().first()
+
+    async def mark_nowpayments_order_failed(self, payment_id: str, status: str, tx_hash: Optional[str] = None) -> bool:
+        """Отметить NOWPayments заказ как failed/expired/refunded без начисления."""
+        crypto_order = await self.get_crypto_payment_order_by_nowpayments_id(payment_id)
+        if crypto_order is None:
+            await self.session.commit()
+            return False
+        order = await self.get_payment_order_by_id(crypto_order.payment_order_id)
+        if order is not None and order.status != PaymentOrderStatus.PAID.value:
+            order.status = PaymentOrderStatus.FAILED.value
+        crypto_order.status = status
+        if tx_hash:
+            crypto_order.tx_hash = tx_hash
+        await self.session.commit()
+        return True
+
+    async def complete_nowpayments_payment_and_credit_user(
+        self,
+        payment_id: str,
+        *,
+        tx_hash: Optional[str] = None,
+        status: str = "finished",
+    ) -> PaymentCompletionResult:
+        """Идемпотентно завершить NOWPayments платеж и начислить кредиты."""
+        try:
+            crypto_result = await self.session.execute(
+                select(CryptoPaymentOrder)
+                .where(CryptoPaymentOrder.nowpayments_payment_id == payment_id)
+                .with_for_update()
+            )
+            crypto_order = crypto_result.scalars().first()
+            if crypto_order is None:
+                await self.session.commit()
+                return PaymentCompletionResult(order=None, already_paid=False)
+
+            order_result = await self.session.execute(
+                select(PaymentOrder)
+                .where(PaymentOrder.id == crypto_order.payment_order_id)
+                .with_for_update()
+            )
+            order = order_result.scalars().first()
+            if order is None:
+                raise ValueError("Payment order not found")
+
+            crypto_order.status = status
+            if tx_hash:
+                crypto_order.tx_hash = tx_hash
+
+            if order.status == PaymentOrderStatus.PAID.value:
+                await self.session.commit()
+                return PaymentCompletionResult(order=order, already_paid=True)
+
+            order.status = PaymentOrderStatus.PAID.value
+            order.external_payment_id = payment_id
+            order.nowpayments_payment_id = payment_id
+            order.paid_at = datetime.now(timezone.utc)
+            balance_result = await self.session.execute(
+                update(User)
+                .where(User.id == order.user_id)
+                .values(balance=User.balance + order.credits)
+            )
+            if not balance_result.rowcount or balance_result.rowcount <= 0:
+                raise ValueError("Payment order user not found")
+
+            await self.session.commit()
+            await self.session.refresh(order)
+            return PaymentCompletionResult(order=order, already_paid=False)
+        except Exception:
+            await self.session.rollback()
+            raise
 
 
 class DownloadLinkRepository:
