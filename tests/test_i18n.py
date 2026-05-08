@@ -30,7 +30,6 @@ PAYMENT_TRANSLATION_KEYS = {
     "payments.back_to_profile",
     "payments.open_wallet_bot",
     "payments.pay_here",
-    "payments.checking_payment",
 }
 
 

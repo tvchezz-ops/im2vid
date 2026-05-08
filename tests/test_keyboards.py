@@ -21,6 +21,7 @@ from app.bot.keyboards import (
     build_model_settings_keyboard,
     build_models_keyboard,
     build_providers_keyboard,
+    build_crypto_top_up_keyboard,
     build_setting_options_keyboard,
     build_stars_wallet_redirect_keyboard,
     build_stars_top_up_keyboard,
@@ -152,13 +153,26 @@ def test_build_profile_keyboard_has_no_history_button() -> None:
     keyboard = get_profile_keyboard(send_results_as_files=False, lang="ru")
     button_texts = [button.text for row in keyboard.inline_keyboard for button in row]
 
-    assert button_texts == ["💳 Пополнить баланс", "📎 Переключить способ отправки", "⬅️ Назад"]
+    assert button_texts == ["💳 Пополнить баланс", "📎 Переключить способ отправки"]
     assert "📜 История генераций" not in button_texts
+
+
+def test_build_profile_keyboard_has_no_back_button_in_ru_or_en() -> None:
+    from app.bot.keyboards import get_profile_keyboard
+
+    ru_keyboard = get_profile_keyboard(send_results_as_files=False, lang="ru")
+    en_keyboard = get_profile_keyboard(send_results_as_files=False, lang="en")
+    ru_button_texts = [button.text for row in ru_keyboard.inline_keyboard for button in row]
+    en_button_texts = [button.text for row in en_keyboard.inline_keyboard for button in row]
+
+    assert "Назад" not in " ".join(ru_button_texts)
+    assert "Back" not in " ".join(en_button_texts)
 
 
 def test_build_stars_top_up_keyboard_uses_expected_amount_callbacks() -> None:
     keyboard = build_stars_top_up_keyboard("ru")
-    buttons = [row[0] for row in keyboard.inline_keyboard]
+    rows = keyboard.inline_keyboard
+    buttons = [button for row in rows for button in row]
 
     assert [button.text for button in buttons] == [
         "100 ⭐",
@@ -179,6 +193,52 @@ def test_build_stars_top_up_keyboard_uses_expected_amount_callbacks() -> None:
         "pay:back:methods",
     ]
     assert all("Магазин" not in button.text for button in buttons)
+
+
+def test_build_stars_top_up_keyboard_uses_two_column_amount_layout() -> None:
+    keyboard = build_stars_top_up_keyboard("ru")
+    rows = keyboard.inline_keyboard
+
+    assert len(rows) == 4
+    assert [len(row) for row in rows[:3]] == [2, 2, 2]
+    assert [button.text for row in rows[:3] for button in row] == [
+        "100 ⭐",
+        "300 ⭐",
+        "500 ⭐",
+        "1000 ⭐",
+        "3000 ⭐",
+        "5000 ⭐",
+    ]
+    assert len(rows[-1]) == 1
+    assert rows[-1][0].text == "⬅️ Назад"
+    assert rows[-1][0].callback_data == "pay:back:methods"
+
+
+def test_build_crypto_top_up_keyboard_uses_two_column_amount_layout() -> None:
+    keyboard = build_crypto_top_up_keyboard("ru")
+    rows = keyboard.inline_keyboard
+
+    assert len(rows) == 4
+    assert [len(row) for row in rows[:3]] == [2, 2, 2]
+    assert [button.text for row in rows[:3] for button in row] == [
+        "100 credits",
+        "300 credits",
+        "500 credits",
+        "1000 credits",
+        "3000 credits",
+        "5000 credits",
+    ]
+    assert [button.callback_data for row in rows[:3] for button in row] == [
+        "pay:crypto:100",
+        "pay:crypto:300",
+        "pay:crypto:500",
+        "pay:crypto:1000",
+        "pay:crypto:3000",
+        "pay:crypto:5000",
+    ]
+    assert len(rows[-1]) == 1
+    assert rows[-1][0].text == "⬅️ Назад"
+    assert rows[-1][0].callback_data == "pay:back:methods"
 
 
 def test_build_top_up_method_keyboard_uses_payment_methods() -> None:

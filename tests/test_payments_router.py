@@ -131,7 +131,10 @@ async def test_stars_method_opens_amount_menu() -> None:
 
     assert message.edits[-1] == "Выберите количество Telegram Stars:"
     keyboard = message.edit_markups[-1]
-    buttons = [row[0] for row in keyboard.inline_keyboard]
+    assert len(keyboard.inline_keyboard) == 4
+    assert [len(row) for row in keyboard.inline_keyboard[:3]] == [2, 2, 2]
+    assert len(keyboard.inline_keyboard[-1]) == 1
+    buttons = [button for row in keyboard.inline_keyboard for button in row]
     assert [button.callback_data for button in buttons] == [
         "pay:stars:100",
         "pay:stars:300",
@@ -150,6 +153,7 @@ async def test_stars_method_opens_amount_menu() -> None:
         "5000 ⭐",
         "⬅️ Назад",
     ]
+    assert keyboard.inline_keyboard[-1][0].callback_data == "pay:back:methods"
     assert all("Магазин" not in button.text for button in buttons)
     assert (await state.get_data())["payment_screen"] == "stars_amounts"
     assert callback.answers[-1] is None
@@ -165,7 +169,10 @@ async def test_crypto_button_shows_package_menu(monkeypatch) -> None:
 
     assert message.edits[-1] == "Выберите способ оплаты:"
     keyboard = message.edit_markups[-1]
-    buttons = [row[0] for row in keyboard.inline_keyboard]
+    assert len(keyboard.inline_keyboard) == 4
+    assert [len(row) for row in keyboard.inline_keyboard[:3]] == [2, 2, 2]
+    assert len(keyboard.inline_keyboard[-1]) == 1
+    buttons = [button for row in keyboard.inline_keyboard for button in row]
     assert [button.callback_data for button in buttons] == [
         "pay:crypto:100",
         "pay:crypto:300",
@@ -175,6 +182,7 @@ async def test_crypto_button_shows_package_menu(monkeypatch) -> None:
         "pay:crypto:5000",
         "pay:back:methods",
     ]
+    assert keyboard.inline_keyboard[-1][0].callback_data == "pay:back:methods"
     assert callback.answers[-1] is None
 
 
@@ -340,7 +348,8 @@ async def test_back_to_profile_restores_profile_screen(session_factory) -> None:
         keyboard = message.edit_markups[-1]
         assert keyboard.inline_keyboard[0][0].text == "💳 Пополнить баланс"
         assert keyboard.inline_keyboard[1][0].text == "📎 Переключить способ отправки"
-        assert keyboard.inline_keyboard[2][0].text == "⬅️ Назад"
+        assert len(keyboard.inline_keyboard) == 2
+        assert all("Назад" not in row[0].text for row in keyboard.inline_keyboard)
         assert callback.answers[-1] is None
 
 

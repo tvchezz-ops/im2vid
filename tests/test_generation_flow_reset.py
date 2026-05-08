@@ -202,7 +202,10 @@ async def test_start_paid_payload_checks_payment_without_crediting_pending_order
 
         result = await session.execute(select(User.balance).where(User.id == 711))
         assert result.scalar_one() == 5
-        assert message.answers == ["Проверяем оплату..."]
+        assert len(message.answers) == 1
+        assert message.answers[0].startswith("👤 <b>Профиль</b>")
+        assert "Баланс: 5" in message.answers[0]
+        assert "Проверяем оплату" not in message.answers[0]
 
 
 @pytest.mark.asyncio
@@ -218,7 +221,31 @@ async def test_start_direct_stars_payload_checks_payment_without_crediting(sessi
 
         result = await session.execute(select(User.balance).where(User.id == 717))
         assert result.scalar_one() == 8
-        assert message.answers == ["Проверяем оплату..."]
+        assert len(message.answers) == 1
+        assert message.answers[0].startswith("👤 <b>Профиль</b>")
+        assert "Баланс: 8" in message.answers[0]
+        assert "Проверяем оплату" not in message.answers[0]
+
+
+@pytest.mark.asyncio
+async def test_start_paid_payload_decodes_wallet_return_payload(session_factory) -> None:
+    async with session_factory() as session:
+        session.add(User(id=718, balance=12))
+        await session.commit()
+        order = await PaymentService(session).create_stars_order(user_id=718, stars_amount=100)
+        order.payload = "stars:legacy:token"
+        await session.commit()
+        state = FakeState()
+        message = FakeMessage(user_id=718, text="/start paid_stars%3Alegacy%3Atoken")
+
+        await start.start_command(message, state, session, command=SimpleNamespace(args="paid_stars%3Alegacy%3Atoken"))
+
+        result = await session.execute(select(User.balance).where(User.id == 718))
+        assert result.scalar_one() == 12
+        assert len(message.answers) == 1
+        assert message.answers[0].startswith("👤 <b>Профиль</b>")
+        assert "Баланс: 12" in message.answers[0]
+        assert "Проверяем оплату" not in message.answers[0]
 
 
 @pytest.mark.asyncio
@@ -233,7 +260,10 @@ async def test_start_paid_payload_does_not_trust_unknown_payload(session_factory
 
         result = await session.execute(select(User.balance).where(User.id == 714))
         assert result.scalar_one() == 33
-        assert message.answers == ["Проверяем оплату..."]
+        assert len(message.answers) == 1
+        assert message.answers[0].startswith("👤 <b>Профиль</b>")
+        assert "Баланс: 33" in message.answers[0]
+        assert "Проверяем оплату" not in message.answers[0]
 
 
 @pytest.mark.asyncio
@@ -253,7 +283,10 @@ async def test_start_paid_payload_does_not_confirm_another_users_paid_order(sess
         requester_balance = (await session.execute(select(User.balance).where(User.id == 716))).scalar_one()
         assert owner_balance == 105
         assert requester_balance == 20
-        assert message.answers == ["Проверяем оплату..."]
+        assert len(message.answers) == 1
+        assert message.answers[0].startswith("👤 <b>Профиль</b>")
+        assert "Баланс: 20" in message.answers[0]
+        assert "Проверяем оплату" not in message.answers[0]
 
 
 @pytest.mark.asyncio
@@ -271,7 +304,10 @@ async def test_start_paid_payload_reports_confirmed_external_payment(session_fac
 
         result = await session.execute(select(User.balance).where(User.id == 712))
         assert result.scalar_one() == 105
-        assert message.answers == ["Проверяем оплату..."]
+        assert len(message.answers) == 1
+        assert message.answers[0].startswith("👤 <b>Профиль</b>")
+        assert "Баланс: 105" in message.answers[0]
+        assert "Проверяем оплату" not in message.answers[0]
 
 
 @pytest.mark.asyncio

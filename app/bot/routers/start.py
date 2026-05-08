@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 from typing import Optional
+from urllib.parse import unquote
 
 from aiogram import Router
 from aiogram.filters import Command, CommandObject
@@ -25,6 +26,41 @@ def build_welcome_text(first_name: Optional[str], lang: str = "en") -> str:
     """Текст приветствия в главном меню."""
     display_name = first_name or t("main.welcome_friend", lang)
     return t("main.welcome", lang, display_name=display_name)
+
+
+async def show_profile_after_payment_return(message: Message, state: FSMContext, session: AsyncSession) -> None:
+    """Show the current profile after returning from an external payment flow."""
+    await state.clear()
+    user_repo = UserRepository(session)
+    user = await user_repo.get_or_create_user_from_telegram(message.from_user)
+    fresh_user = await user_repo.get_user_profile(user.id)
+    profile_user = fresh_user or user
+    lang = get_user_language(profile_user.language_code)
+    total_spent_credits = await user_repo.get_total_spent_credits(profile_user.id)
+    await message.answer(
+        build_profile_text(profile_user, total_spent_credits, lang),
+        reply_markup=get_profile_keyboard(send_results_as_files=profile_user.send_results_as_files, lang=lang),
+        parse_mode="HTML",
+    )
+
+
+async def _show_payment_return_profile(
+    message: Message,
+    state: FSMContext,
+    session: AsyncSession,
+    *,
+    action: str,
+    order=None,
+) -> None:
+    log_payload = {
+        "action": action,
+        "user_id": message.from_user.id,
+    }
+    if order is not None:
+        log_payload["order_id"] = str(order.id)
+        log_payload["order_status"] = order.status
+    logger.info(log_payload)
+    await show_profile_after_payment_return(message, state, session)
 
 
 @router.message(Command("start"))
@@ -54,44 +90,56 @@ async def start_command(
 
         start_payload = (command.args or "").strip() if command is not None else ""
         if start_payload == "payment_success":
-            fresh_user = await user_repo.get_user_profile(user.id)
-            profile_user = fresh_user or user
-            total_spent_credits = await user_repo.get_total_spent_credits(user.id)
-            await message.answer(
-                build_profile_text(profile_user, total_spent_credits, lang),
-                reply_markup=get_profile_keyboard(send_results_as_files=profile_user.send_results_as_files, lang=lang),
-                parse_mode="HTML",
-            )
+            await _show_payment_return_profile(message, state, session, action="payment_success_return_received")
             return
 
         if start_payload.startswith("paid_"):
-            await message.answer(t("payments.checking_payment", lang))
+            payment_payload = unquote(start_payload.removeprefix("paid_"))
+            order = await PaymentService(session).payment_repo.get_payment_order_by_payload(payment_payload)
+            if order is not None and order.provider == PaymentProvider.TELEGRAM_STARS.value and order.user_id == user.id:
+                await _show_payment_return_profile(
+                    message,
+                    state,
+                    session,
+                    action="stars_wallet_paid_return_received",
+                    order=order,
+                )
+                return
+            if order is not None:
+                await _show_payment_return_profile(
+                    message,
+                    state,
+                    session,
+                    action="stars_wallet_paid_return_ignored",
+                    order=order,
+                )
+                return
+            await _show_payment_return_profile(message, state, session, action="stars_wallet_paid_return_unknown")
             return
 
         if start_payload:
             order = await PaymentService(session).payment_repo.get_payment_order_by_payload(start_payload)
             if order is not None and order.provider == PaymentProvider.TELEGRAM_STARS.value and order.user_id == user.id:
-                await message.answer(t("payments.checking_payment", lang))
-                logger.info(
-                    {
-                        "action": "stars_wallet_return_received",
-                        "user_id": user.id,
-                        "order_id": str(order.id),
-                    }
+                await _show_payment_return_profile(
+                    message,
+                    state,
+                    session,
+                    action="stars_wallet_return_received",
+                    order=order,
                 )
                 return
 
             if order is not None:
-                logger.info(
-                    {
-                        "action": "stars_wallet_return_ignored",
-                        "user_id": user.id,
-                        "order_id": str(order.id),
-                    }
+                await _show_payment_return_profile(
+                    message,
+                    state,
+                    session,
+                    action="stars_wallet_return_ignored",
+                    order=order,
                 )
                 return
             if start_payload.startswith("stars_"):
-                await message.answer(t("payments.checking_payment", lang))
+                await _show_payment_return_profile(message, state, session, action="legacy_stars_wallet_return_received")
                 return
         
         await message.answer(

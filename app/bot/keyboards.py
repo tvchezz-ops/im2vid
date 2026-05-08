@@ -4,6 +4,7 @@ from __future__ import annotations
 from typing import Any, Iterable, Sequence
 
 from aiogram.types import InlineKeyboardButton, InlineKeyboardMarkup, KeyboardButton, ReplyKeyboardMarkup
+from aiogram.utils.keyboard import InlineKeyboardBuilder
 
 from app.i18n import get_user_language, t
 from app.services.payments import ALLOWED_STARS_AMOUNTS
@@ -366,7 +367,6 @@ def get_profile_keyboard(*, send_results_as_files: bool, lang: str = "en") -> In
         inline_keyboard=[
             [InlineKeyboardButton(text=get_button_text("profile.top_up", lang), callback_data="profile:top_up_balance")],
             [InlineKeyboardButton(text=get_button_text("profile.toggle_delivery", lang), callback_data="profile:toggle_delivery_mode")],
-            [InlineKeyboardButton(text=get_button_text("common.back", lang), callback_data="back_to_menu")],
         ]
     )
 
@@ -384,24 +384,20 @@ def build_top_up_method_keyboard(lang: str = "en") -> InlineKeyboardMarkup:
 
 def build_stars_top_up_keyboard(lang: str = "en") -> InlineKeyboardMarkup:
     """Клавиатура выбора пакета Telegram Stars."""
-    rows = [
-        [
-            InlineKeyboardButton(
-                text=f"{amount} ⭐",
-                callback_data=validate_callback_length(f"pay:stars:{amount}"),
-            )
-        ]
-        for amount in ALLOWED_STARS_AMOUNTS
-    ]
-    rows.append(
-        [
-            InlineKeyboardButton(
-                text=get_button_text("common.back", lang),
-                callback_data="pay:back:methods",
-            )
-        ]
+    builder = InlineKeyboardBuilder()
+    for amount in ALLOWED_STARS_AMOUNTS:
+        builder.button(
+            text=f"{amount} ⭐",
+            callback_data=validate_callback_length(f"pay:stars:{amount}"),
+        )
+    builder.adjust(2)
+    builder.row(
+        InlineKeyboardButton(
+            text=get_button_text("common.back", lang),
+            callback_data="pay:back:methods",
+        )
     )
-    return InlineKeyboardMarkup(inline_keyboard=rows)
+    return builder.as_markup()
 
 
 def build_stars_wallet_redirect_keyboard(*, wallet_payment_url: str, lang: str = "en") -> InlineKeyboardMarkup:
@@ -425,14 +421,20 @@ def build_wallet_bot_payment_keyboard(*, amount: int, wallet_payment_url: str, l
 
 def build_crypto_top_up_keyboard(lang: str = "en") -> InlineKeyboardMarkup:
     """Клавиатура выбора crypto-пакета кредитов."""
-    rows = [
-        [InlineKeyboardButton(text=f"{amount} credits", callback_data=validate_callback_length(f"pay:crypto:{amount}"))]
-        for amount in ALLOWED_STARS_AMOUNTS
-    ]
-    rows.append(
-        [InlineKeyboardButton(text=get_button_text("common.back", lang), callback_data="pay:back:methods")]
+    builder = InlineKeyboardBuilder()
+    for amount in ALLOWED_STARS_AMOUNTS:
+        builder.button(
+            text=f"{amount} credits",
+            callback_data=validate_callback_length(f"pay:crypto:{amount}"),
+        )
+    builder.adjust(2)
+    builder.row(
+        InlineKeyboardButton(
+            text=get_button_text("common.back", lang),
+            callback_data="pay:back:methods",
+        )
     )
-    return InlineKeyboardMarkup(inline_keyboard=rows)
+    return builder.as_markup()
 
 
 def build_crypto_payment_keyboard(*, payment_url: str | None, lang: str = "en") -> InlineKeyboardMarkup:
