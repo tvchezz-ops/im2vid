@@ -20,7 +20,7 @@ from app.bot.routers import generations, profile, start
 from app.bot.keyboards import build_main_menu_keyboard, get_button_text
 from app.bot.states import GenerationStates
 from app.db.base import Base
-from app.db.models import User
+from app.db.models import PaymentOrderStatus, User
 from app.services.payments import PaymentService
 
 
@@ -198,7 +198,7 @@ async def test_start_paid_payload_checks_payment_without_crediting_pending_order
         state = FakeState()
         message = FakeMessage(user_id=711, text=f"/start paid_{order.payload}")
 
-        await start.start_command(message, state, session, command=SimpleNamespace(args=f"paid_{order.payload}"))
+        await start.start_payment_return_command(message, state, session, command=SimpleNamespace(args=f"paid_{order.payload}"))
 
         result = await session.execute(select(User.balance).where(User.id == 711))
         assert result.scalar_one() == 5
@@ -206,6 +206,7 @@ async def test_start_paid_payload_checks_payment_without_crediting_pending_order
         assert message.answers[0].startswith("👤 <b>Профиль</b>")
         assert "Баланс: 5" in message.answers[0]
         assert "Проверяем оплату" not in message.answers[0]
+        _assert_main_menu_keyboard(message.answer_markups[0])
 
 
 @pytest.mark.asyncio
@@ -217,7 +218,7 @@ async def test_start_direct_stars_payload_checks_payment_without_crediting(sessi
         state = FakeState()
         message = FakeMessage(user_id=717, text=f"/start {order.payload}")
 
-        await start.start_command(message, state, session, command=SimpleNamespace(args=order.payload))
+        await start.start_payment_return_command(message, state, session, command=SimpleNamespace(args=order.payload))
 
         result = await session.execute(select(User.balance).where(User.id == 717))
         assert result.scalar_one() == 8
@@ -225,6 +226,28 @@ async def test_start_direct_stars_payload_checks_payment_without_crediting(sessi
         assert message.answers[0].startswith("👤 <b>Профиль</b>")
         assert "Баланс: 8" in message.answers[0]
         assert "Проверяем оплату" not in message.answers[0]
+        _assert_main_menu_keyboard(message.answer_markups[0])
+
+
+@pytest.mark.asyncio
+async def test_start_stars_prefixed_payload_shows_profile(session_factory) -> None:
+    async with session_factory() as session:
+        session.add(User(id=719, balance=9))
+        await session.commit()
+        order = await PaymentService(session).create_stars_order(user_id=719, stars_amount=300)
+        state = FakeState({"payment_screen": "stars_redirect"})
+        message = FakeMessage(user_id=719, text=f"/start stars_{order.payload}")
+
+        await start.start_payment_return_command(message, state, session, command=SimpleNamespace(args=f"stars_{order.payload}"))
+
+        result = await session.execute(select(User.balance).where(User.id == 719))
+        assert result.scalar_one() == 9
+        assert state.state is None
+        assert state.data == {}
+        assert len(message.answers) == 1
+        assert message.answers[0].startswith("👤 <b>Профиль</b>")
+        assert "Баланс: 9" in message.answers[0]
+        _assert_main_menu_keyboard(message.answer_markups[0])
 
 
 @pytest.mark.asyncio
@@ -238,7 +261,7 @@ async def test_start_paid_payload_decodes_wallet_return_payload(session_factory)
         state = FakeState()
         message = FakeMessage(user_id=718, text="/start paid_stars%3Alegacy%3Atoken")
 
-        await start.start_command(message, state, session, command=SimpleNamespace(args="paid_stars%3Alegacy%3Atoken"))
+        await start.start_payment_return_command(message, state, session, command=SimpleNamespace(args="paid_stars%3Alegacy%3Atoken"))
 
         result = await session.execute(select(User.balance).where(User.id == 718))
         assert result.scalar_one() == 12
@@ -256,14 +279,14 @@ async def test_start_paid_payload_does_not_trust_unknown_payload(session_factory
         state = FakeState()
         message = FakeMessage(user_id=714, text="/start paid_not-a-real-payment")
 
-        await start.start_command(message, state, session, command=SimpleNamespace(args="paid_not-a-real-payment"))
+        await start.start_payment_return_command(message, state, session, command=SimpleNamespace(args="paid_not-a-real-payment"))
 
         result = await session.execute(select(User.balance).where(User.id == 714))
         assert result.scalar_one() == 33
         assert len(message.answers) == 1
-        assert message.answers[0].startswith("👤 <b>Профиль</b>")
-        assert "Баланс: 33" in message.answers[0]
+        assert "Привет" in message.answers[0]
         assert "Проверяем оплату" not in message.answers[0]
+        _assert_main_menu_keyboard(message.answer_markups[0])
 
 
 @pytest.mark.asyncio
@@ -277,16 +300,16 @@ async def test_start_paid_payload_does_not_confirm_another_users_paid_order(sess
         state = FakeState()
         message = FakeMessage(user_id=716, text=f"/start paid_{order.payload}")
 
-        await start.start_command(message, state, session, command=SimpleNamespace(args=f"paid_{order.payload}"))
+        await start.start_payment_return_command(message, state, session, command=SimpleNamespace(args=f"paid_{order.payload}"))
 
         owner_balance = (await session.execute(select(User.balance).where(User.id == 715))).scalar_one()
         requester_balance = (await session.execute(select(User.balance).where(User.id == 716))).scalar_one()
         assert owner_balance == 105
         assert requester_balance == 20
         assert len(message.answers) == 1
-        assert message.answers[0].startswith("👤 <b>Профиль</b>")
-        assert "Баланс: 20" in message.answers[0]
+        assert "Привет" in message.answers[0]
         assert "Проверяем оплату" not in message.answers[0]
+        _assert_main_menu_keyboard(message.answer_markups[0])
 
 
 @pytest.mark.asyncio
@@ -300,7 +323,7 @@ async def test_start_paid_payload_reports_confirmed_external_payment(session_fac
         state = FakeState()
         message = FakeMessage(user_id=712, text=f"/start paid_{order.payload}")
 
-        await start.start_command(message, state, session, command=SimpleNamespace(args=f"paid_{order.payload}"))
+        await start.start_payment_return_command(message, state, session, command=SimpleNamespace(args=f"paid_{order.payload}"))
 
         result = await session.execute(select(User.balance).where(User.id == 712))
         assert result.scalar_one() == 105
@@ -308,6 +331,53 @@ async def test_start_paid_payload_reports_confirmed_external_payment(session_fac
         assert message.answers[0].startswith("👤 <b>Профиль</b>")
         assert "Баланс: 105" in message.answers[0]
         assert "Проверяем оплату" not in message.answers[0]
+        _assert_main_menu_keyboard(message.answer_markups[0])
+
+
+@pytest.mark.asyncio
+async def test_start_paid_payload_logs_profile_shown(session_factory, caplog) -> None:
+    async with session_factory() as session:
+        session.add(User(id=720, balance=5))
+        await session.commit()
+        service = PaymentService(session)
+        order = await service.create_stars_order(user_id=720, stars_amount=100)
+        await service.mark_external_stars_payment_paid(order.payload, "wallet-payment-720")
+        state = FakeState()
+        message = FakeMessage(user_id=720, text=f"/start paid_{order.payload}")
+
+        with caplog.at_level(logging.INFO):
+            await start.start_payment_return_command(message, state, session, command=SimpleNamespace(args=f"paid_{order.payload}"))
+
+        assert any(
+            isinstance(record.msg, dict)
+            and record.msg.get("action") == "stars_wallet_return_profile_shown"
+            and record.msg.get("user_id") == 720
+            and record.msg.get("order_id") == str(order.id)
+            and record.msg.get("order_status") == PaymentOrderStatus.PAID.value
+            for record in caplog.records
+        )
+
+
+@pytest.mark.asyncio
+async def test_start_payment_return_does_not_credit_user_again(session_factory, monkeypatch) -> None:
+    async with session_factory() as session:
+        session.add(User(id=721, balance=10))
+        await session.commit()
+        service = PaymentService(session)
+        order = await service.create_stars_order(user_id=721, stars_amount=100)
+        await service.mark_external_stars_payment_paid(order.payload, "wallet-payment-721")
+
+        async def forbidden_credit_user_for_paid_order(*args, **kwargs):
+            raise AssertionError("/start payment return must not credit users")
+
+        monkeypatch.setattr(PaymentService, "credit_user_for_paid_order", forbidden_credit_user_for_paid_order)
+        state = FakeState()
+        message = FakeMessage(user_id=721, text=f"/start paid_{order.payload}")
+
+        await start.start_payment_return_command(message, state, session, command=SimpleNamespace(args=f"paid_{order.payload}"))
+
+        result = await session.execute(select(User.balance).where(User.id == 721))
+        assert result.scalar_one() == 110
 
 
 @pytest.mark.asyncio
@@ -318,13 +388,20 @@ async def test_start_payment_success_shows_refreshed_profile_without_crediting(s
         state = FakeState()
         message = FakeMessage(user_id=713, text="/start payment_success")
 
-        await start.start_command(message, state, session, command=SimpleNamespace(args="payment_success"))
+        await start.start_payment_return_command(message, state, session, command=SimpleNamespace(args="payment_success"))
 
         result = await session.execute(select(User.balance).where(User.id == 713))
         assert result.scalar_one() == 205
         assert len(message.answers) == 1
         assert message.answers[0].startswith("👤 <b>Профиль</b>")
         assert "Баланс: 205" in message.answers[0]
+
+
+def test_payment_return_handler_registered_before_ordinary_start_handler() -> None:
+    message_handlers = start.router.observers["message"].handlers
+    callback_names = [handler.callback.__name__ for handler in message_handlers]
+
+    assert callback_names.index("start_payment_return_command") < callback_names.index("start_command")
 
 
 @pytest.mark.asyncio

@@ -230,6 +230,7 @@ class GenerationRepository:
         model_endpoint: str,
         prompt: str,
         settings: dict[str, Any] | None = None,
+        chat_id: Optional[int] = None,
         input_image_file_ids: Optional[list[str]] = None,
         input_image_urls: Optional[list[str]] = None,
         aspect_ratio: Optional[str] = None,
@@ -243,6 +244,7 @@ class GenerationRepository:
         """Создать запрос на генерацию."""
         generation = GenerationRequest(
             user_id=user_id,
+            chat_id=chat_id,
             model_key=model_key,
             model_endpoint=model_endpoint,
             prompt=prompt,
@@ -287,6 +289,22 @@ class GenerationRepository:
         )
         return result.scalars().first()
 
+    async def count_active_generations(self, user_id: int) -> int:
+        """Посчитать активные generation_request пользователя."""
+        result = await self.session.execute(
+            select(func.count(GenerationRequest.id)).where(
+                GenerationRequest.user_id == user_id,
+                GenerationRequest.status.in_(
+                    (
+                        GenerationRequestStatus.CREATED,
+                        GenerationRequestStatus.PROCESSING,
+                        GenerationRequestStatus.PENDING,
+                    )
+                ),
+            )
+        )
+        return int(result.scalar_one() or 0)
+
     async def update_generation_status(
         self,
         generation_id: Any,
@@ -295,6 +313,7 @@ class GenerationRepository:
         nsfw_flags: Optional[dict[str, Any]] = None,
         error_message: Optional[str] = None,
         wavespeed_prediction_id: Optional[str] = None,
+        output_urls: Optional[list[str]] = None,
     ) -> Optional[GenerationRequest]:
         """Обновить статус генерации."""
         generation = await self.get_by_id(generation_id)
@@ -302,7 +321,8 @@ class GenerationRepository:
             generation.status = GenerationRequestStatus(status)
             generation.input_image_file_ids = []
             generation.input_image_urls = []
-            generation.output_urls = []
+            if output_urls is not None:
+                generation.output_urls = output_urls
             if nsfw_flags is not None:
                 generation.nsfw_flags = nsfw_flags
             if error_message is not None:
@@ -315,6 +335,21 @@ class GenerationRepository:
             await self.session.refresh(generation)
             logger.debug(f"Generation {generation_id} status updated to {status}")
         return generation
+
+    async def list_recoverable_generations(self) -> list[GenerationRequest]:
+        """Найти активные generation_request, для которых можно восстановить polling после рестарта."""
+        result = await self.session.execute(
+            select(GenerationRequest).where(
+                GenerationRequest.status.in_(
+                    (
+                        GenerationRequestStatus.CREATED,
+                        GenerationRequestStatus.PROCESSING,
+                    )
+                ),
+                GenerationRequest.wavespeed_prediction_id.is_not(None),
+            )
+        )
+        return list(result.scalars().all())
 
     async def update_status(
         self,

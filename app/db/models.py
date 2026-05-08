@@ -16,8 +16,10 @@ class GenerationRequestStatus(str, enum.Enum):
     """Статусы запроса генерации."""
 
     CREATED = "created"
+    PENDING = "pending"
     PROCESSING = "processing"
     COMPLETED = "completed"
+    DELIVERY_FAILED = "delivery_failed"
     CANCELLED = "cancelled"
     TIMEOUT = "timeout"
     FAILED = "failed"
@@ -73,6 +75,7 @@ class GenerationRequest(BaseModel):
     
     id: Mapped[uuid.UUID] = mapped_column(Uuid, primary_key=True, default=uuid.uuid4)
     user_id: Mapped[int] = mapped_column(ForeignKey("users.id"), index=True)
+    chat_id: Mapped[Optional[int]] = mapped_column(BigInteger, nullable=True, index=True)
     model_key: Mapped[str] = mapped_column(String(100), index=True)
     model_endpoint: Mapped[str] = mapped_column(String(255))
     prompt: Mapped[str] = mapped_column(Text)

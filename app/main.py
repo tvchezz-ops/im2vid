@@ -28,6 +28,7 @@ from app.services.telegram_files import (
 )
 from app.services.download_links import DownloadLinkService
 from app.utils import logger
+from app.bot.routers.generations import recover_background_generations
 
 
 class TelegramBot:
@@ -134,6 +135,9 @@ class TelegramBot:
             
             # Подключение обработчиков
             await self.setup_handlers()
+
+            recovered_generations = await recover_background_generations(self.bot)
+            logger.info({"action": "background_generation_recovery_completed", "recovered_count": recovered_generations})
             
             # Запуск polling
             logger.info("Bot is running...")

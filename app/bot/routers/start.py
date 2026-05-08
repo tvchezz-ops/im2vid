@@ -10,10 +10,10 @@ from aiogram.fsm.context import FSMContext
 from aiogram.types import Message
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.bot.keyboards import get_button_text, get_main_menu_keyboard, get_profile_keyboard, is_localized_button_text
+from app.bot.keyboards import get_main_menu_keyboard, is_localized_button_text
 from app.bot.routers.generations import is_generation_flow_state, reset_generation_flow
 from app.bot.routers.profile import build_profile_text
-from app.db import PaymentProvider, UserRepository
+from app.db import PaymentOrderStatus, PaymentProvider, UserRepository
 from app.i18n import get_user_language, t
 from app.services.payments import PaymentService
 from app.utils import logger
@@ -39,7 +39,7 @@ async def show_profile_after_payment_return(message: Message, state: FSMContext,
     total_spent_credits = await user_repo.get_total_spent_credits(profile_user.id)
     await message.answer(
         build_profile_text(profile_user, total_spent_credits, lang),
-        reply_markup=get_profile_keyboard(send_results_as_files=profile_user.send_results_as_files, lang=lang),
+        reply_markup=get_main_menu_keyboard(lang),
         parse_mode="HTML",
     )
 
@@ -61,6 +61,120 @@ async def _show_payment_return_profile(
         log_payload["order_status"] = order.status
     logger.info(log_payload)
     await show_profile_after_payment_return(message, state, session)
+
+
+def _extract_start_payload_from_text(text: str | None) -> str:
+    if not text:
+        return ""
+    parts = text.strip().split(maxsplit=1)
+    if len(parts) < 2 or parts[0].split("@", 1)[0] != "/start":
+        return ""
+    return parts[1].strip()
+
+
+def _get_start_payload(command: CommandObject | None, message: Message) -> str:
+    if command is not None and command.args:
+        return command.args.strip()
+    return _extract_start_payload_from_text(message.text)
+
+
+def _has_start_payload(message: Message) -> bool:
+    return bool(_extract_start_payload_from_text(message.text))
+
+
+def _payment_payload_candidates(start_payload: str) -> list[str]:
+    raw_payload = start_payload.strip()
+    candidates: list[str] = []
+    if raw_payload.startswith("paid_"):
+        candidates.append(unquote(raw_payload.removeprefix("paid_")))
+    if raw_payload.startswith("stars_"):
+        candidates.append(unquote(raw_payload.removeprefix("stars_")))
+    candidates.append(unquote(raw_payload))
+
+    unique_candidates: list[str] = []
+    for candidate in candidates:
+        if candidate and candidate not in unique_candidates:
+            unique_candidates.append(candidate)
+    return unique_candidates
+
+
+async def _get_stars_wallet_return_order(session: AsyncSession, user_id: int, start_payload: str):
+    payment_repo = PaymentService(session).payment_repo
+    for payment_payload in _payment_payload_candidates(start_payload):
+        order = await payment_repo.get_payment_order_by_payload(payment_payload)
+        if (
+            order is not None
+            and order.provider == PaymentProvider.TELEGRAM_STARS.value
+            and order.user_id == user_id
+        ):
+            return order
+    return None
+
+
+async def _clear_start_state_without_user_notice(message: Message, state: FSMContext, reason: str) -> None:
+    current_state = await state.get_state()
+    if is_generation_flow_state(current_state):
+        await state.update_data(last_user_id=message.from_user.id)
+        await reset_generation_flow(state, reason=reason)
+    elif current_state is not None:
+        await state.clear()
+
+
+async def _send_start_welcome(message: Message, user, lang: str) -> None:
+    await message.answer(
+        build_welcome_text(user.first_name, lang),
+        reply_markup=get_main_menu_keyboard(lang),
+    )
+    logger.info(f"User {message.from_user.id} started the bot")
+
+
+@router.message(Command("start"), _has_start_payload)
+async def start_payment_return_command(
+    message: Message,
+    state: FSMContext,
+    session: AsyncSession,
+    command: CommandObject | None = None,
+):
+    """Priority /start handler for external payment return payloads."""
+    try:
+        await _clear_start_state_without_user_notice(message, state, reason="payment_return_start")
+
+        user_repo = UserRepository(session)
+        user = await user_repo.get_or_create_user_from_telegram(message.from_user)
+        lang = get_user_language(user.language_code)
+
+        start_payload = _get_start_payload(command, message)
+        if start_payload == "payment_success":
+            await _show_payment_return_profile(message, state, session, action="payment_success_return_received")
+            return
+
+        order = await _get_stars_wallet_return_order(session, user.id, start_payload)
+        if order is None:
+            await _send_start_welcome(message, user, lang)
+            return
+
+        await show_profile_after_payment_return(message, state, session)
+        logger.info(
+            {
+                "action": "stars_wallet_return_profile_shown",
+                "user_id": user.id,
+                "order_id": str(order.id),
+                "order_status": order.status,
+            }
+        )
+        if order.status != PaymentOrderStatus.PAID.value:
+            logger.info(
+                {
+                    "action": "stars_wallet_return_pending",
+                    "user_id": user.id,
+                    "order_id": str(order.id),
+                    "order_status": order.status,
+                }
+            )
+    except Exception as e:
+        logger.exception("Error in payment return start command: %s", e)
+        lang = get_user_language(getattr(message.from_user, "language_code", None))
+        await message.answer(t("main.start_error", lang))
 
 
 @router.message(Command("start"))
@@ -87,67 +201,7 @@ async def start_command(
         user_repo = UserRepository(session)
         user = await user_repo.get_or_create_user_from_telegram(message.from_user)
         lang = get_user_language(user.language_code)
-
-        start_payload = (command.args or "").strip() if command is not None else ""
-        if start_payload == "payment_success":
-            await _show_payment_return_profile(message, state, session, action="payment_success_return_received")
-            return
-
-        if start_payload.startswith("paid_"):
-            payment_payload = unquote(start_payload.removeprefix("paid_"))
-            order = await PaymentService(session).payment_repo.get_payment_order_by_payload(payment_payload)
-            if order is not None and order.provider == PaymentProvider.TELEGRAM_STARS.value and order.user_id == user.id:
-                await _show_payment_return_profile(
-                    message,
-                    state,
-                    session,
-                    action="stars_wallet_paid_return_received",
-                    order=order,
-                )
-                return
-            if order is not None:
-                await _show_payment_return_profile(
-                    message,
-                    state,
-                    session,
-                    action="stars_wallet_paid_return_ignored",
-                    order=order,
-                )
-                return
-            await _show_payment_return_profile(message, state, session, action="stars_wallet_paid_return_unknown")
-            return
-
-        if start_payload:
-            order = await PaymentService(session).payment_repo.get_payment_order_by_payload(start_payload)
-            if order is not None and order.provider == PaymentProvider.TELEGRAM_STARS.value and order.user_id == user.id:
-                await _show_payment_return_profile(
-                    message,
-                    state,
-                    session,
-                    action="stars_wallet_return_received",
-                    order=order,
-                )
-                return
-
-            if order is not None:
-                await _show_payment_return_profile(
-                    message,
-                    state,
-                    session,
-                    action="stars_wallet_return_ignored",
-                    order=order,
-                )
-                return
-            if start_payload.startswith("stars_"):
-                await _show_payment_return_profile(message, state, session, action="legacy_stars_wallet_return_received")
-                return
-        
-        await message.answer(
-            build_welcome_text(user.first_name, lang),
-            reply_markup=get_main_menu_keyboard(lang),
-        )
-        
-        logger.info(f"User {message.from_user.id} started the bot")
+        await _send_start_welcome(message, user, lang)
     except Exception as e:
         logger.exception("Error in start command: %s", e)
         lang = get_user_language(getattr(message.from_user, "language_code", None))

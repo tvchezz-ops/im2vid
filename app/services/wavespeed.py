@@ -152,6 +152,8 @@ class WavespeedService:
     TERMINAL_STATUSES = {"completed", "failed"}
     MAX_RESULT_RETRIES = 3
     BASE_BACKOFF_SECONDS = 1
+    COMPLETED_EMPTY_OUTPUT_RETRIES = 2
+    COMPLETED_EMPTY_OUTPUT_RETRY_SECONDS = 10
 
     def __init__(self):
         """Инициализация."""
@@ -346,13 +348,15 @@ class WavespeedService:
         self,
         prediction_id: str,
         cancel_event: Optional[asyncio.Event] = None,
-        timeout_seconds: int = 600,
-        interval: int = 60,
+        timeout_seconds: Optional[int] = None,
+        interval: Optional[int] = None,
+        generation_id: Optional[Any] = None,
     ) -> WavespeedResult:
-        """Опросить Wavespeed до terminal status, отмены или таймаута с интервалом 60 секунд для снижения нагрузки."""
-        logger.info("Polling Wavespeed every %s seconds", interval)
-        started = asyncio.get_running_loop().time()
-        while asyncio.get_running_loop().time() - started < timeout_seconds:
+        """Опросить Wavespeed до terminal status, отмены или таймаута с adaptive interval."""
+        timeout_limit = timeout_seconds or settings.wavespeed_poll_timeout_seconds
+        started = self._now()
+        completed_empty_outputs_seen = 0
+        while self._now() - started < timeout_limit:
             if cancel_event is not None and cancel_event.is_set():
                 raise WavespeedCancelledError(
                     "Генерация отменена.",
@@ -375,12 +379,42 @@ class WavespeedService:
                     log_message="Wavespeed polling cancelled after result request",
                 )
 
+            elapsed_seconds = int(self._now() - started)
+            interval_seconds = self.get_poll_interval_seconds(elapsed_seconds, interval)
             if result.status == "completed":
                 if not result.outputs:
-                    await asyncio.sleep(interval)
+                    completed_empty_outputs_seen += 1
+                    retry_interval = self.COMPLETED_EMPTY_OUTPUT_RETRY_SECONDS
+                    self._log_poll_tick(
+                        generation_id=generation_id,
+                        prediction_id=prediction_id,
+                        elapsed_seconds=elapsed_seconds,
+                        interval_seconds=retry_interval,
+                        status=result.status,
+                        outputs_count=len(result.outputs),
+                    )
+                    if completed_empty_outputs_seen > self.COMPLETED_EMPTY_OUTPUT_RETRIES:
+                        return result
+                    await asyncio.sleep(retry_interval)
                     continue
+                self._log_poll_tick(
+                    generation_id=generation_id,
+                    prediction_id=prediction_id,
+                    elapsed_seconds=elapsed_seconds,
+                    interval_seconds=interval_seconds,
+                    status=result.status,
+                    outputs_count=len(result.outputs),
+                )
                 return result
             if result.status == "failed":
+                self._log_poll_tick(
+                    generation_id=generation_id,
+                    prediction_id=prediction_id,
+                    elapsed_seconds=elapsed_seconds,
+                    interval_seconds=interval_seconds,
+                    status=result.status,
+                    outputs_count=len(result.outputs),
+                )
                 error = WavespeedFailedError(
                     result.error or "Генерация завершилась с ошибкой. Попробуйте позже.",
                     log_message="Wavespeed returned failed status",
@@ -388,7 +422,15 @@ class WavespeedService:
                 error.result = result
                 raise error
 
-            await asyncio.sleep(interval)
+            self._log_poll_tick(
+                generation_id=generation_id,
+                prediction_id=prediction_id,
+                elapsed_seconds=elapsed_seconds,
+                interval_seconds=interval_seconds,
+                status=result.status,
+                outputs_count=len(result.outputs),
+            )
+            await asyncio.sleep(interval_seconds)
 
             if cancel_event is not None and cancel_event.is_set():
                 raise WavespeedCancelledError(
@@ -399,6 +441,42 @@ class WavespeedService:
         raise WavespeedTimeoutError(
             "Генерация заняла слишком много времени. Кредит возвращён.",
             log_message="Wavespeed polling timed out",
+        )
+
+    @staticmethod
+    def _now() -> float:
+        return asyncio.get_running_loop().time()
+
+    @staticmethod
+    def get_poll_interval_seconds(elapsed_seconds: int, fixed_interval: Optional[int] = None) -> int:
+        if fixed_interval is not None:
+            return fixed_interval
+        if elapsed_seconds < 5 * 60:
+            return settings.wavespeed_poll_fast_seconds
+        if elapsed_seconds < 15 * 60:
+            return settings.wavespeed_poll_normal_seconds
+        return settings.wavespeed_poll_slow_seconds
+
+    @staticmethod
+    def _log_poll_tick(
+        *,
+        generation_id: Optional[Any],
+        prediction_id: str,
+        elapsed_seconds: int,
+        interval_seconds: int,
+        status: str,
+        outputs_count: int,
+    ) -> None:
+        logger.info(
+            {
+                "action": "wavespeed_poll_tick",
+                "generation_id": str(generation_id) if generation_id is not None else None,
+                "prediction_id": prediction_id,
+                "elapsed_seconds": elapsed_seconds,
+                "interval_seconds": interval_seconds,
+                "status": status,
+                "outputs_count": outputs_count,
+            }
         )
 
     @staticmethod

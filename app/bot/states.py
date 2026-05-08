@@ -22,7 +22,6 @@ class GenerationStates(StatesGroup):
     waiting_for_video = State()
     waiting_for_prompt = State()
     waiting_for_confirmation = State()
-    generating = State()
 
 
 class ShopStates(StatesGroup):

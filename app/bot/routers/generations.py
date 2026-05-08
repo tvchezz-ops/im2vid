@@ -37,7 +37,7 @@ from app.bot.keyboards import (
 )
 from app.bot.states import GenerationStates
 from app.config import settings
-from app.db import GenerationRepository, UserRepository
+from app.db import GenerationRepository, GenerationRequestStatus, UserRepository
 from app.db.session import db_manager
 from app.i18n import get_user_language, t
 from app.services.generation_service import (
@@ -89,8 +89,7 @@ def get_state_language(state_data: dict[str, Any], actor: Any | None = None, use
         return get_user_language(str(state_data.get("user_language")))
     return get_actor_language(actor)
 
-ACTIVE_GENERATIONS: Dict[int, Dict[str, Any]] = {}
-POLL_TIMEOUT_SECONDS = 600
+BACKGROUND_GENERATIONS: Dict[Any, Dict[str, Any]] = {}
 GENERATION_COST = 1
 DOCUMENT_SEND_REQUEST_TIMEOUT_SECONDS = 3600
 DOCUMENT_SEND_RETRY_COUNT = 3
@@ -107,7 +106,6 @@ GENERATION_FLOW_STATE_NAMES = {
     GenerationStates.waiting_for_video.state,
     GenerationStates.waiting_for_prompt.state,
     GenerationStates.waiting_for_confirmation.state,
-    GenerationStates.generating.state,
 }
 
 MODEL_PREFIX = "gen:model:"
@@ -139,6 +137,24 @@ class ErrorCode:
     E012_MEDIA_UPLOAD_FAILED = "E012"
 
 
+async def count_active_generations_for_user(user_id: int, session: Optional[AsyncSession] = None) -> int:
+    if session is not None:
+        return await GenerationRepository(session).count_active_generations(user_id)
+    async with db_manager.session_factory() as new_session:
+        return await GenerationRepository(new_session).count_active_generations(user_id)
+
+
+def log_parallel_generation_event(action: str, user_id: int, count: int, limit: int) -> None:
+    logger.info(
+        {
+            "action": action,
+            "user_id": user_id,
+            "active_count": count,
+            "limit": limit,
+        }
+    )
+
+
 def format_user_error(code: str, message: str, lang: str = "en") -> str:
     return t("errors.formatted", lang, code=code, message=message)
 
@@ -153,10 +169,33 @@ class FlowTexts:
     invalid_specific_media: str = ""
 
 
-@dataclass(frozen=True)
+@dataclass(frozen=True, init=False)
 class OutputDeliveryResult:
-    delivered_successfully: bool
-    use_r2: bool = False
+    success: bool
+    method: str
+    error_code: Optional[str]
+    error_message: Optional[str]
+    use_r2: bool
+
+    def __init__(
+        self,
+        success: Optional[bool] = None,
+        method: str = "document",
+        error_code: Optional[str] = None,
+        error_message: Optional[str] = None,
+        use_r2: bool = False,
+        delivered_successfully: Optional[bool] = None,
+    ):
+        resolved_success = delivered_successfully if success is None else success
+        object.__setattr__(self, "success", bool(resolved_success))
+        object.__setattr__(self, "method", method)
+        object.__setattr__(self, "error_code", error_code)
+        object.__setattr__(self, "error_message", error_message)
+        object.__setattr__(self, "use_r2", use_r2)
+
+    @property
+    def delivered_successfully(self) -> bool:
+        return self.success
 
 
 GENERATION_TYPE_LABELS = {
@@ -293,6 +332,24 @@ def build_confirmation_text(
 
 def build_partial_generation_failed_message(lang: str = "en") -> str:
     return t("errors.formatted", lang, code=ErrorCode.E007_WAVESPEED_FAILED, message=t("errors.partial_generation_failed", lang))
+
+
+def build_generated_but_delivery_failed_message(lang: str = "en") -> str:
+    if lang == "ru":
+        return "❌ Ошибка E010: результат был сгенерирован, но бот не смог его доставить. Кредит возвращён."
+    return "❌ Error E010: the result was generated, but the bot could not deliver it. The credit was refunded."
+
+
+def build_telegram_delivery_failed_refund_message(lang: str = "en") -> str:
+    if lang == "ru":
+        return "❌ Ошибка E009: файл готов, но Telegram не смог его доставить. Кредит возвращён."
+    return "❌ Error E009: the file is ready, but Telegram could not deliver it. The credit was refunded."
+
+
+def build_empty_outputs_failed_message(lang: str = "en") -> str:
+    if lang == "ru":
+        return "❌ Ошибка E010: провайдер завершил генерацию, но не вернул файл результата. Кредит возвращён."
+    return "❌ Error E010: the provider completed the generation, but returned no result file. The credit was refunded."
 
 
 def get_user_friendly_error_message(error: Exception, result: Optional[WavespeedResult] = None, lang: str = "en") -> str:
@@ -1045,16 +1102,25 @@ async def mark_generation_failed(
     async with db_manager.session_factory() as session:
         generation_repo = GenerationRepository(session)
         user_repo = UserRepository(session)
+        generation = await generation_repo.get_by_id(generation_request_id)
+        previous_status = generation.status if generation is not None else None
         await generation_repo.update_generation_status(
             generation_request_id,
             status,
             error_message=error_message,
         )
-        if refund_credit:
+        was_active = previous_status in {
+            GenerationRequestStatus.CREATED,
+            GenerationRequestStatus.PENDING,
+            GenerationRequestStatus.PROCESSING,
+        }
+        should_refund = refund_credit and was_active
+        if should_refund:
             refunded = await user_repo.increase_balance(user_id, cost)
             if refunded:
                 log_balance_event("balance_refunded", user_id, cost)
-        await user_repo.increment_user_generation_stats(user_id, success=False)
+        if was_active:
+            await user_repo.increment_user_generation_stats(user_id, success=False)
     await log_generation_event(generation_request_id, user_id, model_key, status)
 
 
@@ -1065,6 +1131,7 @@ async def mark_generation_completed(
     model_key: str,
     nsfw_flags: Optional[dict[str, Any]],
     output_count: int,
+    output_urls: Optional[list[str]] = None,
 ) -> None:
     """Обновить статус генерации как completed без сохранения output URLs."""
     async with db_manager.session_factory() as session:
@@ -1074,6 +1141,7 @@ async def mark_generation_completed(
             generation_request_id,
             "completed",
             nsfw_flags=nsfw_flags,
+            output_urls=output_urls,
         )
         await user_repo.increment_user_generation_stats(user_id, success=True)
     await log_generation_event(generation_request_id, user_id, model_key, "completed", output_count)
@@ -1200,10 +1268,16 @@ async def send_generation_outputs(
     output_urls: list[str],
     user_id: Optional[int] = None,
     delivery_preference: Optional[bool] = None,
+    generation_id: Any = None,
+    model_key: Optional[str] = None,
+    prediction_id: Optional[str] = None,
 ) -> OutputDeliveryResult:
     """Отправить пользователю результаты генерации с учётом пользовательского способа доставки."""
     delivered_successfully = True
     use_r2 = False
+    last_delivery_method = "document"
+    last_error_code: Optional[str] = None
+    last_error_message: Optional[str] = None
     r2_storage = R2StorageService()
     send_results_as_files = delivery_preference if delivery_preference is not None else False
     if delivery_preference is None and user_id is not None:
@@ -1215,11 +1289,47 @@ async def send_generation_outputs(
         content_type: Optional[str] = None
         file_size_bytes: Optional[int] = None
         try:
+            if generation_id is not None and user_id is not None and model_key and prediction_id:
+                log_background_generation_event(
+                    "output_download_started",
+                    generation_id=generation_id,
+                    user_id=user_id,
+                    chat_id=chat_id,
+                    model_key=model_key,
+                    prediction_id=prediction_id,
+                    outputs_count=len(output_urls),
+                )
             temp_output_path, content_type, file_size_bytes = await download_output_file_to_temp(output_url)
+            if generation_id is not None and user_id is not None and model_key and prediction_id:
+                log_background_generation_event(
+                    "output_download_completed",
+                    generation_id=generation_id,
+                    user_id=user_id,
+                    chat_id=chat_id,
+                    model_key=model_key,
+                    prediction_id=prediction_id,
+                    outputs_count=len(output_urls),
+                    file_size_bytes=file_size_bytes,
+                    content_type=content_type,
+                )
             if file_size_bytes is not None and file_size_bytes > get_safe_telegram_document_size_bytes():
                 use_r2 = True
+                last_delivery_method = "r2"
                 if r2_storage.is_configured():
                     try:
+                        if generation_id is not None and user_id is not None and model_key and prediction_id:
+                            log_background_generation_event(
+                                "output_delivery_started",
+                                generation_id=generation_id,
+                                user_id=user_id,
+                                chat_id=chat_id,
+                                model_key=model_key,
+                                prediction_id=prediction_id,
+                                outputs_count=len(output_urls),
+                                delivery_method="r2",
+                                file_size_bytes=file_size_bytes,
+                                content_type=content_type,
+                            )
                         short_url = await upload_output_to_r2_and_get_short_url(
                             r2_storage=r2_storage,
                             file_path=temp_output_path,
@@ -1228,6 +1338,8 @@ async def send_generation_outputs(
                         )
                     except Exception:
                         delivered_successfully = False
+                        last_error_code = ErrorCode.E009_TELEGRAM_DELIVERY_FAILED
+                        last_error_message = "R2 upload failed"
                         log_generation_output_delivery(
                             "r2",
                             user_id=user_id,
@@ -1241,6 +1353,20 @@ async def send_generation_outputs(
                             chat_id,
                             t("download.upload_failed", lang),
                         )
+                        if generation_id is not None and user_id is not None and model_key and prediction_id:
+                            log_background_generation_event(
+                                "output_delivery_failed",
+                                generation_id=generation_id,
+                                user_id=user_id,
+                                chat_id=chat_id,
+                                model_key=model_key,
+                                prediction_id=prediction_id,
+                                outputs_count=len(output_urls),
+                                delivery_method="r2",
+                                file_size_bytes=file_size_bytes,
+                                content_type=content_type,
+                                error_code=last_error_code,
+                            )
                         continue
                     await safe_send_bot_message(
                         bot,
@@ -1256,8 +1382,23 @@ async def send_generation_outputs(
                         file_size_bytes=file_size_bytes,
                         status="success",
                     )
+                    if generation_id is not None and user_id is not None and model_key and prediction_id:
+                        log_background_generation_event(
+                            "output_delivery_success",
+                            generation_id=generation_id,
+                            user_id=user_id,
+                            chat_id=chat_id,
+                            model_key=model_key,
+                            prediction_id=prediction_id,
+                            outputs_count=len(output_urls),
+                            delivery_method="r2",
+                            file_size_bytes=file_size_bytes,
+                            content_type=content_type,
+                        )
                     continue
                 delivered_successfully = False
+                last_error_code = ErrorCode.E009_TELEGRAM_DELIVERY_FAILED
+                last_error_message = "R2 is not configured"
                 log_generation_output_delivery(
                     "r2",
                     user_id=user_id,
@@ -1274,6 +1415,20 @@ async def send_generation_outputs(
                 )
                 continue
             delivery_kind = "document" if send_results_as_files else get_output_delivery_kind(content_type)
+            last_delivery_method = delivery_kind
+            if generation_id is not None and user_id is not None and model_key and prediction_id:
+                log_background_generation_event(
+                    "output_delivery_started",
+                    generation_id=generation_id,
+                    user_id=user_id,
+                    chat_id=chat_id,
+                    model_key=model_key,
+                    prediction_id=prediction_id,
+                    outputs_count=len(output_urls),
+                    delivery_method=delivery_kind,
+                    file_size_bytes=file_size_bytes,
+                    content_type=content_type,
+                )
             if delivery_kind == "photo":
                 try:
                     await send_photo_output(bot=bot, chat_id=chat_id, file_path=temp_output_path, reply_markup=main_menu_keyboard)
@@ -1285,6 +1440,19 @@ async def send_generation_outputs(
                         file_size_bytes=file_size_bytes,
                         status="success",
                     )
+                    if generation_id is not None and user_id is not None and model_key and prediction_id:
+                        log_background_generation_event(
+                            "output_delivery_success",
+                            generation_id=generation_id,
+                            user_id=user_id,
+                            chat_id=chat_id,
+                            model_key=model_key,
+                            prediction_id=prediction_id,
+                            outputs_count=len(output_urls),
+                            delivery_method="photo",
+                            file_size_bytes=file_size_bytes,
+                            content_type=content_type,
+                        )
                     continue
                 except Exception:
                     logger.exception("Failed to deliver completed Wavespeed output as photo")
@@ -1307,6 +1475,19 @@ async def send_generation_outputs(
                         file_size_bytes=file_size_bytes,
                         status="success",
                     )
+                    if generation_id is not None and user_id is not None and model_key and prediction_id:
+                        log_background_generation_event(
+                            "output_delivery_success",
+                            generation_id=generation_id,
+                            user_id=user_id,
+                            chat_id=chat_id,
+                            model_key=model_key,
+                            prediction_id=prediction_id,
+                            outputs_count=len(output_urls),
+                            delivery_method="video",
+                            file_size_bytes=file_size_bytes,
+                            content_type=content_type,
+                        )
                     continue
                 except Exception:
                     logger.exception("Failed to deliver completed Wavespeed output as video")
@@ -1334,8 +1515,25 @@ async def send_generation_outputs(
                 file_size_bytes=file_size_bytes,
                 status="success",
             )
+            last_delivery_method = "document"
+            if generation_id is not None and user_id is not None and model_key and prediction_id:
+                log_background_generation_event(
+                    "output_delivery_success",
+                    generation_id=generation_id,
+                    user_id=user_id,
+                    chat_id=chat_id,
+                    model_key=model_key,
+                    prediction_id=prediction_id,
+                    outputs_count=len(output_urls),
+                    delivery_method="document",
+                    file_size_bytes=file_size_bytes,
+                    content_type=content_type,
+                )
         except OutputDeliveryTooLargeError:
             delivered_successfully = False
+            last_delivery_method = "r2"
+            last_error_code = ErrorCode.E009_TELEGRAM_DELIVERY_FAILED
+            last_error_message = "Output is too large for Telegram"
             log_generation_error(ErrorCode.E009_TELEGRAM_DELIVERY_FAILED, status="delivery_failed")
             if temp_output_path and r2_storage.is_configured():
                 use_r2 = True
@@ -1347,6 +1545,7 @@ async def send_generation_outputs(
                         file_size_bytes=file_size_bytes,
                     )
                 except Exception:
+                    last_error_message = "R2 upload failed"
                     log_generation_output_delivery(
                         "r2",
                         user_id=user_id,
@@ -1371,6 +1570,8 @@ async def send_generation_outputs(
                     status="success",
                 )
                 delivered_successfully = True
+                last_error_code = None
+                last_error_message = None
                 continue
             log_generation_output_delivery(
                 "r2",
@@ -1388,10 +1589,26 @@ async def send_generation_outputs(
             )
         except Exception:
             logger.exception("Failed to deliver completed Wavespeed output as document")
+            last_error_code = ErrorCode.E009_TELEGRAM_DELIVERY_FAILED
+            last_error_message = "Telegram delivery failed"
             log_generation_error(ErrorCode.E009_TELEGRAM_DELIVERY_FAILED, status="delivery_failed")
             if temp_output_path and r2_storage.is_configured():
                 use_r2 = True
+                last_delivery_method = "r2"
                 try:
+                    if generation_id is not None and user_id is not None and model_key and prediction_id:
+                        log_background_generation_event(
+                            "output_delivery_started",
+                            generation_id=generation_id,
+                            user_id=user_id,
+                            chat_id=chat_id,
+                            model_key=model_key,
+                            prediction_id=prediction_id,
+                            outputs_count=len(output_urls),
+                            delivery_method="r2",
+                            file_size_bytes=file_size_bytes,
+                            content_type=content_type,
+                        )
                     short_url = await upload_output_to_r2_and_get_short_url(
                         r2_storage=r2_storage,
                         file_path=temp_output_path,
@@ -1400,6 +1617,7 @@ async def send_generation_outputs(
                     )
                 except Exception:
                     delivered_successfully = False
+                    last_error_message = "R2 upload failed"
                     log_generation_output_delivery(
                         "r2",
                         user_id=user_id,
@@ -1428,8 +1646,24 @@ async def send_generation_outputs(
                     build_large_file_r2_message(short_url),
                     reply_markup=main_menu_keyboard,
                 )
+                last_error_code = None
+                last_error_message = None
+                if generation_id is not None and user_id is not None and model_key and prediction_id:
+                    log_background_generation_event(
+                        "output_delivery_success",
+                        generation_id=generation_id,
+                        user_id=user_id,
+                        chat_id=chat_id,
+                        model_key=model_key,
+                        prediction_id=prediction_id,
+                        outputs_count=len(output_urls),
+                        delivery_method="r2",
+                        file_size_bytes=file_size_bytes,
+                        content_type=content_type,
+                    )
                 continue
             delivered_successfully = False
+            last_delivery_method = "document"
             log_generation_output_delivery(
                 "document",
                 user_id=user_id,
@@ -1444,9 +1678,29 @@ async def send_generation_outputs(
                 t("download.telegram_failed", lang),
                 reply_markup=main_menu_keyboard,
             )
+            if generation_id is not None and user_id is not None and model_key and prediction_id:
+                log_background_generation_event(
+                    "output_delivery_failed",
+                    generation_id=generation_id,
+                    user_id=user_id,
+                    chat_id=chat_id,
+                    model_key=model_key,
+                    prediction_id=prediction_id,
+                    outputs_count=len(output_urls),
+                    delivery_method="document",
+                    file_size_bytes=file_size_bytes,
+                    content_type=content_type,
+                    error_code=last_error_code,
+                )
         finally:
             await cleanup_temp_output_file(temp_output_path)
-    return OutputDeliveryResult(delivered_successfully=delivered_successfully, use_r2=use_r2)
+    return OutputDeliveryResult(
+        success=delivered_successfully,
+        method=last_delivery_method,
+        error_code=last_error_code,
+        error_message=last_error_message,
+        use_r2=use_r2,
+    )
 
 
 async def cleanup_temp_output_file(file_path: Optional[str]) -> None:
@@ -1482,6 +1736,40 @@ def log_generation_output_delivery(
             "content_type": normalize_content_type(content_type),
             "delivery_method": delivery_method,
             "file_size": file_size_bytes,
+            "status": status,
+        }
+    )
+
+
+def log_background_generation_event(
+    action: str,
+    *,
+    generation_id: Any,
+    user_id: int,
+    chat_id: int,
+    model_key: str,
+    prediction_id: str,
+    outputs_count: int = 0,
+    delivery_method: Optional[str] = None,
+    file_size_bytes: Optional[int] = None,
+    content_type: Optional[str] = None,
+    error_code: Optional[str] = None,
+    status: Optional[str] = None,
+) -> None:
+    """Логировать background delivery без URL, prompt и секретов."""
+    logger.info(
+        {
+            "action": action,
+            "generation_id": str(generation_id),
+            "user_id": user_id,
+            "chat_id": chat_id,
+            "model_key": model_key,
+            "prediction_id": prediction_id,
+            "outputs_count": outputs_count,
+            "delivery_method": delivery_method,
+            "file_size_bytes": file_size_bytes,
+            "content_type": normalize_content_type(content_type),
+            "error_code": error_code,
             "status": status,
         }
     )
@@ -1655,51 +1943,38 @@ async def reset_generation_flow(state: FSMContext, reason: str) -> None:
 async def poll_generation_result(
     *,
     bot,
-    state: FSMContext,
     user_id: int,
     chat_id: int,
     generation_request_id,
+    prediction_id: str,
     model_key: str,
     cost: int,
-    payload: dict[str, Any],
     temp_input_path: Optional[str] | list[str],
 ) -> None:
-    """Выполнить submit и дождаться terminal результата, затем удалить временный input media."""
+    """Дождаться terminal результата, затем удалить временный input media."""
     await _run_single_generation_request(
         bot=bot,
-        state=state,
         user_id=user_id,
         chat_id=chat_id,
         generation_request_id=generation_request_id,
+        prediction_id=prediction_id,
         model_key=model_key,
         cost=cost,
-        payload=payload,
         temp_input_path=temp_input_path,
-        clear_active_generation=True,
         cleanup_inputs=True,
-        reset_state_after=True,
         use_partial_failure_message=False,
     )
 
 
-async def _run_single_generation_request(
+async def submit_generation_request(
     *,
-    bot,
-    state: FSMContext,
-    user_id: int,
-    chat_id: int,
     generation_request_id,
+    user_id: int,
     model_key: str,
-    cost: int,
     payload: dict[str, Any],
-    temp_input_path: Optional[str] | list[str],
-    clear_active_generation: bool,
-    cleanup_inputs: bool,
-    reset_state_after: bool,
-    use_partial_failure_message: bool,
-) -> None:
+) -> str:
+    """Submit generation to Wavespeed and persist the prediction id before polling starts."""
     wavespeed = WavespeedService()
-    result: Optional[WavespeedResult] = None
     try:
         submit_result = await wavespeed.submit_generation(
             model_key=model_key,
@@ -1716,20 +1991,209 @@ async def _run_single_generation_request(
             )
 
         await log_generation_event(generation_request_id, user_id, model_key, "processing")
+        return prediction_id
+    finally:
+        await wavespeed.close()
 
+
+async def _run_single_generation_request(
+    *,
+    bot,
+    user_id: int,
+    chat_id: int,
+    generation_request_id,
+    prediction_id: str,
+    model_key: str,
+    cost: int,
+    temp_input_path: Optional[str] | list[str],
+    cleanup_inputs: bool,
+    use_partial_failure_message: bool,
+) -> None:
+    wavespeed = WavespeedService()
+    result: Optional[WavespeedResult] = None
+    try:
+        log_background_generation_event(
+            "background_task_started",
+            generation_id=generation_request_id,
+            user_id=user_id,
+            chat_id=chat_id,
+            model_key=model_key,
+            prediction_id=prediction_id,
+        )
+        log_background_generation_event(
+            "background_generation_started",
+            generation_id=generation_request_id,
+            user_id=user_id,
+            chat_id=chat_id,
+            model_key=model_key,
+            prediction_id=prediction_id,
+        )
+        log_background_generation_event(
+            "background_polling_started",
+            generation_id=generation_request_id,
+            user_id=user_id,
+            chat_id=chat_id,
+            model_key=model_key,
+            prediction_id=prediction_id,
+        )
         result = await wavespeed.poll_until_complete(
             prediction_id,
-            timeout_seconds=POLL_TIMEOUT_SECONDS,
-            interval=60,
+            timeout_seconds=settings.wavespeed_poll_timeout_seconds,
+            generation_id=generation_request_id,
         )
+        outputs = list(result.outputs or [])
+        log_background_generation_event(
+            "poll_result_received",
+            generation_id=generation_request_id,
+            user_id=user_id,
+            chat_id=chat_id,
+            model_key=model_key,
+            prediction_id=prediction_id,
+            outputs_count=len(outputs),
+            status=getattr(result, "status", None),
+        )
+        log_background_generation_event(
+            "background_polling_completed",
+            generation_id=generation_request_id,
+            user_id=user_id,
+            chat_id=chat_id,
+            model_key=model_key,
+            prediction_id=prediction_id,
+            outputs_count=len(outputs),
+        )
+        log_background_generation_event(
+            "background_outputs_received",
+            generation_id=generation_request_id,
+            user_id=user_id,
+            chat_id=chat_id,
+            model_key=model_key,
+            prediction_id=prediction_id,
+            outputs_count=len(outputs),
+        )
+        if not outputs:
+            log_generation_error(
+                ErrorCode.E010_INTERNAL_ERROR,
+                generation_id=generation_request_id,
+                user_id=user_id,
+                model_key=model_key,
+                status="failed",
+                details="completed_without_outputs",
+            )
+            await mark_generation_failed(
+                generation_request_id=generation_request_id,
+                user_id=user_id,
+                model_key=model_key,
+                cost=cost,
+                error_message="Wavespeed completed without output URLs",
+                refund_credit=True,
+            )
+            lang = await get_user_keyboard_language(user_id)
+            await safe_send_bot_message(
+                bot,
+                chat_id,
+                build_empty_outputs_failed_message(lang),
+                reply_markup=get_main_menu_keyboard(lang),
+            )
+            return
+
+        try:
+            log_background_generation_event(
+                "send_outputs_called",
+                generation_id=generation_request_id,
+                user_id=user_id,
+                chat_id=chat_id,
+                model_key=model_key,
+                prediction_id=prediction_id,
+                outputs_count=len(outputs),
+            )
+            delivery_result = await send_generation_outputs(
+                bot,
+                chat_id,
+                outputs,
+                user_id,
+                generation_id=generation_request_id,
+                model_key=model_key,
+                prediction_id=prediction_id,
+            )
+            log_background_generation_event(
+                "send_outputs_finished",
+                generation_id=generation_request_id,
+                user_id=user_id,
+                chat_id=chat_id,
+                model_key=model_key,
+                prediction_id=prediction_id,
+                outputs_count=len(outputs),
+                delivery_method=delivery_result.method,
+                error_code=delivery_result.error_code,
+                status="success" if delivery_result.success else "failed",
+            )
+        except Exception as exc:
+            logger.exception(
+                {
+                    "action": "background_generation_task_failed",
+                    "generation_id": str(generation_request_id),
+                    "user_id": user_id,
+                    "chat_id": chat_id,
+                    "model_key": model_key,
+                    "prediction_id": prediction_id,
+                    "outputs_count": len(outputs),
+                    "delivery_method": None,
+                    "file_size_bytes": None,
+                    "content_type": None,
+                }
+            )
+            await mark_generation_failed(
+                generation_request_id=generation_request_id,
+                user_id=user_id,
+                model_key=model_key,
+                cost=cost,
+                error_message=f"Output delivery crashed: {type(exc).__name__}",
+                refund_credit=True,
+            )
+            lang = await get_user_keyboard_language(user_id)
+            await safe_send_bot_message(
+                bot,
+                chat_id,
+                build_generated_but_delivery_failed_message(lang),
+                reply_markup=get_main_menu_keyboard(lang),
+            )
+            return
+
+        if not delivery_result.success:
+            log_generation_error(
+                ErrorCode.E009_TELEGRAM_DELIVERY_FAILED,
+                generation_id=generation_request_id,
+                user_id=user_id,
+                model_key=model_key,
+                status="delivery_failed",
+                details=delivery_result.error_message,
+            )
+            await mark_generation_failed(
+                generation_request_id=generation_request_id,
+                user_id=user_id,
+                model_key=model_key,
+                cost=cost,
+                error_message=delivery_result.error_message or "Telegram delivery failed",
+                refund_credit=True,
+                status="delivery_failed",
+            )
+            lang = await get_user_keyboard_language(user_id)
+            await safe_send_bot_message(
+                bot,
+                chat_id,
+                build_telegram_delivery_failed_refund_message(lang),
+                reply_markup=get_main_menu_keyboard(lang),
+            )
+            return
+
         await mark_generation_completed(
             generation_request_id=generation_request_id,
             user_id=user_id,
             model_key=model_key,
             nsfw_flags=result.raw_response.get("nsfw_flags"),
-            output_count=len(result.outputs),
+            output_count=len(outputs),
+            output_urls=outputs,
         )
-        await send_generation_outputs(bot, chat_id, result.outputs, user_id)
     except WavespeedTimeoutError as exc:
         logger.exception("Wavespeed timeout while polling generation result")
         log_generation_error(
@@ -1812,7 +2276,20 @@ async def _run_single_generation_request(
             reply_markup=get_main_menu_keyboard(lang),
         )
     except Exception as exc:
-        logger.exception("Error while polling generation result")
+        logger.exception(
+            {
+                "action": "background_generation_task_failed",
+                "generation_id": str(generation_request_id),
+                "user_id": user_id,
+                "chat_id": chat_id,
+                "model_key": model_key,
+                "prediction_id": prediction_id,
+                "outputs_count": len(result.outputs) if result is not None else 0,
+                "delivery_method": None,
+                "file_size_bytes": None,
+                "content_type": None,
+            }
+        )
         log_generation_error(
             ErrorCode.E010_INTERNAL_ERROR,
             generation_id=generation_request_id,
@@ -1836,72 +2313,130 @@ async def _run_single_generation_request(
             reply_markup=get_main_menu_keyboard(lang),
         )
     finally:
-        if clear_active_generation:
-            ACTIVE_GENERATIONS.pop(user_id, None)
         if cleanup_inputs:
             await cleanup_generation_file(temp_input_path)
-        if reset_state_after:
-            await reset_generation_state(state)
         await wavespeed.close()
+        BACKGROUND_GENERATIONS.pop(generation_request_id, None)
+        log_background_generation_event(
+            "background_generation_finished",
+            generation_id=generation_request_id,
+            user_id=user_id,
+            chat_id=chat_id,
+            model_key=model_key,
+            prediction_id=prediction_id,
+            outputs_count=len(result.outputs) if result is not None and result.outputs is not None else 0,
+        )
 
 
 async def poll_generation_results_batch(
     *,
     bot,
-    state: FSMContext,
     user_id: int,
     chat_id: int,
-    generation_request_ids: list[Any],
+    generation_predictions: list[tuple[Any, str]],
     model_key: str,
-    payload: dict[str, Any],
     temp_input_path: Optional[str] | list[str],
 ) -> None:
     semaphore = asyncio.Semaphore(4)
 
-    async def _run_child(generation_request_id) -> None:
+    async def _run_child(generation_request_id, prediction_id: str) -> None:
         async with semaphore:
             await _run_single_generation_request(
                 bot=bot,
-                state=state,
                 user_id=user_id,
                 chat_id=chat_id,
                 generation_request_id=generation_request_id,
+                prediction_id=prediction_id,
                 model_key=model_key,
                 cost=GENERATION_COST,
-                payload=dict(payload),
                 temp_input_path=None,
-                clear_active_generation=False,
                 cleanup_inputs=False,
-                reset_state_after=False,
                 use_partial_failure_message=True,
             )
 
     try:
         results = await asyncio.gather(
-            *(_run_child(generation_request_id) for generation_request_id in generation_request_ids),
+            *(_run_child(generation_request_id, prediction_id) for generation_request_id, prediction_id in generation_predictions),
             return_exceptions=True,
         )
         for result in results:
             if isinstance(result, Exception):
                 logger.exception("Batch generation task failed unexpectedly: %s", result)
     finally:
-        ACTIVE_GENERATIONS.pop(user_id, None)
         await cleanup_generation_file(temp_input_path)
-        await reset_generation_state(state)
+        for generation_request_id, _ in generation_predictions:
+            BACKGROUND_GENERATIONS.pop(generation_request_id, None)
+
+
+async def recover_background_generations(bot) -> int:
+    """Восстановить polling активных генераций после рестарта процесса."""
+    recovered_count = 0
+    async with db_manager.session_factory() as session:
+        generation_repo = GenerationRepository(session)
+        recoverable_generations = await generation_repo.list_recoverable_generations()
+
+    for generation in recoverable_generations:
+        if generation.id in BACKGROUND_GENERATIONS:
+            continue
+        if not generation.wavespeed_prediction_id:
+            continue
+        chat_id = generation.chat_id or generation.user_id
+        log_background_generation_event(
+            "background_task_scheduled",
+            generation_id=generation.id,
+            user_id=generation.user_id,
+            chat_id=chat_id,
+            model_key=generation.model_key,
+            prediction_id=generation.wavespeed_prediction_id,
+        )
+        task = asyncio.create_task(
+            poll_generation_result(
+                bot=bot,
+                user_id=generation.user_id,
+                chat_id=chat_id,
+                generation_request_id=generation.id,
+                prediction_id=generation.wavespeed_prediction_id,
+                model_key=generation.model_key,
+                cost=generation.cost,
+                temp_input_path=None,
+            )
+        )
+        task.add_done_callback(log_background_task_exception)
+        BACKGROUND_GENERATIONS[generation.id] = {
+            "task": task,
+            "generation_request_id": generation.id,
+            "generation_request_ids": [generation.id],
+            "recovered": True,
+        }
+        recovered_count += 1
+        log_background_generation_event(
+            "background_generation_recovered",
+            generation_id=generation.id,
+            user_id=generation.user_id,
+            chat_id=chat_id,
+            model_key=generation.model_key,
+            prediction_id=generation.wavespeed_prediction_id,
+        )
+
+    return recovered_count
 
 
 @router.message(lambda msg: is_localized_button_text(msg.text, "main.generations", getattr(msg.from_user, "language_code", None)))
-async def show_generation_menu(message: Message, state: FSMContext):
+async def show_generation_menu(message: Message, state: FSMContext, session: Optional[AsyncSession] = None):
     """Показать меню генерации."""
     try:
         lang = get_actor_language(message.from_user)
         current_state = await state.get_state()
-        if message.from_user.id in ACTIVE_GENERATIONS:
+        active_count = await count_active_generations_for_user(message.from_user.id, session)
+        limit = settings.max_parallel_generations_per_user
+        if active_count >= limit:
+            log_parallel_generation_event("parallel_generation_limit_reached", message.from_user.id, active_count, limit)
             await message.answer(
-                t("generation.active_scenario", lang),
+                t("generation.parallel_limit_reached", lang, count=active_count),
                 reply_markup=get_main_menu_keyboard(lang),
             )
             return
+        log_parallel_generation_event("parallel_generation_allowed", message.from_user.id, active_count, limit)
 
         if is_generation_flow_state(current_state):
             await reset_generation_flow(state, reason="main_menu_generations")
@@ -1928,10 +2463,6 @@ async def choose_generation_model(callback: CallbackQuery, state: FSMContext):
     """Выбрать модель для генерации."""
     log_generation_callback(callback)
     model_token = callback.data.removeprefix(MODEL_PREFIX)
-    if callback.from_user.id in ACTIVE_GENERATIONS:
-        await callback.answer(t("generation.already_running", get_actor_language(callback.from_user)), show_alert=True)
-        return
-
     state_data = await state.get_data()
     model_key = resolve_model_key_from_token(get_selected_models_for_state(state_data), model_token) or model_token
     model = get_generation_model(model_key)
@@ -2710,9 +3241,6 @@ async def confirm_generation(callback: CallbackQuery, state: FSMContext, session
     user_id = callback.from_user.id
     state_data = await state.get_data()
     lang = get_state_language(state_data, callback.from_user)
-    if user_id in ACTIVE_GENERATIONS:
-        await callback.answer(t("generation.already_running", lang), show_alert=True)
-        return
 
     model_key = state_data.get("model_key")
     model_title = state_data.get("model_title")
@@ -2782,6 +3310,7 @@ async def confirm_generation(callback: CallbackQuery, state: FSMContext, session
     debited_user_id: Optional[int] = None
     generation_request_id = None
     generation_request_ids: list[Any] = []
+    generation_predictions: list[tuple[Any, str]] = []
     temp_input_path: Optional[str] | list[str] = None
     task_started = False
     total_cost = GENERATION_COST
@@ -2795,6 +3324,25 @@ async def confirm_generation(callback: CallbackQuery, state: FSMContext, session
         debited_user_id = user.id
         num_generations = get_model_num_generations(model, user_settings)
         total_cost = get_total_generation_cost(model, user_settings)
+        active_count = await generation_repo.count_active_generations(user.id)
+        limit = settings.max_parallel_generations_per_user
+        if active_count >= limit:
+            log_parallel_generation_event("parallel_generation_limit_reached", user.id, active_count, limit)
+            await callback.message.answer(
+                t("generation.parallel_limit_reached", lang, count=active_count),
+                reply_markup=get_main_menu_keyboard(lang),
+            )
+            await callback.answer()
+            return
+        if active_count + num_generations > limit:
+            log_parallel_generation_event("parallel_generation_limit_reached", user.id, active_count, limit)
+            await callback.message.answer(
+                t("generation.parallel_limit_would_exceed", lang, limit=limit),
+                reply_markup=get_main_menu_keyboard(lang),
+            )
+            await callback.answer()
+            return
+        log_parallel_generation_event("parallel_generation_allowed", user.id, active_count, limit)
 
         if not await user_repo.decrease_balance(user.id, total_cost):
             log_balance_event("insufficient_balance", user.id, total_cost)
@@ -2836,6 +3384,7 @@ async def confirm_generation(callback: CallbackQuery, state: FSMContext, session
         for _ in range(num_generations):
             generation_request = await generation_repo.create_generation_request(
                 user_id=user.id,
+                chat_id=callback.message.chat.id,
                 model_key=model_key,
                 model_endpoint=model_endpoint,
                 prompt=prompt,
@@ -2852,42 +3401,66 @@ async def confirm_generation(callback: CallbackQuery, state: FSMContext, session
             generation_request_ids.append(generation_request.id)
 
         generation_request_id = generation_request_ids[0] if generation_request_ids else None
+        for current_generation_request_id in generation_request_ids:
+            prediction_id = await submit_generation_request(
+                generation_request_id=current_generation_request_id,
+                user_id=user_id,
+                model_key=model_key,
+                payload=dict(payload),
+            )
+            generation_predictions.append((current_generation_request_id, prediction_id))
 
-        await state.set_state(GenerationStates.generating)
         if num_generations == 1:
+            prediction_id = generation_predictions[0][1]
+            log_background_generation_event(
+                "background_task_scheduled",
+                generation_id=generation_request_id,
+                user_id=user_id,
+                chat_id=callback.message.chat.id,
+                model_key=model_key,
+                prediction_id=prediction_id,
+            )
             task = asyncio.create_task(
                 poll_generation_result(
                     bot=callback.bot,
-                    state=state,
                     user_id=user_id,
                     chat_id=callback.message.chat.id,
                     generation_request_id=generation_request_id,
+                    prediction_id=prediction_id,
                     model_key=model_key,
                     cost=GENERATION_COST,
-                    payload=payload,
                     temp_input_path=temp_input_path,
                 )
             )
         else:
+            for current_generation_request_id, prediction_id in generation_predictions:
+                log_background_generation_event(
+                    "background_task_scheduled",
+                    generation_id=current_generation_request_id,
+                    user_id=user_id,
+                    chat_id=callback.message.chat.id,
+                    model_key=model_key,
+                    prediction_id=prediction_id,
+                )
             task = asyncio.create_task(
                 poll_generation_results_batch(
                     bot=callback.bot,
-                    state=state,
                     user_id=user_id,
                     chat_id=callback.message.chat.id,
-                    generation_request_ids=generation_request_ids,
+                    generation_predictions=generation_predictions,
                     model_key=model_key,
-                    payload=payload,
                     temp_input_path=temp_input_path,
                 )
             )
         task.add_done_callback(log_background_task_exception)
         task_started = True
-        ACTIVE_GENERATIONS[user_id] = {
-            "task": task,
-            "generation_request_id": generation_request_id,
-            "generation_request_ids": generation_request_ids,
-        }
+        for current_generation_request_id in generation_request_ids:
+            BACKGROUND_GENERATIONS[current_generation_request_id] = {
+                "task": task,
+                "generation_request_id": current_generation_request_id,
+                "generation_request_ids": generation_request_ids,
+            }
+        await state.clear()
 
         await callback.message.edit_text(
             (
@@ -2897,7 +3470,7 @@ async def confirm_generation(callback: CallbackQuery, state: FSMContext, session
             parse_mode="HTML",
         )
         await callback.message.answer(
-            t("generation.started_count", lang, count=num_generations),
+            t("generation.started_background", lang),
             reply_markup=get_main_menu_keyboard(lang),
         )
         await callback.answer()
@@ -2975,6 +3548,8 @@ async def confirm_generation(callback: CallbackQuery, state: FSMContext, session
                 await user_repo.increase_balance(debited_user_id, total_cost)
             except Exception as refund_exc:
                 logger.exception("Error while refunding balance after launch failure: %s", refund_exc)
+        if not task_started:
+            await cleanup_generation_file(temp_input_path)
         await state.clear()
         await callback.message.answer(
             format_user_error(ErrorCode.E010_INTERNAL_ERROR, t("errors.launch_generation_failed", lang), lang),

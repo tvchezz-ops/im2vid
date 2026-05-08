@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import logging
 import os
+import asyncio
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -189,13 +190,25 @@ async def get_generation_status(session, generation_id) -> GenerationRequestStat
     return result.scalar_one()
 
 
+async def await_background_generation_tasks() -> None:
+    current_loop = asyncio.get_running_loop()
+    tasks = {
+        entry["task"]
+        for entry in generations.BACKGROUND_GENERATIONS.values()
+        if entry["task"].get_loop() is current_loop
+    }
+    if tasks:
+        await asyncio.gather(*tasks)
+    generations.BACKGROUND_GENERATIONS.clear()
+
+
 @pytest.mark.asyncio
 async def test_show_generation_menu_starts_with_generation_type_selection() -> None:
     message = FakeMessage(chat_id=401)
     state = FakeState()
     message.from_user = SimpleNamespace(id=401)
 
-    await generations.show_generation_menu(message, state)
+    await generations.show_generation_menu(message, state, None)
 
     assert state.state == GenerationStates.choosing_generation_type
     assert "Choose generation type:" in message.answers[-1]
@@ -203,6 +216,74 @@ async def test_show_generation_menu_starts_with_generation_type_selection() -> N
     keyboard = message.answer_markups[-1]
     callback_data = [row[0].callback_data for row in keyboard.inline_keyboard[:-1]]
     assert "gen:section:lipsync" not in callback_data
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("active_count", [0, 1, 2])
+async def test_show_generation_menu_allows_under_parallel_limit(session_factory, active_count: int) -> None:
+    async with session_factory() as session:
+        await create_user(session, user_id=421, balance=5)
+        for index in range(active_count):
+            await GenerationRepository(session).create_generation_request(
+                user_id=421,
+                model_key="nano_banana",
+                model_endpoint="/api/v3/nano-banana",
+                prompt=f"Prompt {index}",
+                settings={},
+                status="created",
+                cost=1,
+            )
+
+        message = FakeMessage(chat_id=421)
+        state = FakeState()
+
+        await generations.show_generation_menu(message, state, session)
+
+        assert state.state == GenerationStates.choosing_generation_type
+        assert "Выберите тип генерации:" in message.answers[-1]
+
+
+@pytest.mark.asyncio
+async def test_show_generation_menu_blocks_at_parallel_limit(session_factory) -> None:
+    async with session_factory() as session:
+        await create_user(session, user_id=422, balance=5)
+        for index, status in enumerate(("created", "processing", "pending")):
+            await GenerationRepository(session).create_generation_request(
+                user_id=422,
+                model_key="nano_banana",
+                model_endpoint="/api/v3/nano-banana",
+                prompt=f"Prompt {index}",
+                settings={},
+                status=status,
+                cost=1,
+            )
+
+        message = FakeMessage(chat_id=422)
+        state = FakeState()
+
+        await generations.show_generation_menu(message, state, session)
+
+        assert state.state is None
+        assert message.answers[-1] == "⚠️ У вас уже запущено 3 генерации. Дождитесь завершения одной из них."
+
+
+@pytest.mark.asyncio
+async def test_count_active_generations_uses_only_active_statuses(session_factory) -> None:
+    async with session_factory() as session:
+        await create_user(session, user_id=423, balance=5)
+        repository = GenerationRepository(session)
+        for status in ("created", "processing", "pending", "completed", "failed", "timeout", "cancelled"):
+            await repository.create_generation_request(
+                user_id=423,
+                model_key="nano_banana",
+                model_endpoint="/api/v3/nano-banana",
+                prompt=status,
+                settings={},
+                status=status,
+                cost=1,
+            )
+
+        assert await repository.count_active_generations(423) == 3
 
 
 @pytest.mark.asyncio
@@ -807,6 +888,9 @@ async def test_send_generation_outputs_keeps_main_menu_keyboard_without_menu_mes
     delivered = await generations.send_generation_outputs(bot, 1, ["https://example.com/output.jpg"])
 
     assert delivered.delivered_successfully is True
+    assert delivered.success is True
+    assert delivered.method == "photo"
+    assert delivered.error_code is None
     assert "🏠 Главное меню" not in bot.messages
     assert bot.photos[-1]["reply_markup"].keyboard[0][0].text == get_button_text("main.generations", "en")
 
@@ -829,7 +913,11 @@ async def test_confirm_generation_debits_one_credit(session_factory, monkeypatch
         async def fake_poll_generation_result(**kwargs) -> None:
             return None
 
+        async def fake_submit_generation_request(**kwargs) -> str:
+            return "pred-101"
+
         monkeypatch.setattr(generations, "TelegramFilesService", FakeTelegramFilesService)
+        monkeypatch.setattr(generations, "submit_generation_request", fake_submit_generation_request)
         monkeypatch.setattr(generations, "poll_generation_result", fake_poll_generation_result)
 
         state = FakeState(
@@ -846,11 +934,10 @@ async def test_confirm_generation_debits_one_credit(session_factory, monkeypatch
 
         try:
             await generations.confirm_generation(callback, state, session)
-            if 101 in generations.ACTIVE_GENERATIONS:
-                await generations.ACTIVE_GENERATIONS[101]["task"]
+            await await_background_generation_tasks()
             assert await get_user_balance(session, 101) == 2
         finally:
-            generations.ACTIVE_GENERATIONS.clear()
+            generations.BACKGROUND_GENERATIONS.clear()
             Path(temp_input_path).unlink(missing_ok=True)
 
 
@@ -868,11 +955,16 @@ async def test_confirm_generation_reuses_uploaded_multi_image_items(session_fact
         async def fake_poll_generation_result(**kwargs) -> None:
             captured.update(kwargs)
 
+        async def fake_submit_generation_request(**kwargs) -> str:
+            captured["submit_payload"] = kwargs["payload"]
+            return "pred-102"
+
         class ForbiddenTelegramFilesService:
             def __init__(self, bot):
                 raise AssertionError("TelegramFilesService should not be called when input_media_items already exist")
 
         monkeypatch.setattr(generations, "TelegramFilesService", ForbiddenTelegramFilesService)
+        monkeypatch.setattr(generations, "submit_generation_request", fake_submit_generation_request)
         monkeypatch.setattr(generations, "poll_generation_result", fake_poll_generation_result)
 
         state = FakeState(
@@ -903,10 +995,9 @@ async def test_confirm_generation_reuses_uploaded_multi_image_items(session_fact
 
         try:
             await generations.confirm_generation(callback, state, session)
-            if 102 in generations.ACTIVE_GENERATIONS:
-                await generations.ACTIVE_GENERATIONS[102]["task"]
+            await await_background_generation_tasks()
 
-            assert captured["payload"] == {
+            assert captured["submit_payload"] == {
                 "images": [
                     "https://example.com/input-1.png",
                     "https://example.com/input-2.png",
@@ -918,10 +1009,11 @@ async def test_confirm_generation_reuses_uploaded_multi_image_items(session_fact
                 "enable_sync_mode": False,
                 "enable_base64_output": False,
             }
+            assert captured["prediction_id"] == "pred-102"
             assert captured["temp_input_path"] == [str(first_path), str(second_path)]
             assert await get_user_balance(session, 102) == 2
         finally:
-            generations.ACTIVE_GENERATIONS.clear()
+            generations.BACKGROUND_GENERATIONS.clear()
             first_path.unlink(missing_ok=True)
             second_path.unlink(missing_ok=True)
 
@@ -950,7 +1042,11 @@ async def test_confirm_generation_keeps_temp_media_until_polling_finishes(sessio
             captured.update(kwargs)
             temp_input_path.unlink(missing_ok=True)
 
+        async def fake_submit_generation_request(**kwargs) -> str:
+            return "pred-103"
+
         monkeypatch.setattr(generations, "TelegramFilesService", FakeTelegramFilesService)
+        monkeypatch.setattr(generations, "submit_generation_request", fake_submit_generation_request)
         monkeypatch.setattr(generations, "poll_generation_result", fake_poll_generation_result)
 
         state = FakeState(
@@ -967,13 +1063,74 @@ async def test_confirm_generation_keeps_temp_media_until_polling_finishes(sessio
 
         try:
             await generations.confirm_generation(callback, state, session)
-            if 103 in generations.ACTIVE_GENERATIONS:
-                await generations.ACTIVE_GENERATIONS[103]["task"]
+            assert state.state is None
+            assert state.data == {}
+            await await_background_generation_tasks()
 
             assert captured["exists_during_poll"] is True
             assert captured["temp_input_path"] == str(temp_input_path)
         finally:
-            generations.ACTIVE_GENERATIONS.clear()
+            generations.BACKGROUND_GENERATIONS.clear()
+            temp_input_path.unlink(missing_ok=True)
+
+
+@pytest.mark.asyncio
+async def test_confirm_generation_allows_new_flow_while_background_task_runs(session_factory, monkeypatch, tmp_path) -> None:
+    async with session_factory() as session:
+        await create_user(session, user_id=104, balance=3)
+
+        temp_input_path = tmp_path / "input-background.png"
+        temp_input_path.write_bytes(b"input")
+        release_polling = asyncio.Event()
+
+        class FakeTelegramFilesService:
+            def __init__(self, bot):
+                self.bot = bot
+
+            async def download_temp_file_and_get_public_url(self, file_id: str):
+                return SimpleNamespace(
+                    local_path=temp_input_path,
+                    public_url="https://example.com/media/input-background.png",
+                )
+
+        async def fake_poll_generation_result(**kwargs) -> None:
+            await release_polling.wait()
+
+        async def fake_submit_generation_request(**kwargs) -> str:
+            return "pred-104"
+
+        monkeypatch.setattr(generations, "TelegramFilesService", FakeTelegramFilesService)
+        monkeypatch.setattr(generations, "submit_generation_request", fake_submit_generation_request)
+        monkeypatch.setattr(generations, "poll_generation_result", fake_poll_generation_result)
+
+        state = FakeState(
+            {
+                "model_key": "nano_banana",
+                "model_title": "Nano Banana",
+                "model_endpoint": "/api/v3/nano-banana",
+                "prompt": "Start one generation and immediately open another flow",
+                "input_image_file_id": "telegram-file-id",
+                "user_settings": {"aspect_ratio": "1:1", "resolution": "4k", "output_format": "png"},
+            }
+        )
+        callback = FakeCallback(user_id=104)
+
+        try:
+            await generations.confirm_generation(callback, state, session)
+
+            assert state.state is None
+            assert state.data == {}
+            assert temp_input_path.exists() is True
+
+            message = FakeMessage(chat_id=104)
+            await generations.show_generation_menu(message, state, session)
+
+            assert state.state == GenerationStates.choosing_generation_type
+            assert "Выберите тип генерации:" in message.answers[-1]
+        finally:
+            release_polling.set()
+            await await_background_generation_tasks()
+            generations.BACKGROUND_GENERATIONS.clear()
             temp_input_path.unlink(missing_ok=True)
 
 
@@ -998,10 +1155,7 @@ async def test_failed_generation_refunds_credit(session_factory, monkeypatch, tm
     temp_input_path.write_bytes(b"input")
 
     class FailedWavespeedService:
-        async def submit_generation(self, model_key: str, payload: dict[str, object]):
-            return SimpleNamespace(prediction_id="pred-1")
-
-        async def poll_until_complete(self, prediction_id: str, cancel_event=None, timeout_seconds=600, interval=60):
+        async def poll_until_complete(self, prediction_id: str, cancel_event=None, timeout_seconds=600, interval=60, **kwargs):
             raise WavespeedFailedError("failed")
 
         async def close(self) -> None:
@@ -1014,13 +1168,12 @@ async def test_failed_generation_refunds_credit(session_factory, monkeypatch, tm
 
     await generations.poll_generation_result(
         bot=bot,
-        state=state,
         user_id=201,
         chat_id=201,
         generation_request_id=generation.id,
+        prediction_id="pred-1",
         model_key="nano_banana",
         cost=1,
-        payload={"prompt": "Prompt"},
         temp_input_path=str(temp_input_path),
     )
 
@@ -1050,10 +1203,7 @@ async def test_timeout_generation_refunds_credit(session_factory, monkeypatch, t
     temp_input_path.write_bytes(b"input")
 
     class TimeoutWavespeedService:
-        async def submit_generation(self, model_key: str, payload: dict[str, object]):
-            return SimpleNamespace(prediction_id="pred-2")
-
-        async def poll_until_complete(self, prediction_id: str, cancel_event=None, timeout_seconds=600, interval=60):
+        async def poll_until_complete(self, prediction_id: str, cancel_event=None, timeout_seconds=600, interval=60, **kwargs):
             raise WavespeedTimeoutError("timeout")
 
         async def close(self) -> None:
@@ -1066,19 +1216,305 @@ async def test_timeout_generation_refunds_credit(session_factory, monkeypatch, t
 
     await generations.poll_generation_result(
         bot=bot,
-        state=state,
         user_id=301,
         chat_id=301,
         generation_request_id=generation.id,
+        prediction_id="pred-2",
         model_key="nano_banana",
         cost=1,
-        payload={"prompt": "Prompt"},
         temp_input_path=str(temp_input_path),
     )
 
     async with session_maker() as session:
         assert await get_user_balance(session, 301) == 5
         assert await get_generation_status(session, generation.id) == GenerationRequestStatus.TIMEOUT
+
+
+@pytest.mark.asyncio
+async def test_polling_does_not_use_or_clear_user_fsm(session_factory, monkeypatch, tmp_path) -> None:
+    session_maker = session_factory
+    monkeypatch.setattr(generations.db_manager, "session_factory", session_maker)
+
+    async with session_maker() as session:
+        await create_user(session, user_id=302, balance=4)
+        generation = await GenerationRepository(session).create_generation_request(
+            user_id=302,
+            model_key="nano_banana",
+            model_endpoint="/api/v3/nano-banana",
+            prompt="Prompt",
+            settings={},
+            status="created",
+            cost=1,
+        )
+
+    temp_input_path = tmp_path / "fsm-independent-input.png"
+    temp_input_path.write_bytes(b"input")
+
+    class SuccessfulWavespeedService:
+        async def poll_until_complete(self, prediction_id: str, cancel_event=None, timeout_seconds=600, interval=60, **kwargs):
+            return SimpleNamespace(raw_response={"nsfw_flags": None}, outputs=["https://example.com/output.jpg"])
+
+        async def close(self) -> None:
+            return None
+
+    async def fake_send_generation_outputs(*args, **kwargs):
+        return generations.OutputDeliveryResult(delivered_successfully=True)
+
+    monkeypatch.setattr(generations, "WavespeedService", SuccessfulWavespeedService)
+    monkeypatch.setattr(generations, "send_generation_outputs", fake_send_generation_outputs)
+
+    bot = FakeBot()
+    state = FakeState({"prompt": "new flow data", "input_media_items": [{"local_path": "should-not-delete"}]})
+    state.state = GenerationStates.waiting_for_prompt
+
+    await generations.poll_generation_result(
+        bot=bot,
+        user_id=302,
+        chat_id=302,
+        generation_request_id=generation.id,
+        prediction_id="pred-fsm",
+        model_key="nano_banana",
+        cost=1,
+        temp_input_path=str(temp_input_path),
+    )
+
+    assert state.state == GenerationStates.waiting_for_prompt
+    assert state.data["prompt"] == "new flow data"
+    assert temp_input_path.exists() is False
+
+    async with session_maker() as session:
+        assert await get_generation_status(session, generation.id) == GenerationRequestStatus.COMPLETED
+
+
+@pytest.mark.asyncio
+async def test_completed_generation_with_empty_outputs_sends_error_and_refunds(session_factory, monkeypatch) -> None:
+    session_maker = session_factory
+    monkeypatch.setattr(generations.db_manager, "session_factory", session_maker)
+
+    async with session_maker() as session:
+        user = await create_user(session, user_id=305, balance=4)
+        user.language_code = "ru"
+        await session.commit()
+        generation = await GenerationRepository(session).create_generation_request(
+            user_id=305,
+            chat_id=305,
+            model_key="nano_banana",
+            model_endpoint="/api/v3/nano-banana",
+            prompt="Prompt",
+            settings={},
+            status="processing",
+            cost=1,
+        )
+
+    class EmptyOutputWavespeedService:
+        async def poll_until_complete(self, prediction_id: str, cancel_event=None, timeout_seconds=600, interval=60, **kwargs):
+            return SimpleNamespace(raw_response={"nsfw_flags": None}, outputs=[])
+
+        async def close(self) -> None:
+            return None
+
+    monkeypatch.setattr(generations, "WavespeedService", EmptyOutputWavespeedService)
+
+    bot = FakeBot()
+    await generations.poll_generation_result(
+        bot=bot,
+        user_id=305,
+        chat_id=305,
+        generation_request_id=generation.id,
+        prediction_id="pred-empty",
+        model_key="nano_banana",
+        cost=1,
+        temp_input_path=None,
+    )
+
+    async with session_maker() as session:
+        assert await get_user_balance(session, 305) == 5
+        assert await get_generation_status(session, generation.id) == GenerationRequestStatus.FAILED
+
+    assert bot.messages[-1] == "❌ Ошибка E010: провайдер завершил генерацию, но не вернул файл результата. Кредит возвращён."
+
+
+@pytest.mark.asyncio
+async def test_send_generation_outputs_exception_is_not_silent(session_factory, monkeypatch, caplog) -> None:
+    session_maker = session_factory
+    monkeypatch.setattr(generations.db_manager, "session_factory", session_maker)
+
+    async with session_maker() as session:
+        user = await create_user(session, user_id=306, balance=4)
+        user.language_code = "ru"
+        await session.commit()
+        generation = await GenerationRepository(session).create_generation_request(
+            user_id=306,
+            chat_id=306,
+            model_key="nano_banana",
+            model_endpoint="/api/v3/nano-banana",
+            prompt="Prompt",
+            settings={},
+            status="processing",
+            cost=1,
+        )
+
+    class SuccessfulWavespeedService:
+        async def poll_until_complete(self, prediction_id: str, cancel_event=None, timeout_seconds=600, interval=60, **kwargs):
+            return SimpleNamespace(raw_response={"nsfw_flags": None}, outputs=["https://example.com/output.jpg"])
+
+        async def close(self) -> None:
+            return None
+
+    async def crashing_send_generation_outputs(*args, **kwargs):
+        raise RuntimeError("delivery crashed")
+
+    monkeypatch.setattr(generations, "WavespeedService", SuccessfulWavespeedService)
+    monkeypatch.setattr(generations, "send_generation_outputs", crashing_send_generation_outputs)
+
+    bot = FakeBot()
+    with caplog.at_level(logging.ERROR):
+        await generations.poll_generation_result(
+            bot=bot,
+            user_id=306,
+            chat_id=306,
+            generation_request_id=generation.id,
+            prediction_id="pred-crash",
+            model_key="nano_banana",
+            cost=1,
+            temp_input_path=None,
+        )
+
+    async with session_maker() as session:
+        assert await get_user_balance(session, 306) == 5
+        assert await get_generation_status(session, generation.id) == GenerationRequestStatus.FAILED
+
+    assert bot.messages[-1] == "❌ Ошибка E010: результат был сгенерирован, но бот не смог его доставить. Кредит возвращён."
+    assert any(
+        isinstance(record.msg, dict)
+        and record.msg.get("action") == "background_generation_task_failed"
+        and record.msg.get("generation_id") == str(generation.id)
+        for record in caplog.records
+    )
+
+
+@pytest.mark.asyncio
+async def test_startup_recovery_restarts_polling_for_processing_generations(session_factory, monkeypatch) -> None:
+    session_maker = session_factory
+    monkeypatch.setattr(generations.db_manager, "session_factory", session_maker)
+
+    async with session_maker() as session:
+        await create_user(session, user_id=307, balance=4)
+        generation = await GenerationRepository(session).create_generation_request(
+            user_id=307,
+            chat_id=777307,
+            model_key="nano_banana",
+            model_endpoint="/api/v3/nano-banana",
+            prompt="Prompt",
+            settings={},
+            status="processing",
+            wavespeed_prediction_id="pred-recover",
+            cost=1,
+        )
+
+    captured = {}
+
+    async def fake_poll_generation_result(**kwargs) -> None:
+        captured.update(kwargs)
+
+    monkeypatch.setattr(generations, "poll_generation_result", fake_poll_generation_result)
+
+    try:
+        recovered_count = await generations.recover_background_generations(FakeBot())
+        await await_background_generation_tasks()
+    finally:
+        generations.BACKGROUND_GENERATIONS.clear()
+
+    assert recovered_count == 1
+    assert captured["user_id"] == 307
+    assert captured["chat_id"] == 777307
+    assert captured["generation_request_id"] == generation.id
+    assert captured["prediction_id"] == "pred-recover"
+    assert captured["cost"] == 1
+    assert captured["temp_input_path"] is None
+
+
+@pytest.mark.asyncio
+async def test_failed_generation_refunds_only_its_cost_and_leaves_other_active(session_factory) -> None:
+    session_maker = session_factory
+    async with session_maker() as session:
+        await create_user(session, user_id=303, balance=5)
+        failed_generation = await GenerationRepository(session).create_generation_request(
+            user_id=303,
+            model_key="nano_banana",
+            model_endpoint="/api/v3/nano-banana",
+            prompt="Failed prompt",
+            settings={},
+            status="processing",
+            cost=2,
+        )
+        other_generation = await GenerationRepository(session).create_generation_request(
+            user_id=303,
+            model_key="nano_banana",
+            model_endpoint="/api/v3/nano-banana",
+            prompt="Other prompt",
+            settings={},
+            status="processing",
+            cost=3,
+        )
+
+    monkeypatch_context = pytest.MonkeyPatch()
+    monkeypatch_context.setattr(generations.db_manager, "session_factory", session_maker)
+    try:
+        await generations.mark_generation_failed(
+            generation_request_id=failed_generation.id,
+            user_id=303,
+            model_key="nano_banana",
+            cost=2,
+            error_message="failed",
+            refund_credit=True,
+        )
+    finally:
+        monkeypatch_context.undo()
+
+    async with session_maker() as session:
+        assert await get_user_balance(session, 303) == 7
+        assert await get_generation_status(session, failed_generation.id) == GenerationRequestStatus.FAILED
+        assert await get_generation_status(session, other_generation.id) == GenerationRequestStatus.PROCESSING
+
+
+@pytest.mark.asyncio
+async def test_completed_generation_leaves_other_active_generation_untouched(session_factory, monkeypatch) -> None:
+    session_maker = session_factory
+    monkeypatch.setattr(generations.db_manager, "session_factory", session_maker)
+
+    async with session_maker() as session:
+        await create_user(session, user_id=304, balance=5)
+        completed_generation = await GenerationRepository(session).create_generation_request(
+            user_id=304,
+            model_key="nano_banana",
+            model_endpoint="/api/v3/nano-banana",
+            prompt="Completed prompt",
+            settings={},
+            status="processing",
+            cost=1,
+        )
+        other_generation = await GenerationRepository(session).create_generation_request(
+            user_id=304,
+            model_key="nano_banana",
+            model_endpoint="/api/v3/nano-banana",
+            prompt="Other prompt",
+            settings={},
+            status="processing",
+            cost=1,
+        )
+
+    await generations.mark_generation_completed(
+        generation_request_id=completed_generation.id,
+        user_id=304,
+        model_key="nano_banana",
+        nsfw_flags=None,
+        output_count=1,
+    )
+
+    async with session_maker() as session:
+        assert await get_generation_status(session, completed_generation.id) == GenerationRequestStatus.COMPLETED
+        assert await get_generation_status(session, other_generation.id) == GenerationRequestStatus.PROCESSING
 
 
 @pytest.mark.asyncio
@@ -1105,7 +1541,11 @@ async def test_insufficient_balance_does_not_start_submit(session_factory, monke
             nonlocal called
             called = True
 
+        async def fake_submit_generation_request(**kwargs) -> str:
+            raise AssertionError("submit should not be called without enough balance")
+
         monkeypatch.setattr(generations, "poll_generation_result", fake_poll_generation_result)
+        monkeypatch.setattr(generations, "submit_generation_request", fake_submit_generation_request)
 
         state = FakeState(
             {
@@ -1114,7 +1554,7 @@ async def test_insufficient_balance_does_not_start_submit(session_factory, monke
                 "model_endpoint": "/api/v3/nano-banana",
                 "prompt": "Make the image brighter and keep the subject intact",
                 "input_image_file_id": "telegram-file-id",
-                "user_settings": {"aspect_ratio": "1:1", "resolution": "4k", "output_format": "png", "num_generations": "4"},
+                "user_settings": {"aspect_ratio": "1:1", "resolution": "4k", "output_format": "png", "num_generations": "3"},
             }
         )
         callback = FakeCallback(user_id=401)
@@ -1122,7 +1562,7 @@ async def test_insufficient_balance_does_not_start_submit(session_factory, monke
         await generations.confirm_generation(callback, state, session)
 
         assert called is False
-        assert callback.message.answers[-1] == "❌ Ошибка E006: недостаточно кредитов. Нужно 4, у вас 0."
+        assert callback.message.answers[-1] == "❌ Ошибка E006: недостаточно кредитов. Нужно 3, у вас 0."
         assert await get_user_balance(session, 401) == 0
 
 
@@ -1131,14 +1571,14 @@ def test_build_confirmation_text_shows_num_generations_and_total_cost() -> None:
 
     text = generations.build_confirmation_text(
         model,
-        {"aspect_ratio": "1:1", "resolution": "4k", "output_format": "png", "num_generations": "4"},
-        "Generate four variants",
+        {"aspect_ratio": "1:1", "resolution": "4k", "output_format": "png", "num_generations": "3"},
+        "Generate three variants",
         balance=10,
     )
 
-    assert "Generation count: <code>4</code>" in text
-    assert "Cost: 4 credits" in text
-    assert "Balance after launch: <code>6</code>" in text
+    assert "Generation count: <code>3</code>" in text
+    assert "Cost: 3 credits" in text
+    assert "Balance after launch: <code>7</code>" in text
 
 
 @pytest.mark.asyncio
@@ -1150,6 +1590,12 @@ async def test_confirm_generation_debits_total_cost_and_persists_num_generations
         async def fake_poll_generation_results_batch(**kwargs) -> None:
             captured.update(kwargs)
 
+        async def fake_submit_generation_request(**kwargs) -> str:
+            submit_calls = captured.setdefault("submit_calls", [])
+            submit_calls.append(kwargs)
+            return f"pred-{len(submit_calls)}"
+
+        monkeypatch.setattr(generations, "submit_generation_request", fake_submit_generation_request)
         monkeypatch.setattr(generations, "poll_generation_results_batch", fake_poll_generation_results_batch)
 
         state = FakeState(
@@ -1157,9 +1603,9 @@ async def test_confirm_generation_debits_total_cost_and_persists_num_generations
                 "model_key": "nano_banana",
                 "model_title": "Nano Banana",
                 "model_endpoint": "/api/v3/nano-banana",
-                "prompt": "Generate four variants",
+                "prompt": "Generate three variants",
                 "input_image_file_id": "telegram-file-id",
-                "user_settings": {"aspect_ratio": "1:1", "resolution": "4k", "output_format": "png", "num_generations": "4"},
+                "user_settings": {"aspect_ratio": "1:1", "resolution": "4k", "output_format": "png", "num_generations": "3"},
             }
         )
         callback = FakeCallback(user_id=451)
@@ -1180,11 +1626,12 @@ async def test_confirm_generation_debits_total_cost_and_persists_num_generations
         )
         generation_requests = result.scalars().all()
 
-        assert len(generation_requests) == 4
+        assert len(generation_requests) == 3
         assert all(generation.cost == 1 for generation in generation_requests)
-        assert all(generation.settings["num_generations"] == "4" for generation in generation_requests)
-        assert await get_user_balance(session, 451) == 6
-        assert len(captured["generation_request_ids"]) == 4
+        assert all(generation.settings["num_generations"] == "3" for generation in generation_requests)
+        assert await get_user_balance(session, 451) == 7
+        assert len(captured["generation_predictions"]) == 3
+        assert len(captured["submit_calls"]) == 3
 
 
 @pytest.mark.asyncio
@@ -1206,7 +1653,13 @@ async def test_num_generations_four_starts_four_submit_requests(session_factory,
         async def fake_poll_generation_results_batch(**kwargs) -> None:
             batch_calls.update(kwargs)
 
+        async def fake_submit_generation_request(**kwargs) -> str:
+            submit_calls = batch_calls.setdefault("submit_calls", [])
+            submit_calls.append(kwargs)
+            return f"pred-{len(submit_calls)}"
+
         monkeypatch.setattr(generations, "TelegramFilesService", FakeTelegramFilesService)
+        monkeypatch.setattr(generations, "submit_generation_request", fake_submit_generation_request)
         monkeypatch.setattr(generations, "poll_generation_results_batch", fake_poll_generation_results_batch)
 
         state = FakeState(
@@ -1214,19 +1667,19 @@ async def test_num_generations_four_starts_four_submit_requests(session_factory,
                 "model_key": "nano_banana",
                 "model_title": "Nano Banana",
                 "model_endpoint": "/api/v3/nano-banana",
-                "prompt": "Generate four variants",
+                "prompt": "Generate three variants",
                 "input_image_file_id": "telegram-file-id",
-                "user_settings": {"aspect_ratio": "1:1", "resolution": "4k", "output_format": "png", "num_generations": "4"},
+                "user_settings": {"aspect_ratio": "1:1", "resolution": "4k", "output_format": "png", "num_generations": "3"},
             }
         )
         callback = FakeCallback(user_id=452)
 
         await generations.confirm_generation(callback, state, session)
-        if 452 in generations.ACTIVE_GENERATIONS:
-            await generations.ACTIVE_GENERATIONS[452]["task"]
+        await await_background_generation_tasks()
 
-        assert len(batch_calls["generation_request_ids"]) == 4
-        assert callback.message.answers[-1] == "Запущено генераций: 4. Результаты будут приходить по мере готовности."
+        assert len(batch_calls["generation_predictions"]) == 3
+        assert len(batch_calls["submit_calls"]) == 3
+        assert callback.message.answers[-1] == "Генерация запущена в фоне. Результат придёт сюда автоматически."
 
 
 @pytest.mark.asyncio
@@ -1252,18 +1705,15 @@ async def test_batch_failure_refunds_only_one_credit_and_cleans_up_after_all_tas
 
     temp_input_path = tmp_path / "batch-input.png"
     temp_input_path.write_bytes(b"input")
-    submit_calls: list[int] = []
     prediction_map: dict[str, int] = {}
+    generation_predictions = []
+    for index, generation_id in enumerate(generation_ids):
+        prediction_id = f"pred-{index}"
+        prediction_map[prediction_id] = index
+        generation_predictions.append((generation_id, prediction_id))
 
     class MixedWavespeedService:
-        async def submit_generation(self, model_key: str, payload: dict[str, object]):
-            current_index = len(submit_calls)
-            submit_calls.append(current_index)
-            prediction_id = f"pred-{current_index}"
-            prediction_map[prediction_id] = current_index
-            return SimpleNamespace(prediction_id=prediction_id)
-
-        async def poll_until_complete(self, prediction_id: str, cancel_event=None, timeout_seconds=600, interval=60):
+        async def poll_until_complete(self, prediction_id: str, cancel_event=None, timeout_seconds=600, interval=60, **kwargs):
             if prediction_map[prediction_id] == 1:
                 raise WavespeedFailedError("failed")
             return SimpleNamespace(raw_response={"nsfw_flags": None}, outputs=[f"https://example.com/{prediction_id}.jpg"])
@@ -1273,8 +1723,8 @@ async def test_batch_failure_refunds_only_one_credit_and_cleans_up_after_all_tas
 
     delivery_calls: list[list[str]] = []
 
-    async def fake_send_generation_outputs(bot, chat_id: int, output_urls: list[str], user_id=None):
-        delivery_calls.append(output_urls)
+    async def fake_send_generation_outputs(*args, **kwargs):
+        delivery_calls.append(args[2])
         return generations.OutputDeliveryResult(delivered_successfully=True)
 
     bot = FakeBot()
@@ -1284,19 +1734,16 @@ async def test_batch_failure_refunds_only_one_credit_and_cleans_up_after_all_tas
     state = FakeState()
     await generations.poll_generation_results_batch(
         bot=bot,
-        state=state,
         user_id=460,
         chat_id=460,
-        generation_request_ids=generation_ids,
+        generation_predictions=generation_predictions,
         model_key="nano_banana",
-        payload={"prompt": "Prompt"},
         temp_input_path=str(temp_input_path),
     )
 
     async with session_maker() as session:
         assert await get_user_balance(session, 460) == 7
 
-    assert len(submit_calls) == 4
     assert len(delivery_calls) == 3
     assert temp_input_path.exists() is False
     assert bot.messages.count("❌ Error E007: one of the generations failed. 1 credit was refunded.") == 1
@@ -2029,14 +2476,17 @@ async def test_cleanup_temp_output_file_does_not_fail_if_file_already_deleted(mo
 
 
 @pytest.mark.asyncio
-async def test_poll_generation_result_keeps_completed_status_when_document_delivery_fails(session_factory, monkeypatch) -> None:
+async def test_poll_generation_result_marks_delivery_failed_when_document_delivery_fails(session_factory, monkeypatch) -> None:
     session_maker = session_factory
     monkeypatch.setattr(generations.db_manager, "session_factory", session_maker)
 
     async with session_maker() as session:
-        await create_user(session, user_id=501, balance=4)
+        user = await create_user(session, user_id=501, balance=4)
+        user.language_code = "ru"
+        await session.commit()
         generation = await GenerationRepository(session).create_generation_request(
             user_id=501,
+            chat_id=501,
             model_key="nano_banana",
             model_endpoint="/api/v3/nano-banana",
             prompt="Prompt",
@@ -2049,19 +2499,19 @@ async def test_poll_generation_result_keeps_completed_status_when_document_deliv
         async def submit_generation(self, model_key: str, payload: dict[str, object]):
             return SimpleNamespace(prediction_id="pred-complete")
 
-        async def poll_until_complete(self, prediction_id: str, cancel_event=None, timeout_seconds=600, interval=60):
+        async def poll_until_complete(self, prediction_id: str, cancel_event=None, timeout_seconds=600, interval=60, **kwargs):
             return SimpleNamespace(raw_response={"nsfw_flags": None}, outputs=["https://example.com/output.jpg"])
 
         async def close(self) -> None:
             return None
 
-    async def fake_send_generation_outputs(bot, chat_id: int, output_urls: list[str], user_id=None) -> bool:
-        await generations.safe_send_bot_message(
-            bot,
-            chat_id,
-            "⚠️ Файл сгенерирован, но Telegram не смог доставить его. Попробуйте повторить позже.",
+    async def fake_send_generation_outputs(*args, **kwargs):
+        return generations.OutputDeliveryResult(
+            success=False,
+            method="document",
+            error_code=generations.ErrorCode.E009_TELEGRAM_DELIVERY_FAILED,
+            error_message="Telegram delivery failed",
         )
-        return False
 
     monkeypatch.setattr(generations, "WavespeedService", SuccessfulWavespeedService)
     monkeypatch.setattr(generations, "send_generation_outputs", fake_send_generation_outputs)
@@ -2071,17 +2521,17 @@ async def test_poll_generation_result_keeps_completed_status_when_document_deliv
 
     await generations.poll_generation_result(
         bot=bot,
-        state=state,
         user_id=501,
         chat_id=501,
         generation_request_id=generation.id,
+        prediction_id="pred-complete",
         model_key="nano_banana",
         cost=1,
-        payload={"prompt": "Prompt"},
         temp_input_path=None,
     )
 
     async with session_maker() as session:
-        assert await get_generation_status(session, generation.id) == GenerationRequestStatus.COMPLETED
+        assert await get_generation_status(session, generation.id) == GenerationRequestStatus.DELIVERY_FAILED
+        assert await get_user_balance(session, 501) == 5
 
-    assert bot.messages[-1] == "⚠️ Файл сгенерирован, но Telegram не смог доставить его. Попробуйте повторить позже."
+    assert bot.messages[-1] == "❌ Ошибка E009: файл готов, но Telegram не смог его доставить. Кредит возвращён."

@@ -76,6 +76,26 @@ class Settings(BaseSettings):
         default=30,
         description="TTL временных media-файлов в минутах",
     )
+    max_parallel_generations_per_user: int = Field(
+        default=3,
+        description="Максимальное количество активных generation_request на пользователя",
+    )
+    wavespeed_poll_fast_seconds: int = Field(
+        default=30,
+        description="Интервал polling Wavespeed в первые 5 минут",
+    )
+    wavespeed_poll_normal_seconds: int = Field(
+        default=60,
+        description="Интервал polling Wavespeed после 5 минут",
+    )
+    wavespeed_poll_slow_seconds: int = Field(
+        default=120,
+        description="Интервал polling Wavespeed после 15 минут",
+    )
+    wavespeed_poll_timeout_seconds: int = Field(
+        default=1800,
+        description="Общий timeout polling Wavespeed в секундах",
+    )
     store_input_media: bool = Field(
         default=False,
         description="Флаг совместимости: не сохранять входные media в БД",
@@ -214,6 +234,11 @@ except Exception as e:
         f"- PUBLIC_BASE_URL\n"
         f"- TEMP_MEDIA_DIR (опционально, по умолчанию tmp/media)\n"
         f"- TEMP_MEDIA_TTL_MINUTES (опционально, по умолчанию 30)\n"
+        f"- MAX_PARALLEL_GENERATIONS_PER_USER (опционально, по умолчанию 3)\n"
+        f"- WAVESPEED_POLL_FAST_SECONDS (опционально, по умолчанию 30)\n"
+        f"- WAVESPEED_POLL_NORMAL_SECONDS (опционально, по умолчанию 60)\n"
+        f"- WAVESPEED_POLL_SLOW_SECONDS (опционально, по умолчанию 120)\n"
+        f"- WAVESPEED_POLL_TIMEOUT_SECONDS (опционально, по умолчанию 1800)\n"
         f"- STORE_INPUT_MEDIA (опционально, по умолчанию false)\n"
         f"- STORE_OUTPUT_URLS (опционально, по умолчанию false)\n"
         f"- TELEGRAM_MAX_DOCUMENT_SIZE_MB (опционально, по умолчанию 50)\n"
