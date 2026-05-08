@@ -21,16 +21,13 @@ TEMP_MEDIA_DIR=tmp/media
 TEMP_MEDIA_TTL_MINUTES=30
 TELEGRAM_STARS_WALLET_BOT_USERNAME=
 TELEGRAM_STARS_RETURN_BOT_USERNAME=
+TELEGRAM_STARS_WEBHOOK_SECRET=
 MAIN_BOT_USERNAME=
 CRYPTO_PROVIDER=
 CRYPTO_WEBHOOK_SECRET=
-CRYPTO_WALLET_BTC=
-CRYPTO_WALLET_ETH=
-CRYPTO_WALLET_USDT_TRC20=
-CRYPTO_WALLET_USDT_ERC20=
 NOWPAYMENTS_API_KEY=
 NOWPAYMENTS_IPN_SECRET=
-NOWPAYMENTS_BASE_URL=https://api.nowpayments.io/v1
+NOWPAYMENTS_BASE_URL=https://api.nowpayments.io
 NOWPAYMENTS_IPN_CALLBACK_URL=
 STORE_INPUT_MEDIA=false
 STORE_OUTPUT_URLS=false
@@ -49,17 +46,14 @@ STORE_OUTPUT_URLS=false
 | `temp_media_ttl_minutes` | `int` | ❌ | `30` | TTL временных файлов на диске |
 | `telegram_stars_wallet_bot_username` | `str` | ❌ | `""` | Username внешнего wallet bot для Telegram Stars без `@` |
 | `telegram_stars_return_bot_username` | `str` | ❌ | `""` | Username текущего бота для возврата из wallet bot без `@` |
+| `telegram_stars_webhook_secret` | `str` | ❌ | `""` | Секрет `X-Webhook-Secret` для `POST /webhooks/stars-wallet` |
 | `main_bot_username` | `str` | ❌ | `""` | Username основного бота без `@` для возврата после внешних оплат |
 | `crypto_provider` | `str` | ❌ | `""` | Имя будущего crypto payment provider |
 | `crypto_webhook_secret` | `str` | ❌ | `""` | Секрет будущих crypto webhook callbacks |
-| `crypto_wallet_btc` | `str` | ❌ | `""` | BTC wallet address для будущих crypto payments |
-| `crypto_wallet_eth` | `str` | ❌ | `""` | ETH wallet address для будущих crypto payments |
-| `crypto_wallet_usdt_trc20` | `str` | ❌ | `""` | USDT TRC20 wallet address для будущих crypto payments |
-| `crypto_wallet_usdt_erc20` | `str` | ❌ | `""` | USDT ERC20 wallet address для будущих crypto payments |
 | `nowpayments_api_key` | `str` | ❌ | `""` | NOWPayments API key для crypto top-ups |
 | `nowpayments_ipn_secret` | `str` | ❌ | `""` | NOWPayments IPN secret для проверки webhook signature |
-| `nowpayments_base_url` | `str` | ❌ | `https://api.nowpayments.io/v1` | NOWPayments API base URL |
-| `nowpayments_ipn_callback_url` | `str` | ❌ | `""` | Публичный URL `POST /webhooks/nowpayments` |
+| `nowpayments_base_url` | `str` | ❌ | `https://api.nowpayments.io` | NOWPayments API base URL |
+| `nowpayments_ipn_callback_url` | `str` | ❌ | `""` | Публичный URL `POST /webhooks/nowpayments`; если пусто, используется `PUBLIC_BASE_URL/webhooks/nowpayments` |
 | `store_input_media` | `bool` | ❌ | `false` | Всегда `false`, поле совместимости |
 | `store_output_urls` | `bool` | ❌ | `false` | Всегда `false`, поле совместимости |
 
@@ -78,16 +72,13 @@ TEMP_MEDIA_DIR=tmp/media
 TEMP_MEDIA_TTL_MINUTES=30
 TELEGRAM_STARS_WALLET_BOT_USERNAME=
 TELEGRAM_STARS_RETURN_BOT_USERNAME=
+TELEGRAM_STARS_WEBHOOK_SECRET=
 MAIN_BOT_USERNAME=
 CRYPTO_PROVIDER=
 CRYPTO_WEBHOOK_SECRET=
-CRYPTO_WALLET_BTC=
-CRYPTO_WALLET_ETH=
-CRYPTO_WALLET_USDT_TRC20=
-CRYPTO_WALLET_USDT_ERC20=
 NOWPAYMENTS_API_KEY=
 NOWPAYMENTS_IPN_SECRET=
-NOWPAYMENTS_BASE_URL=https://api.nowpayments.io/v1
+NOWPAYMENTS_BASE_URL=https://api.nowpayments.io
 NOWPAYMENTS_IPN_CALLBACK_URL=
 STORE_INPUT_MEDIA=false
 STORE_OUTPUT_URLS=false
@@ -95,19 +86,19 @@ STORE_OUTPUT_URLS=false
 
 ## Telegram Stars wallet bot
 
-Основной рабочий путь оплаты Telegram Stars остается внутри бота через Bot API invoice: `sendInvoice` с `currency=XTR` и пустым `provider_token`.
+Основной бот не отправляет Telegram Stars invoice. После выбора суммы он создает payment order и отправляет пользователя во внешний wallet bot. Начисление происходит только после verified callback на `POST /webhooks/stars-wallet`.
 
-Если задан `TELEGRAM_STARS_WALLET_BOT_USERNAME`, после выбора пакета Stars бот показывает дополнительный экран с кнопкой `Перейти к оплате` во внешний wallet bot и fallback-кнопкой `Оплатить здесь`, которая отправляет обычный invoice из текущего бота.
+После выбора пакета Stars бот показывает экран с кнопкой `Перейти к оплате ⭐` во внешний wallet bot. Fallback invoice в основном боте не используется.
 
-Возврат из wallet bot должен вести на `https://t.me/{TELEGRAM_STARS_RETURN_BOT_USERNAME}?start=paid_{payload}`. Такой возврат сам по себе не подтверждает оплату: бот показывает `Проверяем оплату...` и начисляет кредиты только если заказ уже был подтвержден будущей trusted wallet integration через `PaymentService.mark_external_stars_payment_paid(payload, external_payment_id)`.
+Возврат из wallet bot должен вести на `https://t.me/{TELEGRAM_STARS_RETURN_BOT_USERNAME}?start=paid_{payload}`. Такой возврат сам по себе не подтверждает оплату: бот показывает `Проверяем оплату...` и начисляет кредиты только если заказ уже был подтвержден wallet webhook через `POST /webhooks/stars-wallet` с корректным `X-Webhook-Secret`.
 
 ## NOWPayments crypto payments
 
 Crypto top-ups используют NOWPayments. После выбора пакета бот создает `provider="crypto"` payment order, отправляет запрос в NOWPayments и показывает пользователю кнопку оплаты. Один кредит стоит `0.01 USD`.
 
-Для production нужны `NOWPAYMENTS_API_KEY`, `NOWPAYMENTS_IPN_SECRET`, `NOWPAYMENTS_IPN_CALLBACK_URL` и `MAIN_BOT_USERNAME`. `NOWPAYMENTS_BASE_URL` можно оставить по умолчанию. Отдельные env для success/cancel URL не используются: оба URL строятся автоматически как `https://t.me/{MAIN_BOT_USERNAME}`. Если `MAIN_BOT_USERNAME` пустой, сервис пишет warning и отправляет в NOWPayments fallback `https://t.me`.
+Для production нужны `NOWPAYMENTS_API_KEY` и `NOWPAYMENTS_IPN_SECRET`. `NOWPAYMENTS_BASE_URL` можно оставить по умолчанию. Если `NOWPAYMENTS_IPN_CALLBACK_URL` пустой, callback строится как `PUBLIC_BASE_URL/webhooks/nowpayments`. Отдельные env для success/cancel URL не используются: оба URL строятся автоматически как `https://t.me/{MAIN_BOT_USERNAME}`. Если `MAIN_BOT_USERNAME` пустой, сервис пишет warning и отправляет в NOWPayments fallback `https://t.me`.
 
-Webhook `POST /webhooks/nowpayments` проверяет `x-nowpayments-sig`. Статусы `finished` и `confirmed` начисляют кредиты идемпотентно; `failed`, `expired`, `refunded` помечают заказ failed; `waiting`, `confirming`, `sending`, `partially_paid` остаются pending.
+Webhook `POST /webhooks/nowpayments` проверяет `x-nowpayments-sig`. Только статус `finished` начисляет кредиты идемпотентно; `failed`, `expired`, `refunded` помечают заказ failed; `waiting`, `confirming`, `sending`, `partially_paid` остаются pending.
 
 ## 🚀 Использование конфигурации в коде
 

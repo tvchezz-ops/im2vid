@@ -137,25 +137,35 @@ TEMP_MEDIA_TTL_MINUTES=30
 STORE_INPUT_MEDIA=false
 STORE_OUTPUT_URLS=false
 MAIN_BOT_USERNAME=
+TELEGRAM_STARS_WALLET_BOT_USERNAME=
+TELEGRAM_STARS_RETURN_BOT_USERNAME=
+TELEGRAM_STARS_WEBHOOK_SECRET=
 CRYPTO_PROVIDER=
 CRYPTO_WEBHOOK_SECRET=
-CRYPTO_WALLET_BTC=
-CRYPTO_WALLET_ETH=
-CRYPTO_WALLET_USDT_TRC20=
-CRYPTO_WALLET_USDT_ERC20=
+NOWPAYMENTS_API_KEY=
+NOWPAYMENTS_IPN_SECRET=
+NOWPAYMENTS_BASE_URL=https://api.nowpayments.io
+NOWPAYMENTS_IPN_CALLBACK_URL=
 ```
 
-## Crypto payment integration TODO
+## Crypto Payments With NOWPayments
 
-Crypto payments are prepared as a future integration only. The balance top-up screen shows a `₿ Crypto` button and responds with `Crypto payments are coming soon.`
+Crypto top-ups use NOWPayments. The balance top-up screen shows a `₿ Crypto` option, lets the user select a credit package, creates a NOWPayments payment, and shows the returned asset, network, amount, address, and payment page button when `invoice_url` is present.
 
-Current scaffolding:
+Required production env:
 
-- `CRYPTO_PROVIDER` and `CRYPTO_WEBHOOK_SECRET` are placeholders for a future provider.
-- `app/services/crypto_payments.py` defines `CryptoPaymentProvider`, `CryptoInvoice`, `CryptoPaymentStatus`, and `StubCryptoPaymentProvider`.
-- The stub provider creates draft crypto orders in the database and never credits balances automatically.
+- `NOWPAYMENTS_API_KEY`
+- `NOWPAYMENTS_IPN_SECRET`
+- `NOWPAYMENTS_BASE_URL`, default `https://api.nowpayments.io`
+- `NOWPAYMENTS_IPN_CALLBACK_URL`, optional. If empty, the bot uses `PUBLIC_BASE_URL/webhooks/nowpayments`.
 
-Before enabling real crypto payments, connect a trusted provider webhook/API verification path and credit users only after a verified paid callback. Return flows or draft orders must never be treated as proof of payment.
+The webhook endpoint is `POST /webhooks/nowpayments`. It verifies `x-nowpayments-sig` with HMAC SHA512. Credits are added only when a verified webhook has `payment_status == finished`; client-side callbacks and return links are never treated as proof of payment. Repeated webhooks are idempotent and do not add credits twice.
+
+## Telegram Stars Wallet Payments
+
+Telegram Stars payments are created in the main bot but paid in the external wallet bot. After a user selects a Stars amount, the main bot creates a `payment_order` with `status="created"` and sends a URL button to `https://t.me/{TELEGRAM_STARS_WALLET_BOT_USERNAME}?start={payload}`. Returning to the main bot never credits the balance by itself.
+
+The trusted wallet callback endpoint is `POST /webhooks/stars-wallet`. It requires `X-Webhook-Secret` to match `TELEGRAM_STARS_WEBHOOK_SECRET`, checks the payload and amount, credits only once, stores `external_payment_id`, and notifies the user.
 
 Для больших результатов генерации бот показывает короткую ссылку вида `PUBLIC_BASE_URL/d/{token}`, а не прямой длинный Cloudflare R2 presigned URL. По этой короткой ссылке пользователь сначала попадает на отдельную HTML-страницу скачивания с названием файла, сроком действия ссылки и кнопкой `Скачать файл`; только route `PUBLIC_BASE_URL/d/{token}/download` генерирует свежий временный signed URL и делает redirect. В базе хранится только token, `r2_object_key`, имя файла, размер, content type, срок жизни и счётчик использований; полный signed URL не сохраняется и не логируется.
 

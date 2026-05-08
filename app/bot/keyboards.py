@@ -371,6 +371,17 @@ def get_profile_keyboard(*, send_results_as_files: bool, lang: str = "en") -> In
     )
 
 
+def build_top_up_method_keyboard(lang: str = "en") -> InlineKeyboardMarkup:
+    """Клавиатура выбора способа пополнения баланса."""
+    return InlineKeyboardMarkup(
+        inline_keyboard=[
+            [InlineKeyboardButton(text=f"⭐ {t('payments.telegram_stars', lang)}", callback_data="pay:method:stars")],
+            [InlineKeyboardButton(text=t("payments.crypto", lang), callback_data="pay:crypto")],
+            [InlineKeyboardButton(text=get_button_text("payments.back_to_profile", lang), callback_data="pay:back:profile")],
+        ]
+    )
+
+
 def build_stars_top_up_keyboard(lang: str = "en") -> InlineKeyboardMarkup:
     """Клавиатура выбора пакета Telegram Stars."""
     rows = [
@@ -385,14 +396,6 @@ def build_stars_top_up_keyboard(lang: str = "en") -> InlineKeyboardMarkup:
     rows.append(
         [
             InlineKeyboardButton(
-                text=t("payments.crypto", lang),
-                callback_data="pay:crypto",
-            )
-        ]
-    )
-    rows.append(
-        [
-            InlineKeyboardButton(
                 text=get_button_text("payments.back_to_profile", lang),
                 callback_data="pay:back:profile",
             )
@@ -401,28 +404,12 @@ def build_stars_top_up_keyboard(lang: str = "en") -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(inline_keyboard=rows)
 
 
-def build_stars_payment_method_keyboard(
-    *,
-    order_id: str,
-    wallet_payment_url: str,
-    lang: str = "en",
-) -> InlineKeyboardMarkup:
-    """Клавиатура выбора внешнего wallet bot или invoice в текущем боте."""
+def build_stars_wallet_redirect_keyboard(*, wallet_payment_url: str, lang: str = "en") -> InlineKeyboardMarkup:
+    """Клавиатура перехода во внешний Stars wallet bot."""
     return InlineKeyboardMarkup(
         inline_keyboard=[
-            [InlineKeyboardButton(text=t("payments.open_wallet_bot", lang), url=wallet_payment_url)],
-            [
-                InlineKeyboardButton(
-                    text=get_button_text("payments.pay_here", lang),
-                    callback_data=validate_callback_length(f"pay:invoice:{order_id}"),
-                )
-            ],
-            [
-                InlineKeyboardButton(
-                    text=get_button_text("payments.back_to_profile", lang),
-                    callback_data="pay:back:profile",
-                )
-            ],
+            [InlineKeyboardButton(text=t("payments.open_stars_wallet", lang), url=wallet_payment_url)],
+            [InlineKeyboardButton(text=get_button_text("payments.back_to_profile", lang), callback_data="pay:back:profile")],
         ]
     )
 
@@ -448,11 +435,12 @@ def build_crypto_top_up_keyboard(lang: str = "en") -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(inline_keyboard=rows)
 
 
-def build_crypto_payment_keyboard(*, payment_url: str, order_id: str, lang: str = "en") -> InlineKeyboardMarkup:
+def build_crypto_payment_keyboard(*, payment_url: str | None, lang: str = "en") -> InlineKeyboardMarkup:
     """Клавиатура оплаты crypto через NOWPayments."""
-    return InlineKeyboardMarkup(
-        inline_keyboard=[
-            [InlineKeyboardButton(text=t("payments.external_open", lang), url=payment_url)],
-            [InlineKeyboardButton(text=t("payments.checking_payment", lang), callback_data=validate_callback_length(f"pay:crypto:check:{order_id}"))],
-        ]
+    rows = []
+    if payment_url:
+        rows.append([InlineKeyboardButton(text=t("payments.open_payment_page", lang), url=payment_url)])
+    rows.append(
+        [InlineKeyboardButton(text=get_button_text("payments.back_to_profile", lang), callback_data="pay:back:profile")]
     )
+    return InlineKeyboardMarkup(inline_keyboard=rows)

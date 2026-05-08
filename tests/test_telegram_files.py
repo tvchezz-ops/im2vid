@@ -31,7 +31,8 @@ def test_create_media_app_serves_temp_media_dir_on_media_route() -> None:
     )
     assert any(getattr(resource, "canonical", None) == "/d/{token}" for resource in resources)
     assert any(getattr(resource, "canonical", None) == "/d/{token}/download" for resource in resources)
-    assert all(getattr(resource, "canonical", None) != "/webhooks/nowpayments" for resource in resources)
+    assert any(getattr(resource, "canonical", None) == "/webhooks/nowpayments" for resource in resources)
+    assert any(getattr(resource, "canonical", None) == "/webhooks/stars-wallet" for resource in resources)
 
 
 @pytest.mark.asyncio

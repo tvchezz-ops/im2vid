@@ -22,8 +22,9 @@ from app.bot.keyboards import (
     build_models_keyboard,
     build_providers_keyboard,
     build_setting_options_keyboard,
-    build_stars_payment_method_keyboard,
+    build_stars_wallet_redirect_keyboard,
     build_stars_top_up_keyboard,
+    build_top_up_method_keyboard,
     build_wallet_bot_payment_keyboard,
     resolve_model_key_from_token,
     validate_callback_length,
@@ -166,7 +167,6 @@ def test_build_stars_top_up_keyboard_uses_expected_amount_callbacks() -> None:
         "1000 ⭐",
         "3000 ⭐",
         "5000 ⭐",
-        "₿ Crypto",
         "⬅️ Назад в профиль",
     ]
     assert [button.callback_data for button in buttons] == [
@@ -176,24 +176,28 @@ def test_build_stars_top_up_keyboard_uses_expected_amount_callbacks() -> None:
         "pay:stars:1000",
         "pay:stars:3000",
         "pay:stars:5000",
-        "pay:crypto",
         "pay:back:profile",
     ]
     assert all("Магазин" not in button.text for button in buttons)
 
 
-def test_build_stars_payment_method_keyboard_uses_wallet_and_invoice_fallback() -> None:
-    keyboard = build_stars_payment_method_keyboard(
-        order_id="11111111-1111-1111-1111-111111111111",
+def test_build_top_up_method_keyboard_uses_payment_methods() -> None:
+    keyboard = build_top_up_method_keyboard("ru")
+    buttons = [row[0] for row in keyboard.inline_keyboard]
+
+    assert [button.text for button in buttons] == ["⭐ Telegram Stars", "₿ Crypto", "⬅️ Назад в профиль"]
+    assert [button.callback_data for button in buttons] == ["pay:method:stars", "pay:crypto", "pay:back:profile"]
+
+
+def test_build_stars_wallet_redirect_keyboard_uses_single_wallet_url() -> None:
+    keyboard = build_stars_wallet_redirect_keyboard(
         wallet_payment_url="https://t.me/wallet_bot?start=stars_token",
         lang="ru",
     )
 
-    assert keyboard.inline_keyboard[0][0].text == "Перейти к оплате"
+    assert keyboard.inline_keyboard[0][0].text == "Перейти к оплате ⭐"
     assert keyboard.inline_keyboard[0][0].url == "https://t.me/wallet_bot?start=stars_token"
-    assert keyboard.inline_keyboard[1][0].text == "⭐ Оплатить здесь"
-    assert keyboard.inline_keyboard[1][0].callback_data == "pay:invoice:11111111-1111-1111-1111-111111111111"
-    assert keyboard.inline_keyboard[2][0].text == "⬅️ Назад в профиль"
+    assert keyboard.inline_keyboard[1][0].text == "⬅️ Назад в профиль"
 
 
 def test_build_wallet_bot_payment_keyboard_uses_single_pay_url_button() -> None:

@@ -14,7 +14,7 @@ from app.utils import logger
 
 
 NOWPAYMENTS_WEBHOOK_PATH = "/webhooks/nowpayments"
-NOWPAYMENTS_PAID_STATUSES = {"finished", "confirmed"}
+NOWPAYMENTS_PAID_STATUSES = {"finished"}
 NOWPAYMENTS_FAILED_STATUSES = {"failed", "expired", "refunded"}
 NOWPAYMENTS_PENDING_STATUSES = {"waiting", "confirming", "sending", "partially_paid"}
 

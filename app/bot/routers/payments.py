@@ -2,22 +2,25 @@
 from __future__ import annotations
 
 from aiogram import Router
-from aiogram.types import CallbackQuery, LabeledPrice, Message, PreCheckoutQuery
+from aiogram.types import CallbackQuery
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from urllib.parse import quote
-from uuid import UUID
 
 from app.bot.keyboards import (
-    build_stars_payment_method_keyboard,
+    build_crypto_payment_keyboard,
+    build_crypto_top_up_keyboard,
     build_stars_top_up_keyboard,
+    build_stars_wallet_redirect_keyboard,
+    build_top_up_method_keyboard,
     get_profile_keyboard,
 )
 from app.bot.routers.profile import build_profile_text
-from app.config import settings
-from app.db import PaymentProvider, PaymentRepository, UserRepository
+from app.config import is_nowpayments_configured, settings
+from app.db import UserRepository
 from app.i18n import get_user_language, t
-from app.services.payments import ALLOWED_STARS_AMOUNTS, PaymentOrderNotFoundError, PaymentService
+from app.services.nowpayments import NOWPaymentsProvider
+from app.services.payments import ALLOWED_STARS_AMOUNTS, PaymentService
 from app.utils import logger
 
 
@@ -26,6 +29,18 @@ router = Router()
 
 @router.callback_query(lambda cb: cb.data == "profile:top_up_balance")
 async def show_stars_top_up_menu(callback: CallbackQuery) -> None:
+    """Показать меню выбора способа оплаты."""
+    lang = get_user_language(getattr(callback.from_user, "language_code", None))
+    logger.info({"action": "payment_menu_opened", "user_id": callback.from_user.id})
+    await callback.message.edit_text(
+        t("payments.choose_method", lang),
+        reply_markup=build_top_up_method_keyboard(lang),
+    )
+    await callback.answer()
+
+
+@router.callback_query(lambda cb: cb.data == "pay:method:stars")
+async def show_stars_amount_menu(callback: CallbackQuery) -> None:
     """Показать меню выбора количества Telegram Stars."""
     lang = get_user_language(getattr(callback.from_user, "language_code", None))
     await callback.message.edit_text(
@@ -51,10 +66,27 @@ async def back_to_profile(callback: CallbackQuery, session: AsyncSession) -> Non
 
 
 @router.callback_query(lambda cb: cb.data == "pay:crypto")
-async def show_crypto_payments_soon(callback: CallbackQuery) -> None:
-    """Показать заглушку crypto payments."""
+async def show_crypto_packages(callback: CallbackQuery) -> None:
+    """Показать crypto-пакеты кредитов."""
     lang = get_user_language(getattr(callback.from_user, "language_code", None))
-    await callback.answer(t("payments.crypto_coming_soon", lang), show_alert=True)
+    if not is_nowpayments_configured():
+        logger.info({"action": "crypto_not_configured", "user_id": callback.from_user.id})
+        await callback.answer(t("payments.crypto_not_configured", lang), show_alert=True)
+        return
+    await callback.message.edit_text(
+        t("payments.choose_method", lang),
+        reply_markup=build_crypto_top_up_keyboard(lang),
+    )
+    await callback.answer()
+
+
+def _parse_crypto_amount(callback_data: str | None) -> int | None:
+    if callback_data is None or not callback_data.startswith("pay:crypto:"):
+        return None
+    amount_text = callback_data.removeprefix("pay:crypto:")
+    if not amount_text.isdigit():
+        return None
+    return int(amount_text)
 
 
 def _parse_stars_amount(callback_data: str | None) -> int | None:
@@ -88,41 +120,35 @@ def build_wallet_return_url(payload: str) -> str | None:
     return f"https://t.me/{bot_username}?start=paid_{quote(payload, safe='')}"
 
 
-async def send_stars_invoice(message: Message, order, lang: str) -> None:
-    """Send a Telegram Stars Bot API invoice for an existing order."""
-    await message.answer_invoice(
-        title=t("payments.invoice_title", lang),
-        description=t("payments.invoice_description", lang, amount=order.amount),
-        payload=order.payload,
-        currency="XTR",
-        provider_token="",
-        prices=[LabeledPrice(label=t("payments.invoice_label", lang, amount=order.amount), amount=order.amount)],
-    )
-
-
 @router.callback_query(lambda cb: cb.data.startswith("pay:stars:"))
 async def choose_stars_amount(callback: CallbackQuery, session: AsyncSession) -> None:
-    """Create a Telegram Stars order and send a Bot API invoice."""
+    """Create a Telegram Stars order and redirect to the external wallet bot."""
     lang = get_user_language(getattr(callback.from_user, "language_code", None))
     amount = _parse_stars_amount(callback.data)
+    logger.info({"action": "stars_amount_selected", "user_id": callback.from_user.id, "amount": amount})
     if amount not in ALLOWED_STARS_AMOUNTS:
         await callback.answer(t("payments.invalid_amount", lang), show_alert=True)
         return
 
     try:
-        order = await PaymentService(session).create_stars_order(callback.from_user.id, amount)
         wallet_bot_username = _normalize_bot_username(settings.telegram_stars_wallet_bot_username)
-        if wallet_bot_username:
-            await callback.message.edit_text(
-                t("payments.external_ready", lang),
-                reply_markup=build_stars_payment_method_keyboard(
-                    order_id=str(order.id),
-                    wallet_payment_url=build_wallet_payment_url_for_payload(wallet_bot_username, order.payload),
-                    lang=lang,
-                ),
-            )
-        else:
-            await send_stars_invoice(callback.message, order, lang)
+        if not wallet_bot_username:
+            await callback.answer(t("payments.invoice_error", lang), show_alert=True)
+            return
+        order = await PaymentService(session).create_stars_order(callback.from_user.id, amount)
+        wallet_payment_url = build_wallet_payment_url_for_payload(wallet_bot_username, order.payload)
+        logger.info(
+            {
+                "action": "wallet_redirect_created",
+                "user_id": callback.from_user.id,
+                "order_id": str(order.id),
+                "amount": amount,
+            }
+        )
+        await callback.message.edit_text(
+            t("payments.external_ready", lang),
+            reply_markup=build_stars_wallet_redirect_keyboard(wallet_payment_url=wallet_payment_url, lang=lang),
+        )
         await callback.answer()
     except Exception as exc:
         logger.exception(
@@ -136,94 +162,46 @@ async def choose_stars_amount(callback: CallbackQuery, session: AsyncSession) ->
         await callback.answer(t("payments.invoice_error", lang), show_alert=True)
 
 
-@router.callback_query(lambda cb: cb.data.startswith("pay:invoice:"))
-async def pay_stars_invoice_here(callback: CallbackQuery, session: AsyncSession) -> None:
-    """Fallback button: pay an existing Stars order via sendInvoice in this bot."""
+@router.callback_query(lambda cb: cb.data.startswith("pay:crypto:"))
+async def choose_crypto_amount(callback: CallbackQuery, session: AsyncSession) -> None:
+    """Создать NOWPayments payment и показать пользователю payment details."""
     lang = get_user_language(getattr(callback.from_user, "language_code", None))
-    raw_order_id = callback.data.removeprefix("pay:invoice:") if callback.data else ""
+    amount = _parse_crypto_amount(callback.data)
+    if amount not in ALLOWED_STARS_AMOUNTS:
+        await callback.answer(t("payments.invalid_amount", lang), show_alert=True)
+        return
+    if not is_nowpayments_configured():
+        logger.info({"action": "crypto_not_configured", "user_id": callback.from_user.id})
+        await callback.answer(t("payments.crypto_not_configured", lang), show_alert=True)
+        return
+
     try:
-        order_id = UUID(raw_order_id)
-    except ValueError:
-        await callback.answer(t("payments.invoice_error", lang), show_alert=True)
-        return
-
-    order = await PaymentRepository(session).get_payment_order_by_id(order_id)
-    if order is None or order.user_id != callback.from_user.id or order.provider != PaymentProvider.TELEGRAM_STARS.value:
-        logger.warning(
-            {
-                "action": "telegram_stars_invoice_order_not_found",
-                "user_id": callback.from_user.id,
-                "order_id": raw_order_id,
-                "order_found": order is not None,
-            }
+        invoice = await NOWPaymentsProvider(session).create_invoice(
+            user_id=callback.from_user.id,
+            amount_credits=amount,
+            asset="USDT",
+            network="TRC20",
         )
-        await callback.answer(t("payments.invoice_error", lang), show_alert=True)
-        return
-
-    await send_stars_invoice(callback.message, order, lang)
-    await callback.answer()
-
-
-@router.pre_checkout_query()
-async def process_stars_pre_checkout(pre_checkout_query: PreCheckoutQuery, session: AsyncSession) -> None:
-    """Validate Telegram Stars pre-checkout queries."""
-    lang = get_user_language(getattr(pre_checkout_query.from_user, "language_code", None))
-    order = await PaymentRepository(session).get_payment_order_by_payload(pre_checkout_query.invoice_payload)
-    if (
-        order is not None
-        and order.provider == PaymentProvider.TELEGRAM_STARS.value
-        and order.amount == pre_checkout_query.total_amount
-    ):
-        await pre_checkout_query.answer(ok=True)
-        return
-
-    logger.warning(
-        {
-            "action": "telegram_stars_pre_checkout_rejected",
-            "user_id": pre_checkout_query.from_user.id,
-            "total_amount": pre_checkout_query.total_amount,
-            "order_found": order is not None,
-        }
-    )
-    await pre_checkout_query.answer(ok=False, error_message=t("payments.pre_checkout_failed", lang))
-
-
-@router.message(lambda message: getattr(message, "successful_payment", None) is not None)
-async def process_successful_stars_payment(message: Message, session: AsyncSession) -> None:
-    """Complete a Telegram Stars payment after successful_payment."""
-    lang = get_user_language(getattr(message.from_user, "language_code", None))
-    successful_payment = message.successful_payment
-    try:
-        order = await PaymentService(session).complete_stars_payment(
-            payload=successful_payment.invoice_payload,
-            telegram_payment_charge_id=successful_payment.telegram_payment_charge_id,
-            total_amount=successful_payment.total_amount,
+        logger.info({"action": "crypto_invoice_created", "user_id": callback.from_user.id, "amount": amount})
+        await callback.message.edit_text(
+            t(
+                "payments.crypto_payment_details",
+                lang,
+                asset=invoice.asset,
+                network=invoice.network,
+                amount=invoice.amount,
+                address=invoice.address,
+            ),
+            reply_markup=build_crypto_payment_keyboard(payment_url=invoice.payment_url, lang=lang),
         )
-        user = await UserRepository(session).get_by_id(order.user_id)
-        balance = user.balance if user is not None else order.credits
-        await message.answer(t("payments.received", lang, credits=order.credits, balance=balance))
-    except PaymentOrderNotFoundError as exc:
-        logger.warning(
-            {
-                "action": "telegram_stars_payment_order_not_found",
-                "user_id": getattr(message.from_user, "id", None),
-                "error": exc.__class__.__name__,
-            }
-        )
-        await message.answer(t("payments.complete_error", lang))
+        await callback.answer()
     except Exception as exc:
         logger.exception(
             {
-                "action": "telegram_stars_payment_complete_error",
-                "user_id": getattr(message.from_user, "id", None),
+                "action": "nowpayments_create_payment_error",
+                "user_id": callback.from_user.id,
+                "amount": amount,
                 "error": exc.__class__.__name__,
             }
         )
-        await message.answer(t("payments.complete_error", lang))
-
-
-@router.callback_query(lambda cb: cb.data.startswith("pay:crypto:"))
-async def reject_crypto_payment_callbacks(callback: CallbackQuery) -> None:
-    """Keep crafted crypto callbacks as coming-soon until a trusted provider is connected."""
-    lang = get_user_language(getattr(callback.from_user, "language_code", None))
-    await callback.answer(t("payments.crypto_coming_soon", lang), show_alert=True)
+        await callback.answer(t("payments.invoice_error", lang), show_alert=True)

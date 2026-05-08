@@ -96,6 +96,10 @@ class Settings(BaseSettings):
         default="",
         description="Username текущего бота для возврата из wallet bot без @",
     )
+    telegram_stars_webhook_secret: str = Field(
+        default="",
+        description="Секрет webhook callbacks от Telegram Stars wallet bot",
+    )
     wallet_bot_username: str = Field(
         default="",
         description="Username отдельного wallet bot для Telegram Stars без @",
@@ -112,13 +116,9 @@ class Settings(BaseSettings):
         default="",
         description="Секрет будущих crypto webhook callbacks",
     )
-    crypto_wallet_btc: str = Field(default="", description="BTC wallet address для будущих crypto payments")
-    crypto_wallet_eth: str = Field(default="", description="ETH wallet address для будущих crypto payments")
-    crypto_wallet_usdt_trc20: str = Field(default="", description="USDT TRC20 wallet address для будущих crypto payments")
-    crypto_wallet_usdt_erc20: str = Field(default="", description="USDT ERC20 wallet address для будущих crypto payments")
     nowpayments_api_key: str = Field(default="", description="NOWPayments API key")
     nowpayments_ipn_secret: str = Field(default="", description="NOWPayments IPN secret")
-    nowpayments_base_url: str = Field(default="https://api.nowpayments.io/v1", description="NOWPayments API base URL")
+    nowpayments_base_url: str = Field(default="https://api.nowpayments.io", description="NOWPayments API base URL")
     nowpayments_ipn_callback_url: str = Field(default="", description="NOWPayments IPN callback URL")
     r2_endpoint_url: str = Field(
         default="",
@@ -193,7 +193,6 @@ def is_nowpayments_configured() -> bool:
             settings.nowpayments_api_key.strip(),
             settings.nowpayments_ipn_secret.strip(),
             settings.nowpayments_base_url.strip(),
-            settings.nowpayments_ipn_callback_url.strip(),
         )
     )
 
@@ -217,18 +216,15 @@ except Exception as e:
         f"- TELEGRAM_SAFE_DOCUMENT_SIZE_MB (опционально, по умолчанию 45)\n"
         f"- TELEGRAM_STARS_WALLET_BOT_USERNAME (опционально, для внешнего wallet bot)\n"
         f"- TELEGRAM_STARS_RETURN_BOT_USERNAME (опционально, для возврата из wallet bot)\n"
+        f"- TELEGRAM_STARS_WEBHOOK_SECRET (опционально, для webhook от wallet bot)\n"
         f"- WALLET_BOT_USERNAME (опционально, username отдельного wallet bot)\n"
         f"- MAIN_BOT_USERNAME (опционально, для возврата после внешних оплат)\n"
         f"- CRYPTO_PROVIDER (опционально, для будущего crypto provider)\n"
         f"- CRYPTO_WEBHOOK_SECRET (опционально, для будущих crypto webhooks)\n"
-        f"- CRYPTO_WALLET_BTC (опционально)\n"
-        f"- CRYPTO_WALLET_ETH (опционально)\n"
-        f"- CRYPTO_WALLET_USDT_TRC20 (опционально)\n"
-        f"- CRYPTO_WALLET_USDT_ERC20 (опционально)\n"
         f"- NOWPAYMENTS_API_KEY (опционально, для crypto payments)\n"
         f"- NOWPAYMENTS_IPN_SECRET (опционально, для crypto webhooks)\n"
-        f"- NOWPAYMENTS_BASE_URL (опционально, по умолчанию https://api.nowpayments.io/v1)\n"
-        f"- NOWPAYMENTS_IPN_CALLBACK_URL (опционально, для crypto webhooks)\n"
+        f"- NOWPAYMENTS_BASE_URL (опционально, по умолчанию https://api.nowpayments.io)\n"
+        f"- NOWPAYMENTS_IPN_CALLBACK_URL (опционально, иначе PUBLIC_BASE_URL/webhooks/nowpayments)\n"
         f"- R2_ENDPOINT_URL (опционально, для Cloudflare R2)\n"
         f"- R2_ACCESS_KEY_ID (опционально, для Cloudflare R2)\n"
         f"- R2_SECRET_ACCESS_KEY (опционально, для Cloudflare R2)\n"

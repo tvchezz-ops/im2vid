@@ -33,7 +33,16 @@ class FakeClient:
 
     async def post(self, url: str, json: dict[str, object], headers: dict[str, str]) -> FakeResponse:
         self.posts.append({"url": url, "json": json, "headers": headers})
-        return FakeResponse({"payment_id": "np-1", "payment_url": "https://nowpayments.test/pay/np-1"})
+        return FakeResponse(
+            {
+                "payment_id": "np-1",
+                "invoice_url": "https://nowpayments.test/pay/np-1",
+                "pay_address": "wallet-address",
+                "pay_amount": "1.00",
+                "pay_currency": "usdttrc20",
+                "order_id": "order-1",
+            }
+        )
 
     async def get(self, url: str, headers: dict[str, str]) -> FakeResponse:
         self.gets.append({"url": url, "headers": headers})
@@ -43,7 +52,7 @@ class FakeClient:
 @pytest.mark.asyncio
 async def test_create_payment_sends_callback_url_and_api_headers(monkeypatch) -> None:
     monkeypatch.setattr(settings, "nowpayments_api_key", "api-key")
-    monkeypatch.setattr(settings, "nowpayments_base_url", "https://api.nowpayments.test/v1")
+    monkeypatch.setattr(settings, "nowpayments_base_url", "https://api.nowpayments.test")
     monkeypatch.setattr(settings, "nowpayments_ipn_callback_url", "https://bot.test/webhooks/nowpayments")
     monkeypatch.setattr(settings, "main_bot_username", "main_bot")
     client = FakeClient()
@@ -71,7 +80,7 @@ async def test_create_payment_sends_callback_url_and_api_headers(monkeypatch) ->
 @pytest.mark.asyncio
 async def test_create_payment_uses_tme_fallback_without_main_bot_username(monkeypatch) -> None:
     monkeypatch.setattr(settings, "nowpayments_api_key", "api-key")
-    monkeypatch.setattr(settings, "nowpayments_base_url", "https://api.nowpayments.test/v1")
+    monkeypatch.setattr(settings, "nowpayments_base_url", "https://api.nowpayments.test")
     monkeypatch.setattr(settings, "nowpayments_ipn_callback_url", "https://bot.test/webhooks/nowpayments")
     monkeypatch.setattr(settings, "main_bot_username", "")
     client = FakeClient()

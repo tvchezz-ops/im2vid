@@ -1,13 +1,12 @@
-"""Interfaces for future crypto payment providers."""
+"""Crypto payment provider abstractions."""
 from __future__ import annotations
 
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
-from typing import Literal, Optional, Protocol
+from typing import Literal, Optional, Protocol, Union
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.config import settings
 from app.db import PaymentProvider, PaymentRepository
 
 
@@ -19,7 +18,7 @@ class CryptoInvoice:
     invoice_id: str
     asset: str
     network: str
-    amount: int
+    amount: Union[int, str]
     address: str
     expires_at: datetime
     payment_url: Optional[str] = None
@@ -66,7 +65,6 @@ class StubCryptoPaymentProvider:
 
         normalized_asset = asset.strip().upper()
         normalized_network = network.strip().upper()
-        address = _resolve_wallet_address(normalized_asset, normalized_network)
         order = await self.payment_repo.create_payment_order(
             user_id=user_id,
             provider=PaymentProvider.CRYPTO.value,
@@ -79,7 +77,7 @@ class StubCryptoPaymentProvider:
             order.id,
             asset=normalized_asset,
             network=normalized_network,
-            wallet_address=address,
+            wallet_address="",
             expected_amount=str(amount_credits),
             status="draft",
         )
@@ -89,22 +87,10 @@ class StubCryptoPaymentProvider:
             asset=normalized_asset,
             network=normalized_network,
             amount=amount_credits,
-            address=address,
+            address="",
             expires_at=datetime.now(timezone.utc) + timedelta(minutes=self.invoice_ttl_minutes),
             payment_url=None,
         )
 
     async def verify_payment(self, invoice_id: str) -> CryptoPaymentStatus:
         return CryptoPaymentStatus(status="pending")
-
-
-def _resolve_wallet_address(asset: str, network: str) -> str:
-    if asset == "BTC":
-        return settings.crypto_wallet_btc.strip()
-    if asset == "ETH":
-        return settings.crypto_wallet_eth.strip()
-    if asset == "USDT" and network == "TRC20":
-        return settings.crypto_wallet_usdt_trc20.strip()
-    if asset == "USDT" and network == "ERC20":
-        return settings.crypto_wallet_usdt_erc20.strip()
-    return ""
