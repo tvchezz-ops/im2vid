@@ -164,8 +164,8 @@ def _parse_stars_amount(callback_data: str | None) -> int | None:
     return int(amount_text)
 
 
-def _normalize_bot_username(username: str) -> str:
-    return username.strip().lstrip("@")
+def _normalize_bot_username(username: str | None) -> str:
+    return (username or "").strip().lstrip("@")
 
 
 def build_wallet_payment_url(wallet_bot_username: str, amount: int) -> str:
@@ -199,28 +199,25 @@ async def choose_stars_amount(callback: CallbackQuery, session: AsyncSession, st
         return
 
     try:
-        order = await PaymentService(session).create_stars_order(callback.from_user.id, amount)
-        wallet_bot_username = _normalize_bot_username(settings.telegram_stars_wallet_bot_username)
+        wallet_bot_username = _normalize_bot_username(settings.wallet_bot_username)
         if not wallet_bot_username:
             logger.info(
                 {
                     "action": "stars_wallet_not_configured",
                     "user_id": callback.from_user.id,
-                    "order_id": str(order.id),
                     "amount": amount,
                 }
             )
             await callback.answer(t("payments.stars_wallet_not_configured", lang), show_alert=True)
             return
+        order = await PaymentService(session).create_stars_order(callback.from_user.id, amount)
         wallet_payment_url = build_wallet_payment_url_for_payload(wallet_bot_username, order.payload)
         logger.info(
             {
-                "action": "stars_redirect_created",
-                "user_id": callback.from_user.id,
-                "order_id": str(order.id),
-                "amount": amount,
-                "wallet_bot_username": wallet_bot_username,
+                "action": "stars_wallet_redirect_created",
+                "wallet_bot": wallet_bot_username,
                 "payload_length": len(order.payload or ""),
+                "order_id": str(order.id),
             }
         )
         await safe_edit_message(

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import os
+from decimal import Decimal
 from types import SimpleNamespace
 
 import pytest
@@ -38,5 +39,33 @@ async def test_log_bot_identity_includes_bot_and_instance(monkeypatch, caplog) -
     )
 
 
+@pytest.mark.asyncio
+async def test_log_pricing_config_includes_credit_usd_price(monkeypatch, caplog) -> None:
+    monkeypatch.setattr(main.settings, "credit_usd_price", Decimal("0.013"))
+    caplog.set_level("INFO", logger="telegram_bot")
+    bot = main.TelegramBot.__new__(main.TelegramBot)
+
+    await bot.log_pricing_config()
+
+    assert any(
+        isinstance(record.msg, dict)
+        and record.msg == {"action": "pricing_config_loaded", "credit_usd_price": "0.013"}
+        for record in caplog.records
+    )
+
+
 def test_importing_main_does_not_start_polling() -> None:
     assert callable(main.main)
+
+
+@pytest.mark.asyncio
+async def test_log_wallet_bot_config_does_not_include_username(monkeypatch, caplog) -> None:
+    monkeypatch.setattr(main.settings, "wallet_bot_username", "my_wallet_bot")
+    caplog.set_level("INFO", logger="telegram_bot")
+    bot = main.TelegramBot.__new__(main.TelegramBot)
+
+    await bot.log_wallet_bot_config()
+
+    logs = [record.msg for record in caplog.records if isinstance(record.msg, dict)]
+    assert {"action": "wallet_bot_config_loaded", "configured": True} in logs
+    assert "my_wallet_bot" not in str(logs)

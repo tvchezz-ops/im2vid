@@ -3,8 +3,9 @@
 from __future__ import annotations
 
 from decimal import Decimal
+from typing import Optional
 
-from pydantic import Field
+from pydantic import Field, field_validator
 from pydantic_settings import (
     BaseSettings,
     DotEnvSettingsSource,
@@ -91,10 +92,6 @@ class Settings(BaseSettings):
         default=45,
         description="Безопасный размер документа для отправки через Telegram Bot API в МБ",
     )
-    telegram_stars_wallet_bot_username: str = Field(
-        default="",
-        description="Username внешнего wallet bot для Telegram Stars без @",
-    )
     telegram_stars_return_bot_username: str = Field(
         default="",
         description="Username текущего бота для возврата из wallet bot без @",
@@ -103,8 +100,9 @@ class Settings(BaseSettings):
         default="",
         description="Секрет webhook callbacks от Telegram Stars wallet bot",
     )
-    wallet_bot_username: str = Field(
-        default="",
+    wallet_bot_username: Optional[str] = Field(
+        default=None,
+        alias="WALLET_BOT_USERNAME",
         description="Username отдельного wallet bot для Telegram Stars без @",
     )
     main_bot_username: str = Field(
@@ -116,7 +114,7 @@ class Settings(BaseSettings):
     nowpayments_base_url: str = Field(default="https://api.nowpayments.io", description="NOWPayments API base URL")
     nowpayments_success_url: str = Field(default="", description="Optional NOWPayments success URL")
     nowpayments_cancel_url: str = Field(default="", description="Optional NOWPayments cancel URL")
-    credit_usd_price: Decimal = Field(default=Decimal("0.01"), description="USD price for one credit")
+    credit_usd_price: Decimal = Field(default=Decimal("0.013"), description="USD price for one credit")
     r2_endpoint_url: str = Field(
         default="",
         description="Endpoint URL для Cloudflare R2",
@@ -149,6 +147,14 @@ class Settings(BaseSettings):
         default_factory=list,
         description="Список ID администраторов (через запятую в .env, например: 123456789,987654321)",
     )
+
+    @field_validator("wallet_bot_username", mode="before")
+    @classmethod
+    def normalize_wallet_bot_username(cls, value: object) -> Optional[str]:
+        if value is None:
+            return None
+        username = str(value).strip().lstrip("@")
+        return username or None
 
     @classmethod
     def settings_customise_sources(
@@ -212,7 +218,6 @@ except Exception as e:
         f"- STORE_OUTPUT_URLS (опционально, по умолчанию false)\n"
         f"- TELEGRAM_MAX_DOCUMENT_SIZE_MB (опционально, по умолчанию 50)\n"
         f"- TELEGRAM_SAFE_DOCUMENT_SIZE_MB (опционально, по умолчанию 45)\n"
-        f"- TELEGRAM_STARS_WALLET_BOT_USERNAME (опционально, для внешнего wallet bot)\n"
         f"- TELEGRAM_STARS_RETURN_BOT_USERNAME (опционально, для возврата из wallet bot)\n"
         f"- TELEGRAM_STARS_WEBHOOK_SECRET (опционально, для webhook от wallet bot)\n"
         f"- WALLET_BOT_USERNAME (опционально, username отдельного wallet bot)\n"
@@ -222,7 +227,7 @@ except Exception as e:
         f"- NOWPAYMENTS_BASE_URL (опционально, по умолчанию https://api.nowpayments.io)\n"
         f"- NOWPAYMENTS_SUCCESS_URL (опционально, success redirect от NOWPayments)\n"
         f"- NOWPAYMENTS_CANCEL_URL (опционально, cancel redirect от NOWPayments)\n"
-        f"- CREDIT_USD_PRICE (опционально, по умолчанию 0.01)\n"
+        f"- CREDIT_USD_PRICE (опционально, по умолчанию 0.013)\n"
         f"- R2_ENDPOINT_URL (опционально, для Cloudflare R2)\n"
         f"- R2_ACCESS_KEY_ID (опционально, для Cloudflare R2)\n"
         f"- R2_SECRET_ACCESS_KEY (опционально, для Cloudflare R2)\n"

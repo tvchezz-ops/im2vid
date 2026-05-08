@@ -1,7 +1,8 @@
 """Payment service orchestration."""
 from __future__ import annotations
 
-import secrets
+import base64
+import uuid
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -11,6 +12,11 @@ from app.utils import logger
 
 ALLOWED_STARS_AMOUNTS = (100, 300, 500, 1000, 3000, 5000)
 TELEGRAM_DEEP_LINK_PAYLOAD_LIMIT = 64
+
+
+def build_deep_link_payload(order_id: uuid.UUID) -> str:
+    """Build a short Telegram-safe deep-link payload from an order id."""
+    return base64.urlsafe_b64encode(order_id.bytes).decode("ascii").rstrip("=")
 
 
 class PaymentOrderNotFoundError(ValueError):
@@ -29,19 +35,21 @@ class PaymentService:
         if stars_amount not in ALLOWED_STARS_AMOUNTS:
             raise ValueError("Unsupported Telegram Stars amount")
 
-        payload = f"stars_{secrets.token_urlsafe(24)}"
-        if len(payload) > TELEGRAM_DEEP_LINK_PAYLOAD_LIMIT:
-            raise ValueError("Telegram Stars payload is too long")
-
         order = await self.payment_repo.create_payment_order(
             user_id=user_id,
             provider=PaymentProvider.TELEGRAM_STARS.value,
             amount=stars_amount,
             credits=stars_amount,
             currency="XTR",
-            payload=payload,
+            payload=None,
             metadata={},
         )
+        payload = build_deep_link_payload(order.id)
+        if len(payload) > TELEGRAM_DEEP_LINK_PAYLOAD_LIMIT:
+            raise ValueError("Telegram Stars payload is too long")
+        order.payload = payload
+        await self.session.commit()
+        await self.session.refresh(order)
 
         logger.info(
             {

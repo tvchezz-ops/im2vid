@@ -138,15 +138,15 @@ INSTANCE_NAME=local-dev
 STORE_INPUT_MEDIA=false
 STORE_OUTPUT_URLS=false
 MAIN_BOT_USERNAME=
-TELEGRAM_STARS_WALLET_BOT_USERNAME=
 TELEGRAM_STARS_RETURN_BOT_USERNAME=
 TELEGRAM_STARS_WEBHOOK_SECRET=
+WALLET_BOT_USERNAME=
 NOWPAYMENTS_API_KEY=
 NOWPAYMENTS_IPN_SECRET=
 NOWPAYMENTS_BASE_URL=https://api.nowpayments.io
 NOWPAYMENTS_SUCCESS_URL=
 NOWPAYMENTS_CANCEL_URL=
-CREDIT_USD_PRICE=0.01
+CREDIT_USD_PRICE=0.013
 ```
 
 ## Crypto Payments With NOWPayments
@@ -160,13 +160,13 @@ Required production env:
 - `NOWPAYMENTS_BASE_URL`, default `https://api.nowpayments.io`
 - `NOWPAYMENTS_SUCCESS_URL`, optional success redirect from NOWPayments
 - `NOWPAYMENTS_CANCEL_URL`, optional cancel redirect from NOWPayments
-- `CREDIT_USD_PRICE`, default `0.01`
+- `CREDIT_USD_PRICE`, default `0.013`
 
 The webhook endpoint is `POST /webhooks/nowpayments`. It verifies `x-nowpayments-sig` with HMAC SHA512. Credits are added only when a verified webhook has `payment_status == finished` or `confirmed`; client-side callbacks and return links are never treated as proof of payment. Repeated webhooks are idempotent and do not add credits twice.
 
 ## Telegram Stars Wallet Payments
 
-Telegram Stars payments are created in the main bot but paid in the external wallet bot. After a user selects a Stars amount, the main bot creates a `payment_order` with `status="created"` and sends a URL button to `https://t.me/{TELEGRAM_STARS_WALLET_BOT_USERNAME}?start={payload}`. Returning to the main bot never credits the balance by itself.
+Telegram Stars payments are created in the main bot but paid in the external wallet bot. After a user selects a Stars amount, the main bot creates a `payment_order` with `status="created"` and sends a URL button to `https://t.me/{WALLET_BOT_USERNAME}?start={payload}`. Returning to the main bot never credits the balance by itself.
 
 The trusted wallet callback endpoint is `POST /webhooks/stars-wallet`. It requires `X-Webhook-Secret` to match `TELEGRAM_STARS_WEBHOOK_SECRET`, checks the payload and amount, credits only once, stores `external_payment_id`, and notifies the user.
 

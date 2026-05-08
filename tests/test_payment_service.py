@@ -16,7 +16,7 @@ os.environ.setdefault("PUBLIC_BASE_URL", "https://example.com")
 
 from app.db.base import Base
 from app.db.models import PaymentOrderStatus, PaymentProvider, User
-from app.services.payments import ALLOWED_STARS_AMOUNTS, PaymentService
+from app.services.payments import ALLOWED_STARS_AMOUNTS, PaymentService, build_deep_link_payload
 
 
 EXPECTED_STARS_AMOUNTS = (100, 300, 500, 1000, 3000, 5000)
@@ -50,7 +50,7 @@ async def test_create_stars_order_uses_one_star_to_one_credit(session_factory, c
         assert order.credits == 300
         assert order.currency == "XTR"
         assert order.payload is not None
-        assert order.payload.startswith("stars_")
+        assert order.payload == build_deep_link_payload(order.id)
         assert len(order.payload) <= 64
         assert re.fullmatch(r"[A-Za-z0-9_-]+", order.payload)
         assert any(
@@ -89,7 +89,7 @@ async def test_create_stars_order_generates_unique_payloads(session_factory) -> 
 
         payloads = [order.payload for order in orders]
         assert len(payloads) == len(set(payloads))
-        assert all(payload is not None and payload.startswith("stars_") and len(payload) <= 64 for payload in payloads)
+        assert all(payload is not None and len(payload) <= 64 and re.fullmatch(r"[A-Za-z0-9_-]+", payload) for payload in payloads)
 
 
 @pytest.mark.asyncio

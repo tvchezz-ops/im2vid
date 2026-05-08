@@ -53,6 +53,14 @@ class TelegramBot:
             }
         )
 
+    async def log_pricing_config(self):
+        """Log payment pricing config loaded for this process."""
+        logger.info({"action": "pricing_config_loaded", "credit_usd_price": str(settings.credit_usd_price)})
+
+    async def log_wallet_bot_config(self):
+        """Log whether the external Stars wallet bot is configured without exposing its username."""
+        logger.info({"action": "wallet_bot_config_loaded", "configured": bool(settings.wallet_bot_username)})
+
     async def setup_commands(self):
         """Установить команды бота."""
         commands = [
@@ -115,6 +123,8 @@ class TelegramBot:
                 logger.info("Skipping automatic database schema creation; use Alembic migrations")
 
             await self.log_bot_identity()
+            await self.log_pricing_config()
+            await self.log_wallet_bot_config()
             
             # Установка команд
             await self.setup_commands()

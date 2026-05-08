@@ -159,7 +159,8 @@ class NowPaymentsService:
 
 
 def _credits_to_usd(credits: int) -> str:
-    return f"{Decimal(credits) * settings.credit_usd_price:.2f}"
+    amount = (Decimal(credits) * settings.credit_usd_price).quantize(Decimal("0.01"))
+    return f"{amount:.2f}"
 
 
 def _normalize_price_amount(amount_usd: Decimal | float | str) -> float:
