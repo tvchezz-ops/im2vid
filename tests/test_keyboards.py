@@ -167,7 +167,7 @@ def test_build_stars_top_up_keyboard_uses_expected_amount_callbacks() -> None:
         "1000 ⭐",
         "3000 ⭐",
         "5000 ⭐",
-        "⬅️ Назад в профиль",
+        "⬅️ Назад",
     ]
     assert [button.callback_data for button in buttons] == [
         "pay:stars:100",
@@ -176,7 +176,7 @@ def test_build_stars_top_up_keyboard_uses_expected_amount_callbacks() -> None:
         "pay:stars:1000",
         "pay:stars:3000",
         "pay:stars:5000",
-        "pay:back:profile",
+        "pay:back:methods",
     ]
     assert all("Магазин" not in button.text for button in buttons)
 
@@ -197,7 +197,8 @@ def test_build_stars_wallet_redirect_keyboard_uses_single_wallet_url() -> None:
 
     assert keyboard.inline_keyboard[0][0].text == "Перейти к оплате ⭐"
     assert keyboard.inline_keyboard[0][0].url == "https://t.me/wallet_bot?start=stars_token"
-    assert keyboard.inline_keyboard[1][0].text == "⬅️ Назад в профиль"
+    assert keyboard.inline_keyboard[1][0].text == "⬅️ Назад"
+    assert keyboard.inline_keyboard[1][0].callback_data == "pay:back:stars_amounts"
 
 
 def test_build_wallet_bot_payment_keyboard_uses_single_pay_url_button() -> None:

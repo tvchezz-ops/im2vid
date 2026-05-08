@@ -17,18 +17,19 @@ PUBLIC_BASE_URL=https://your-public-host.example.com
 ```env
 DATABASE_URL=sqlite+aiosqlite:///./bot.db
 ADMIN_IDS=123456789,987654321    # Список ID админов через запятую
+INSTANCE_NAME=local-dev
 TEMP_MEDIA_DIR=tmp/media
 TEMP_MEDIA_TTL_MINUTES=30
 TELEGRAM_STARS_WALLET_BOT_USERNAME=
 TELEGRAM_STARS_RETURN_BOT_USERNAME=
 TELEGRAM_STARS_WEBHOOK_SECRET=
 MAIN_BOT_USERNAME=
-CRYPTO_PROVIDER=
-CRYPTO_WEBHOOK_SECRET=
 NOWPAYMENTS_API_KEY=
 NOWPAYMENTS_IPN_SECRET=
 NOWPAYMENTS_BASE_URL=https://api.nowpayments.io
-NOWPAYMENTS_IPN_CALLBACK_URL=
+NOWPAYMENTS_SUCCESS_URL=
+NOWPAYMENTS_CANCEL_URL=
+CREDIT_USD_PRICE=0.01
 STORE_INPUT_MEDIA=false
 STORE_OUTPUT_URLS=false
 ```
@@ -38,6 +39,7 @@ STORE_OUTPUT_URLS=false
 | Поле | Тип | Обязательная | Значение по умолчанию | Описание |
 |------|-----|-------------|----------------------|---------|
 | `bot_token` | `str` | ✅ | — | Токен Telegram бота от @BotFather |
+| `instance_name` | `str` | ❌ | `""` | Имя deployment/instance для startup-логов и диагностики конфликтов polling |
 | `wavespeed_api_key` | `str` | ✅ | — | API ключ для сервиса генерации |
 | `database_url` | `str` | ❌ | `sqlite+aiosqlite:///./bot.db` | Строка подключения к БД |
 | `public_base_url` | `str` | ✅ | — | Публичный URL для временно опубликованных media-файлов |
@@ -48,12 +50,12 @@ STORE_OUTPUT_URLS=false
 | `telegram_stars_return_bot_username` | `str` | ❌ | `""` | Username текущего бота для возврата из wallet bot без `@` |
 | `telegram_stars_webhook_secret` | `str` | ❌ | `""` | Секрет `X-Webhook-Secret` для `POST /webhooks/stars-wallet` |
 | `main_bot_username` | `str` | ❌ | `""` | Username основного бота без `@` для возврата после внешних оплат |
-| `crypto_provider` | `str` | ❌ | `""` | Имя будущего crypto payment provider |
-| `crypto_webhook_secret` | `str` | ❌ | `""` | Секрет будущих crypto webhook callbacks |
 | `nowpayments_api_key` | `str` | ❌ | `""` | NOWPayments API key для crypto top-ups |
 | `nowpayments_ipn_secret` | `str` | ❌ | `""` | NOWPayments IPN secret для проверки webhook signature |
 | `nowpayments_base_url` | `str` | ❌ | `https://api.nowpayments.io` | NOWPayments API base URL |
-| `nowpayments_ipn_callback_url` | `str` | ❌ | `""` | Публичный URL `POST /webhooks/nowpayments`; если пусто, используется `PUBLIC_BASE_URL/webhooks/nowpayments` |
+| `nowpayments_success_url` | `str` | ❌ | `""` | Optional success redirect от NOWPayments |
+| `nowpayments_cancel_url` | `str` | ❌ | `""` | Optional cancel redirect от NOWPayments |
+| `credit_usd_price` | `Decimal` | ❌ | `0.01` | USD цена одного кредита для crypto top-ups |
 | `store_input_media` | `bool` | ❌ | `false` | Всегда `false`, поле совместимости |
 | `store_output_urls` | `bool` | ❌ | `false` | Всегда `false`, поле совместимости |
 
@@ -68,18 +70,19 @@ PUBLIC_BASE_URL=https://your-public-host.example.com
 # Опциональные переменные
 DATABASE_URL=sqlite+aiosqlite:///./bot.db
 ADMIN_IDS=123456789,987654321,111111111
+INSTANCE_NAME=local-dev
 TEMP_MEDIA_DIR=tmp/media
 TEMP_MEDIA_TTL_MINUTES=30
 TELEGRAM_STARS_WALLET_BOT_USERNAME=
 TELEGRAM_STARS_RETURN_BOT_USERNAME=
 TELEGRAM_STARS_WEBHOOK_SECRET=
 MAIN_BOT_USERNAME=
-CRYPTO_PROVIDER=
-CRYPTO_WEBHOOK_SECRET=
 NOWPAYMENTS_API_KEY=
 NOWPAYMENTS_IPN_SECRET=
 NOWPAYMENTS_BASE_URL=https://api.nowpayments.io
-NOWPAYMENTS_IPN_CALLBACK_URL=
+NOWPAYMENTS_SUCCESS_URL=
+NOWPAYMENTS_CANCEL_URL=
+CREDIT_USD_PRICE=0.01
 STORE_INPUT_MEDIA=false
 STORE_OUTPUT_URLS=false
 ```
@@ -94,11 +97,11 @@ STORE_OUTPUT_URLS=false
 
 ## NOWPayments crypto payments
 
-Crypto top-ups используют NOWPayments. После выбора пакета бот создает `provider="crypto"` payment order, отправляет запрос в NOWPayments и показывает пользователю кнопку оплаты. Один кредит стоит `0.01 USD`.
+Crypto top-ups используют только NOWPayments hosted checkout. После выбора пакета бот создает `provider="nowpayments"` payment order, отправляет запрос в NOWPayments invoice API и показывает пользователю только кнопку `Оплатить через NOWPayments`. Выбор валюты и сети происходит на стороне NOWPayments; бот не показывает адреса кошельков, сети или transaction hash.
 
-Для production нужны `NOWPAYMENTS_API_KEY` и `NOWPAYMENTS_IPN_SECRET`. `NOWPAYMENTS_BASE_URL` можно оставить по умолчанию. Если `NOWPAYMENTS_IPN_CALLBACK_URL` пустой, callback строится как `PUBLIC_BASE_URL/webhooks/nowpayments`. Отдельные env для success/cancel URL не используются: оба URL строятся автоматически как `https://t.me/{MAIN_BOT_USERNAME}`. Если `MAIN_BOT_USERNAME` пустой, сервис пишет warning и отправляет в NOWPayments fallback `https://t.me`.
+Для production нужны `NOWPAYMENTS_API_KEY` и `NOWPAYMENTS_IPN_SECRET`. `NOWPAYMENTS_BASE_URL` можно оставить по умолчанию. `NOWPAYMENTS_SUCCESS_URL` и `NOWPAYMENTS_CANCEL_URL` опциональны. IPN callback всегда строится как `PUBLIC_BASE_URL/webhooks/nowpayments`.
 
-Webhook `POST /webhooks/nowpayments` проверяет `x-nowpayments-sig`. Только статус `finished` начисляет кредиты идемпотентно; `failed`, `expired`, `refunded` помечают заказ failed; `waiting`, `confirming`, `sending`, `partially_paid` остаются pending.
+Webhook `POST /webhooks/nowpayments` проверяет `x-nowpayments-sig`. Только статусы `finished` и `confirmed` начисляют кредиты идемпотентно; `failed` помечает заказ failed, `expired` помечает expired; `waiting`, `confirming`, `sending` остаются pending.
 
 ## 🚀 Использование конфигурации в коде
 

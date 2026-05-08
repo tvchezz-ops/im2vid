@@ -27,7 +27,7 @@ class PaymentProvider(str, enum.Enum):
     """Провайдеры платежей."""
 
     TELEGRAM_STARS = "telegram_stars"
-    CRYPTO = "crypto"
+    NOWPAYMENTS = "nowpayments"
 
 
 class PaymentOrderStatus(str, enum.Enum):
@@ -159,33 +159,6 @@ class PaymentOrder(BaseModel):
         server_default="{}",
     )
     paid_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
-
-
-class CryptoPaymentOrder(Base):
-    """Детали крипто-платежа для платежного заказа."""
-
-    __tablename__ = "crypto_payment_orders"
-
-    id: Mapped[uuid.UUID] = mapped_column(Uuid, primary_key=True, default=uuid.uuid4)
-    payment_order_id: Mapped[uuid.UUID] = mapped_column(
-        Uuid,
-        ForeignKey("payment_orders.id"),
-        index=True,
-    )
-    network: Mapped[Optional[str]] = mapped_column(String(100), nullable=True)
-    asset: Mapped[Optional[str]] = mapped_column(String(100), nullable=True)
-    wallet_address: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
-    expected_amount: Mapped[Optional[str]] = mapped_column(String(100), nullable=True)
-    nowpayments_payment_id: Mapped[Optional[str]] = mapped_column(String(255), unique=True, nullable=True)
-    payment_url: Mapped[Optional[str]] = mapped_column(String(1024), nullable=True)
-    pay_address: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
-    pay_currency: Mapped[Optional[str]] = mapped_column(String(50), nullable=True)
-    price_amount: Mapped[Optional[str]] = mapped_column(String(100), nullable=True)
-    price_currency: Mapped[str] = mapped_column(String(20), default="usd", server_default="usd")
-    tx_hash: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
-    expires_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
-    status: Mapped[str] = mapped_column(String(50), default="draft", server_default="draft")
-    metadata_: Mapped[dict[str, Any]] = mapped_column("metadata", JSON, default=dict, server_default="{}")
 
 
 class DownloadLink(Base):

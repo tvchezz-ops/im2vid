@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from decimal import Decimal
+
 from pydantic import Field
 from pydantic_settings import (
     BaseSettings,
@@ -57,6 +59,7 @@ class Settings(BaseSettings):
 
     # Bot
     bot_token: str = Field(..., description="Telegram Bot Token от @BotFather")
+    instance_name: str = Field(default="", description="Optional deployment/instance name for startup logs")
     
     # API
     wavespeed_api_key: str = Field(..., description="API ключ для Wavespeed")
@@ -108,18 +111,12 @@ class Settings(BaseSettings):
         default="",
         description="Username основного Telegram бота без @ для возврата после внешних оплат",
     )
-    crypto_provider: str = Field(
-        default="",
-        description="Имя будущего crypto payment provider",
-    )
-    crypto_webhook_secret: str = Field(
-        default="",
-        description="Секрет будущих crypto webhook callbacks",
-    )
     nowpayments_api_key: str = Field(default="", description="NOWPayments API key")
     nowpayments_ipn_secret: str = Field(default="", description="NOWPayments IPN secret")
     nowpayments_base_url: str = Field(default="https://api.nowpayments.io", description="NOWPayments API base URL")
-    nowpayments_ipn_callback_url: str = Field(default="", description="NOWPayments IPN callback URL")
+    nowpayments_success_url: str = Field(default="", description="Optional NOWPayments success URL")
+    nowpayments_cancel_url: str = Field(default="", description="Optional NOWPayments cancel URL")
+    credit_usd_price: Decimal = Field(default=Decimal("0.01"), description="USD price for one credit")
     r2_endpoint_url: str = Field(
         default="",
         description="Endpoint URL для Cloudflare R2",
@@ -206,6 +203,7 @@ except Exception as e:
         f"{str(e)}\n\n"
         f"Убедитесь, что в .env файле заданы все обязательные переменные:\n"
         f"- BOT_TOKEN\n"
+        f"- INSTANCE_NAME (опционально, имя deployment/instance для логов)\n"
         f"- WAVESPEED_API_KEY\n"
         f"- PUBLIC_BASE_URL\n"
         f"- TEMP_MEDIA_DIR (опционально, по умолчанию tmp/media)\n"
@@ -219,12 +217,12 @@ except Exception as e:
         f"- TELEGRAM_STARS_WEBHOOK_SECRET (опционально, для webhook от wallet bot)\n"
         f"- WALLET_BOT_USERNAME (опционально, username отдельного wallet bot)\n"
         f"- MAIN_BOT_USERNAME (опционально, для возврата после внешних оплат)\n"
-        f"- CRYPTO_PROVIDER (опционально, для будущего crypto provider)\n"
-        f"- CRYPTO_WEBHOOK_SECRET (опционально, для будущих crypto webhooks)\n"
         f"- NOWPAYMENTS_API_KEY (опционально, для crypto payments)\n"
         f"- NOWPAYMENTS_IPN_SECRET (опционально, для crypto webhooks)\n"
         f"- NOWPAYMENTS_BASE_URL (опционально, по умолчанию https://api.nowpayments.io)\n"
-        f"- NOWPAYMENTS_IPN_CALLBACK_URL (опционально, иначе PUBLIC_BASE_URL/webhooks/nowpayments)\n"
+        f"- NOWPAYMENTS_SUCCESS_URL (опционально, success redirect от NOWPayments)\n"
+        f"- NOWPAYMENTS_CANCEL_URL (опционально, cancel redirect от NOWPayments)\n"
+        f"- CREDIT_USD_PRICE (опционально, по умолчанию 0.01)\n"
         f"- R2_ENDPOINT_URL (опционально, для Cloudflare R2)\n"
         f"- R2_ACCESS_KEY_ID (опционально, для Cloudflare R2)\n"
         f"- R2_SECRET_ACCESS_KEY (опционально, для Cloudflare R2)\n"

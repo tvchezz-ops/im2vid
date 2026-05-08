@@ -3,7 +3,6 @@ from importlib import import_module
 
 from app.db.base import Base, BaseModel
 from app.db.models import (
-    CryptoPaymentOrder,
     DownloadLink,
     GenerationRequest,
     GenerationRequestStatus,
@@ -34,7 +33,6 @@ __all__ = [
     "PaymentOrder",
     "PaymentOrderStatus",
     "PaymentProvider",
-    "CryptoPaymentOrder",
     "DownloadLink",
     "UserRepository",
     "GenerationRepository",

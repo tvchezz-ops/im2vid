@@ -5,6 +5,7 @@ from types import SimpleNamespace
 
 import pytest
 import pytest_asyncio
+from aiogram.exceptions import TelegramBadRequest
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 
@@ -16,7 +17,8 @@ os.environ.setdefault("PUBLIC_BASE_URL", "https://example.com")
 
 from app.bot.routers import payments
 from app.db.base import Base
-from app.db.models import CryptoPaymentOrder, PaymentOrder, PaymentOrderStatus, User
+from app.db.models import PaymentOrder, PaymentOrderStatus, User
+from app.db.repositories import PaymentRepository
 
 
 class FakeMessage:
@@ -48,6 +50,13 @@ class FakeMessage:
         self.invoices.append(kwargs)
 
 
+class FakeNoModifiedMessage(FakeMessage):
+    async def edit_text(self, text: str, reply_markup=None, parse_mode=None) -> None:
+        if self.edits and self.edits[-1] == text:
+            raise TelegramBadRequest(method=None, message="Bad Request: message is not modified")
+        await super().edit_text(text, reply_markup=reply_markup, parse_mode=parse_mode)
+
+
 class FakeCallback:
     def __init__(self, user_id: int = 1, message: FakeMessage | None = None, data: str = ""):
         self.from_user = SimpleNamespace(
@@ -69,6 +78,17 @@ class FakeCallback:
         self.answer_alerts.append(show_alert)
 
 
+class FakeState:
+    def __init__(self):
+        self.data: dict[str, object] = {}
+
+    async def update_data(self, **kwargs) -> None:
+        self.data.update(kwargs)
+
+    async def get_data(self) -> dict[str, object]:
+        return dict(self.data)
+
+
 @pytest_asyncio.fixture
 async def session_factory(tmp_path):
     db_path = tmp_path / "payments-router.sqlite3"
@@ -87,14 +107,16 @@ async def session_factory(tmp_path):
 async def test_top_up_button_opens_stars_menu() -> None:
     message = FakeMessage(user_id=801)
     callback = FakeCallback(user_id=801, message=message, data="profile:top_up_balance")
+    state = FakeState()
 
-    await payments.show_stars_top_up_menu(callback)
+    await payments.show_stars_top_up_menu(callback, state)
 
     assert message.edits[-1] == "Выберите способ оплаты:"
     keyboard = message.edit_markups[-1]
     buttons = [row[0] for row in keyboard.inline_keyboard]
     assert [button.callback_data for button in buttons] == ["pay:method:stars", "pay:crypto", "pay:back:profile"]
     assert [button.text for button in buttons] == ["⭐ Telegram Stars", "₿ Crypto", "⬅️ Назад в профиль"]
+    assert (await state.get_data())["payment_screen"] == "methods"
     assert callback.answers[-1] is None
 
 
@@ -102,8 +124,9 @@ async def test_top_up_button_opens_stars_menu() -> None:
 async def test_stars_method_opens_amount_menu() -> None:
     message = FakeMessage(user_id=801)
     callback = FakeCallback(user_id=801, message=message, data="pay:method:stars")
+    state = FakeState()
 
-    await payments.show_stars_amount_menu(callback)
+    await payments.show_stars_amount_menu(callback, state)
 
     assert message.edits[-1] == "Выберите количество Telegram Stars:"
     keyboard = message.edit_markups[-1]
@@ -115,7 +138,7 @@ async def test_stars_method_opens_amount_menu() -> None:
         "pay:stars:1000",
         "pay:stars:3000",
         "pay:stars:5000",
-        "pay:back:profile",
+        "pay:back:methods",
     ]
     assert [button.text for button in buttons] == [
         "100 ⭐",
@@ -124,9 +147,10 @@ async def test_stars_method_opens_amount_menu() -> None:
         "1000 ⭐",
         "3000 ⭐",
         "5000 ⭐",
-        "⬅️ Назад в профиль",
+        "⬅️ Назад",
     ]
     assert all("Магазин" not in button.text for button in buttons)
+    assert (await state.get_data())["payment_screen"] == "stars_amounts"
     assert callback.answers[-1] is None
 
 
@@ -148,9 +172,69 @@ async def test_crypto_button_shows_package_menu(monkeypatch) -> None:
         "pay:crypto:1000",
         "pay:crypto:3000",
         "pay:crypto:5000",
-        "pay:back:profile",
+        "pay:back:methods",
     ]
     assert callback.answers[-1] is None
+
+
+@pytest.mark.asyncio
+async def test_profile_topup_back_returns_profile(session_factory) -> None:
+    async with session_factory() as session:
+        message = FakeMessage(user_id=821)
+        state = FakeState()
+
+        await payments.show_stars_top_up_menu(
+            FakeCallback(user_id=821, message=message, data="profile:top_up_balance"),
+            state,
+        )
+        await payments.back_to_profile(
+            FakeCallback(user_id=821, message=message, data="pay:back:profile"),
+            session,
+            state,
+        )
+
+        assert message.edits[-1].startswith("👤 <b>Профиль</b>")
+        keyboard = message.edit_markups[-1]
+        assert keyboard.inline_keyboard[0][0].callback_data == "profile:top_up_balance"
+        assert (await state.get_data())["payment_screen"] == "profile"
+
+
+@pytest.mark.asyncio
+async def test_methods_stars_back_returns_methods() -> None:
+    message = FakeMessage(user_id=822)
+    state = FakeState()
+
+    await payments.show_stars_top_up_menu(
+        FakeCallback(user_id=822, message=message, data="profile:top_up_balance"),
+        state,
+    )
+    await payments.show_stars_amount_menu(
+        FakeCallback(user_id=822, message=message, data="pay:method:stars"),
+        state,
+    )
+    callback = FakeCallback(user_id=822, message=message, data="pay:back:methods")
+    await payments.back_to_payment_methods(callback, state)
+
+    assert message.edits[-1] == "Выберите способ оплаты:"
+    keyboard = message.edit_markups[-1]
+    buttons = [row[0] for row in keyboard.inline_keyboard]
+    assert [button.callback_data for button in buttons] == ["pay:method:stars", "pay:crypto", "pay:back:profile"]
+    assert (await state.get_data())["payment_screen"] == "methods"
+    assert callback.answers[-1] is None
+
+
+@pytest.mark.asyncio
+async def test_repeated_back_ignores_message_is_not_modified() -> None:
+    message = FakeNoModifiedMessage(user_id=823)
+    state = FakeState()
+    callback = FakeCallback(user_id=823, message=message, data="pay:back:methods")
+
+    await payments.back_to_payment_methods(callback, state)
+    await payments.back_to_payment_methods(callback, state)
+
+    assert message.edits == ["Выберите способ оплаты:"]
+    assert callback.answers == [None, None]
+    assert (await state.get_data())["payment_screen"] == "methods"
 
 
 @pytest.mark.asyncio
@@ -165,25 +249,49 @@ async def test_crypto_button_shows_coming_soon_when_nowpayments_unconfigured(mon
 
 
 @pytest.mark.asyncio
+async def test_crypto_button_does_not_crash_when_api_key_empty(monkeypatch) -> None:
+    monkeypatch.setattr(payments.settings, "nowpayments_api_key", "")
+    monkeypatch.setattr(payments.settings, "nowpayments_ipn_secret", "ipn-secret")
+    monkeypatch.setattr(payments.settings, "nowpayments_base_url", "https://api.nowpayments.io")
+    callback = FakeCallback(user_id=811, data="pay:crypto")
+
+    await payments.show_crypto_packages(callback)
+
+    assert callback.answers[-1] == "₿ Crypto payments are not configured yet."
+    assert callback.answer_alerts[-1] is True
+
+
+@pytest.mark.asyncio
 async def test_crypto_amount_callback_creates_nowpayments_order_without_crediting(session_factory, monkeypatch) -> None:
     class FakeNowPaymentsService:
-        async def create_payment(self, *, order_id, credits, amount_usd, pay_currency=None):
-            return {
-                "payment_id": "np-router-1",
-                "invoice_url": "https://nowpayments.test/invoice/np-router-1",
-                "pay_address": "TNowPaymentsAddress",
-                "pay_amount": "1.00",
-                "pay_currency": "usdttrc20",
-                "order_id": order_id,
-            }
+        def __init__(self, *, session):
+            self.session = session
+
+        async def create_payment_order_link(self, user_id: int, credits: int):
+            repo = PaymentRepository(self.session)
+            order = await repo.create_payment_order(
+                user_id=user_id,
+                provider="nowpayments",
+                amount=credits,
+                credits=credits,
+                currency="USD",
+                metadata={"payment_url": "https://nowpayments.test/invoice/np-router-1", "price_amount": "1.00"},
+            )
+            order = await repo.update_nowpayments_order_metadata(
+                order.id,
+                payment_id="np-router-1",
+                status=PaymentOrderStatus.PENDING.value,
+                metadata={"payment_url": "https://nowpayments.test/invoice/np-router-1", "price_amount": "1.00"},
+            )
+            return SimpleNamespace(
+                order=order,
+                payment_url="https://nowpayments.test/invoice/np-router-1",
+                price_amount="1.00",
+                payment_id="np-router-1",
+            )
 
     monkeypatch.setattr(payments, "is_nowpayments_configured", lambda: True)
-    original_provider = payments.NOWPaymentsProvider
-    monkeypatch.setattr(
-        payments,
-        "NOWPaymentsProvider",
-        lambda session: original_provider(session, service=FakeNowPaymentsService()),
-    )
+    monkeypatch.setattr(payments, "NowPaymentsService", FakeNowPaymentsService)
     async with session_factory() as session:
         session.add(User(id=812, balance=0))
         await session.commit()
@@ -194,29 +302,27 @@ async def test_crypto_amount_callback_creates_nowpayments_order_without_creditin
 
         result = await session.execute(select(PaymentOrder).where(PaymentOrder.user_id == 812))
         order = result.scalars().one()
-        crypto_order = (
-            await session.execute(select(CryptoPaymentOrder).where(CryptoPaymentOrder.payment_order_id == order.id))
-        ).scalar_one()
         balance = (await session.execute(select(User.balance).where(User.id == 812))).scalar_one()
 
-        assert order.provider == "crypto"
+        assert order.provider == "nowpayments"
         assert order.status == PaymentOrderStatus.PENDING.value
         assert order.amount == 100
         assert order.credits == 100
         assert order.nowpayments_payment_id == "np-router-1"
-        assert crypto_order.nowpayments_payment_id == "np-router-1"
-        assert crypto_order.asset == "USDT"
-        assert crypto_order.network == "TRC20"
-        assert crypto_order.wallet_address == "TNowPaymentsAddress"
-        assert crypto_order.expected_amount == "1.00"
+        assert order.metadata_["payment_url"] == "https://nowpayments.test/invoice/np-router-1"
         assert balance == 0
-        assert "Asset: USDT" in message.edits[-1]
-        assert "Network: TRC20" in message.edits[-1]
-        assert "Amount: 1.00" in message.edits[-1]
-        assert "Address: TNowPaymentsAddress" in message.edits[-1]
+        assert message.edits[-1] == (
+            "₿ Crypto payment\n\n"
+            "Credits: 100\n"
+            "Amount: $1.00\n\n"
+            "Payment is processed securely by NOWPayments.\n"
+            "Click the button below to pay."
+        )
+        assert "Address" not in message.edits[-1]
         keyboard = message.edit_markups[-1]
-        assert keyboard.inline_keyboard[0][0].text == "Open Payment Page"
+        assert keyboard.inline_keyboard[0][0].text == "Оплатить через NOWPayments"
         assert keyboard.inline_keyboard[0][0].url == "https://nowpayments.test/invoice/np-router-1"
+        assert keyboard.inline_keyboard[1][0].callback_data == "pay:back:crypto_amounts"
         assert callback.answers[-1] is None
 
 
@@ -250,18 +356,53 @@ async def test_stars_amount_callback_creates_order_and_sends_wallet_url(session_
 
         order = (await session.execute(select(PaymentOrder).where(PaymentOrder.user_id == 814))).scalar_one()
         assert message.invoices == []
-        assert message.edits == ["Оплата готова. Выберите способ оплаты:"]
+        assert message.edits == ["Вы выбрали: 300 ⭐\nНажмите кнопку ниже, чтобы перейти к оплате."]
         keyboard = message.edit_markups[-1]
         assert keyboard.inline_keyboard[0][0].text == "Перейти к оплате ⭐"
-        assert keyboard.inline_keyboard[0][0].url == f"https://t.me/wallet_bot?start=stars%3A{order.id}%3A{order.payload.rsplit(':', 1)[1]}"
-        assert keyboard.inline_keyboard[1][0].text == "⬅️ Назад в профиль"
+        assert keyboard.inline_keyboard[0][0].url == f"https://t.me/wallet_bot?start={order.payload}"
+        assert keyboard.inline_keyboard[1][0].text == "⬅️ Назад"
+        assert keyboard.inline_keyboard[1][0].callback_data == "pay:back:stars_amounts"
+        assert order.provider == "telegram_stars"
+        assert order.amount == 300
+        assert order.credits == 300
+        assert order.currency == "XTR"
         assert order.status == PaymentOrderStatus.CREATED.value
+        assert order.payload is not None
+        assert len(order.payload) <= 64
         assert callback.answers[-1] is None
 
 
 @pytest.mark.asyncio
-async def test_stars_amount_requires_wallet_bot_username(session_factory, monkeypatch) -> None:
+async def test_stars_amount_logs_redirect_without_payload_secret(session_factory, monkeypatch, caplog) -> None:
+    monkeypatch.setattr(payments.settings, "telegram_stars_wallet_bot_username", "@wallet_bot")
+    caplog.set_level("INFO")
+    async with session_factory() as session:
+        session.add(User(id=815, balance=0))
+        await session.commit()
+        message = FakeMessage(user_id=815)
+        callback = FakeCallback(user_id=815, message=message, data="pay:stars:100")
+
+        await payments.choose_stars_amount(callback, session)
+
+        order = (await session.execute(select(PaymentOrder).where(PaymentOrder.user_id == 815))).scalar_one()
+        redirect_logs = [record.msg for record in caplog.records if isinstance(record.msg, dict) and record.msg.get("action") == "stars_redirect_created"]
+        assert redirect_logs == [
+            {
+                "action": "stars_redirect_created",
+                "user_id": 815,
+                "order_id": str(order.id),
+                "amount": 100,
+                "wallet_bot_username": "wallet_bot",
+                "payload_length": len(order.payload),
+            }
+        ]
+        assert order.payload not in str(redirect_logs[0])
+
+
+@pytest.mark.asyncio
+async def test_stars_amount_requires_wallet_bot_username(session_factory, monkeypatch, caplog) -> None:
     monkeypatch.setattr(payments.settings, "telegram_stars_wallet_bot_username", "")
+    caplog.set_level("INFO")
     async with session_factory() as session:
         session.add(User(id=803, balance=0))
         await session.commit()
@@ -271,18 +412,34 @@ async def test_stars_amount_requires_wallet_bot_username(session_factory, monkey
         await payments.choose_stars_amount(callback, session)
 
         result = await session.execute(select(PaymentOrder).where(PaymentOrder.user_id == 803))
-        assert result.scalars().all() == []
+        order = result.scalar_one()
+        assert order.provider == "telegram_stars"
+        assert order.status == PaymentOrderStatus.CREATED.value
         assert message.invoices == []
-        assert callback.answers[-1] == "Не удалось создать счёт на оплату. Попробуйте позже."
+        assert message.edits == []
+        assert callback.answers[-1] == "Оплата через Telegram Stars временно недоступна. Wallet bot не настроен."
         assert callback.answer_alerts[-1] is True
+        assert any(
+            isinstance(record.msg, dict)
+            and record.msg.get("action") == "stars_wallet_not_configured"
+            and record.msg.get("order_id") == str(order.id)
+            for record in caplog.records
+        )
 
 
 def test_wallet_deep_link_helpers_normalize_usernames(monkeypatch) -> None:
     monkeypatch.setattr(payments.settings, "telegram_stars_return_bot_username", "@our_bot")
 
     assert payments.build_wallet_payment_url("@wallet_bot", 100) == "https://t.me/wallet_bot?start=100credits"
-    assert payments.build_wallet_payment_url_for_payload("@wallet_bot", "stars:order:token") == "https://t.me/wallet_bot?start=stars%3Aorder%3Atoken"
+    assert payments.build_wallet_payment_url_for_payload("@wallet_bot", "stars_order_token") == "https://t.me/wallet_bot?start=stars_order_token"
     assert payments.build_wallet_return_url("stars:order:token") == "https://t.me/our_bot?start=paid_stars%3Aorder%3Atoken"
+
+
+def test_wallet_deep_link_rejects_unsafe_payload() -> None:
+    with pytest.raises(ValueError):
+        payments.build_wallet_payment_url_for_payload("wallet_bot", "stars:order:token")
+    with pytest.raises(ValueError):
+        payments.build_wallet_payment_url_for_payload("wallet_bot", "s" * 65)
 
 
 @pytest.mark.asyncio

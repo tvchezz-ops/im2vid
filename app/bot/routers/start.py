@@ -12,7 +12,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.bot.keyboards import get_button_text, get_main_menu_keyboard, get_profile_keyboard, is_localized_button_text
 from app.bot.routers.generations import is_generation_flow_state, reset_generation_flow
 from app.bot.routers.profile import build_profile_text
-from app.db import PaymentOrderStatus, UserRepository
+from app.db import PaymentProvider, UserRepository
 from app.i18n import get_user_language, t
 from app.services.payments import PaymentService
 from app.utils import logger
@@ -66,15 +66,33 @@ async def start_command(
 
         if start_payload.startswith("paid_"):
             await message.answer(t("payments.checking_payment", lang))
-            payload = start_payload.removeprefix("paid_")
-            order = await PaymentService(session).payment_repo.get_payment_order_by_payload(payload)
-            if order is not None and order.status == PaymentOrderStatus.PAID.value and order.user_id == user.id:
-                fresh_user = await user_repo.get_user_profile(user.id)
-                balance = fresh_user.balance if fresh_user is not None else user.balance
-                await message.answer(t("payments.success", lang, credits=order.credits, balance=balance))
-            else:
-                await message.answer(t("payments.pending", lang))
             return
+
+        if start_payload:
+            order = await PaymentService(session).payment_repo.get_payment_order_by_payload(start_payload)
+            if order is not None and order.provider == PaymentProvider.TELEGRAM_STARS.value and order.user_id == user.id:
+                await message.answer(t("payments.checking_payment", lang))
+                logger.info(
+                    {
+                        "action": "stars_wallet_return_received",
+                        "user_id": user.id,
+                        "order_id": str(order.id),
+                    }
+                )
+                return
+
+            if order is not None:
+                logger.info(
+                    {
+                        "action": "stars_wallet_return_ignored",
+                        "user_id": user.id,
+                        "order_id": str(order.id),
+                    }
+                )
+                return
+            if start_payload.startswith("stars_"):
+                await message.answer(t("payments.checking_payment", lang))
+                return
         
         await message.answer(
             build_welcome_text(user.first_name, lang),

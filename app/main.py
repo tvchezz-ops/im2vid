@@ -6,6 +6,7 @@ from typing import Optional, Set
 
 from aiohttp import web
 from aiogram import Bot, Dispatcher
+from aiogram.exceptions import TelegramConflictError
 from aiogram.fsm.storage.memory import MemoryStorage
 from aiogram.types import BotCommand
 
@@ -39,6 +40,18 @@ class TelegramBot:
         self.dp = Dispatcher(storage=self.storage)
         self.running_tasks: Set[asyncio.Task] = set()
         self.media_runner: Optional[web.AppRunner] = None
+
+    async def log_bot_identity(self):
+        """Log the Telegram bot identity so duplicate deployments are easier to spot."""
+        me = await self.bot.get_me()
+        logger.info(
+            {
+                "action": "telegram_bot_identity",
+                "bot_id": me.id,
+                "bot_username": me.username,
+                "instance_name": settings.instance_name.strip() or None,
+            }
+        )
 
     async def setup_commands(self):
         """Установить команды бота."""
@@ -92,7 +105,7 @@ class TelegramBot:
 
     async def start(self):
         """Запустить бота."""
-        logger.info("Starting Telegram bot...")
+        logger.info({"action": "telegram_bot_starting", "instance_name": settings.instance_name.strip() or None})
         
         try:
             # Создание таблиц только в локальном dev-режиме.
@@ -100,6 +113,8 @@ class TelegramBot:
                 await self.create_tables()
             else:
                 logger.info("Skipping automatic database schema creation; use Alembic migrations")
+
+            await self.log_bot_identity()
             
             # Установка команд
             await self.setup_commands()
@@ -113,6 +128,15 @@ class TelegramBot:
             # Запуск polling
             logger.info("Bot is running...")
             await self.dp.start_polling(self.bot)
+        except TelegramConflictError:
+            logger.error(
+                {
+                    "action": "telegram_conflict_error",
+                    "instance_name": settings.instance_name.strip() or None,
+                    "message": "Another getUpdates consumer is already running for this BOT_TOKEN. Stop the duplicate local process or Railway service, then clear webhook with deleteWebhook?drop_pending_updates=true.",
+                }
+            )
+            raise
         except Exception as e:
             logger.exception("Error starting bot: %s", e)
             raise

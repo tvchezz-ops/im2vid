@@ -10,6 +10,7 @@ from app.utils import logger
 
 
 ALLOWED_STARS_AMOUNTS = (100, 300, 500, 1000, 3000, 5000)
+TELEGRAM_DEEP_LINK_PAYLOAD_LIMIT = 64
 
 
 class PaymentOrderNotFoundError(ValueError):
@@ -28,19 +29,19 @@ class PaymentService:
         if stars_amount not in ALLOWED_STARS_AMOUNTS:
             raise ValueError("Unsupported Telegram Stars amount")
 
+        payload = f"stars_{secrets.token_urlsafe(24)}"
+        if len(payload) > TELEGRAM_DEEP_LINK_PAYLOAD_LIMIT:
+            raise ValueError("Telegram Stars payload is too long")
+
         order = await self.payment_repo.create_payment_order(
             user_id=user_id,
             provider=PaymentProvider.TELEGRAM_STARS.value,
             amount=stars_amount,
             credits=stars_amount,
             currency="XTR",
-            payload=None,
+            payload=payload,
             metadata={},
         )
-
-        order.payload = f"stars:{order.id}:{secrets.token_urlsafe(12)}"
-        await self.session.commit()
-        await self.session.refresh(order)
 
         logger.info(
             {
@@ -119,43 +120,6 @@ class PaymentService:
         self._log_payment_paid(paid_order)
         self._log_credits_added(paid_order)
         return paid_order
-
-    async def create_crypto_draft_order(
-        self,
-        user_id: int,
-        amount: int,
-        asset: str | None = None,
-        network: str | None = None,
-    ) -> PaymentOrder:
-        """Create a draft crypto payment order."""
-        if amount <= 0:
-            raise ValueError("Crypto payment amount must be positive")
-
-        order = await self.payment_repo.create_payment_order(
-            user_id=user_id,
-            provider=PaymentProvider.CRYPTO.value,
-            amount=amount,
-            credits=amount,
-            currency=asset or "CRYPTO",
-            metadata={},
-        )
-        await self.payment_repo.create_crypto_payment_order(
-            order.id,
-            asset=asset,
-            network=network,
-        )
-        logger.info(
-            {
-                "action": "payment_order_created",
-                "order_id": str(order.id),
-                "user_id": user_id,
-                "provider": order.provider,
-                "amount": order.amount,
-                "credits": order.credits,
-                "currency": order.currency,
-            }
-        )
-        return order
 
     async def credit_user_for_paid_order(self, order: PaymentOrder) -> None:
         """Mark an order paid and credit its user idempotently."""

@@ -396,8 +396,8 @@ def build_stars_top_up_keyboard(lang: str = "en") -> InlineKeyboardMarkup:
     rows.append(
         [
             InlineKeyboardButton(
-                text=get_button_text("payments.back_to_profile", lang),
-                callback_data="pay:back:profile",
+                text=get_button_text("common.back", lang),
+                callback_data="pay:back:methods",
             )
         ]
     )
@@ -409,7 +409,7 @@ def build_stars_wallet_redirect_keyboard(*, wallet_payment_url: str, lang: str =
     return InlineKeyboardMarkup(
         inline_keyboard=[
             [InlineKeyboardButton(text=t("payments.open_stars_wallet", lang), url=wallet_payment_url)],
-            [InlineKeyboardButton(text=get_button_text("payments.back_to_profile", lang), callback_data="pay:back:profile")],
+            [InlineKeyboardButton(text=get_button_text("common.back", lang), callback_data="pay:back:stars_amounts")],
         ]
     )
 
@@ -430,7 +430,7 @@ def build_crypto_top_up_keyboard(lang: str = "en") -> InlineKeyboardMarkup:
         for amount in ALLOWED_STARS_AMOUNTS
     ]
     rows.append(
-        [InlineKeyboardButton(text=get_button_text("payments.back_to_profile", lang), callback_data="pay:back:profile")]
+        [InlineKeyboardButton(text=get_button_text("common.back", lang), callback_data="pay:back:methods")]
     )
     return InlineKeyboardMarkup(inline_keyboard=rows)
 
@@ -439,8 +439,8 @@ def build_crypto_payment_keyboard(*, payment_url: str | None, lang: str = "en") 
     """Клавиатура оплаты crypto через NOWPayments."""
     rows = []
     if payment_url:
-        rows.append([InlineKeyboardButton(text=t("payments.open_payment_page", lang), url=payment_url)])
+        rows.append([InlineKeyboardButton(text=t("payments.pay_with_nowpayments", lang), url=payment_url)])
     rows.append(
-        [InlineKeyboardButton(text=get_button_text("payments.back_to_profile", lang), callback_data="pay:back:profile")]
+        [InlineKeyboardButton(text=get_button_text("common.back", lang), callback_data="pay:back:crypto_amounts")]
     )
     return InlineKeyboardMarkup(inline_keyboard=rows)

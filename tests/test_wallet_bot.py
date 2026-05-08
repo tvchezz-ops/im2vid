@@ -31,6 +31,7 @@ from wallet_bot.main import (  # noqa: E402
 from app.bot.routers.payments import build_wallet_payment_url  # noqa: E402
 from app.db.base import Base  # noqa: E402
 from app.db.models import PaymentOrder, PaymentOrderStatus, User  # noqa: E402
+from app.services.payments import PaymentService  # noqa: E402
 
 
 class FakeMessage:
@@ -153,6 +154,29 @@ async def test_start_with_valid_deep_link_creates_order_and_sends_stars_invoice(
 
 
 @pytest.mark.asyncio
+async def test_start_with_existing_main_bot_order_payload_sends_stars_invoice(settings, session_factory) -> None:
+    async with session_factory() as session:
+        session.add(User(id=707, balance=0))
+        await session.commit()
+        order = await PaymentService(session).create_stars_order(user_id=707, stars_amount=300)
+        payload = order.payload
+    message = FakeMessage(user_id=707, text=f"/start {payload}")
+
+    await start_command(message, SimpleNamespace(args=None), settings, session_factory)
+
+    assert message.answers == []
+    assert len(message.invoices) == 1
+    invoice = message.invoices[0]
+    assert invoice["title"] == "300 credits"
+    assert invoice["payload"] == payload
+    assert invoice["prices"][0].amount == 300
+    async with session_factory() as session:
+        result = await session.execute(select(PaymentOrder).where(PaymentOrder.user_id == 707))
+        orders = result.scalars().all()
+    assert len(orders) == 1
+
+
+@pytest.mark.asyncio
 async def test_start_with_invalid_amount_sends_invalid_payment_link_and_creates_no_order(settings, session_factory) -> None:
     message = FakeMessage(user_id=703, text="/start pay_250")
 
@@ -237,7 +261,7 @@ async def test_successful_payment_marks_order_paid_and_credits_balance_once(sett
     assert len(keyboard.inline_keyboard[0]) == 1
     button = keyboard.inline_keyboard[0][0]
     assert button.text == "Return to generation bot"
-    assert button.url == "https://t.me/main_bot?start=payment_success"
+    assert button.url == f"https://t.me/main_bot?start=paid_{invoice_payload.replace(':', '%3A')}"
     async with session_factory() as session:
         balance_result = await session.execute(select(User.balance).where(User.id == 705))
         order_result = await session.execute(select(PaymentOrder).where(PaymentOrder.payload == invoice_payload))

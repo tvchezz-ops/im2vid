@@ -7,6 +7,7 @@ import re
 import sys
 import uuid
 from typing import Optional
+from urllib.parse import quote
 
 from aiogram import Bot, Dispatcher, F, Router
 from aiogram.filters import Command, CommandObject
@@ -15,7 +16,7 @@ from pydantic import Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 
-from app.db.models import PaymentOrder, PaymentOrderStatus
+from app.db.models import PaymentOrder, PaymentOrderStatus, PaymentProvider
 from app.db.repositories import PaymentRepository
 
 
@@ -88,13 +89,14 @@ def parse_amount_from_invoice_payload(payload: str) -> Optional[int]:
     return int(match.group("amount"))
 
 
-def build_return_keyboard(settings: WalletSettings) -> InlineKeyboardMarkup:
+def build_return_keyboard(settings: WalletSettings, payload: str | None = None) -> InlineKeyboardMarkup:
+    start_payload = f"paid_{quote(payload, safe='')}" if payload else "payment_success"
     return InlineKeyboardMarkup(
         inline_keyboard=[
             [
                 InlineKeyboardButton(
                     text="Return to generation bot",
-                    url=f"https://t.me/{settings.normalized_main_bot_username}?start=payment_success",
+                    url=f"https://t.me/{settings.normalized_main_bot_username}?start={start_payload}",
                 )
             ]
         ]
@@ -141,6 +143,26 @@ async def create_wallet_payment_order(
     )
 
 
+async def get_existing_stars_order(
+    session: AsyncSession,
+    *,
+    payload: str,
+    user_id: int,
+    allowed_amounts: tuple[int, ...],
+) -> Optional[PaymentOrder]:
+    order = await PaymentRepository(session).get_payment_order_by_payload(payload)
+    if (
+        order is None
+        or order.provider != PaymentProvider.TELEGRAM_STARS.value
+        or order.status == PaymentOrderStatus.PAID.value
+        or order.user_id != user_id
+        or order.currency != "XTR"
+        or order.amount not in allowed_amounts
+    ):
+        return None
+    return order
+
+
 async def complete_wallet_payment(
     session: AsyncSession,
     *,
@@ -175,7 +197,18 @@ async def start_command(
         logger.info({"action": "ignored_start", "user_id": message.from_user.id if message.from_user else None})
         return
 
-    amount = parse_amount_from_start_payload(start_payload)
+    user_id = message.from_user.id if message.from_user else 0
+    order = None
+    if session_factory is not None:
+        async with session_factory() as session:
+            order = await get_existing_stars_order(
+                session,
+                payload=start_payload,
+                user_id=user_id,
+                allowed_amounts=settings.allowed_amounts,
+            )
+
+    amount = order.amount if order is not None else parse_amount_from_start_payload(start_payload)
     if amount not in settings.allowed_amounts:
         logger.info(
             {
@@ -186,9 +219,9 @@ async def start_command(
         await message.answer("Invalid payment link.")
         return
 
-    user_id = message.from_user.id if message.from_user else 0
-    async with session_factory() as session:
-        order = await create_wallet_payment_order(session, user_id=user_id, amount=amount)
+    if order is None:
+        async with session_factory() as session:
+            order = await create_wallet_payment_order(session, user_id=user_id, amount=amount)
 
     await message.answer_invoice(
         title=f"{amount} credits",
@@ -275,7 +308,7 @@ async def process_successful_payment(
     )
     await message.answer(
         f"✅ Payment received.\n{order.credits} credits added to your balance.",
-        reply_markup=build_return_keyboard(settings),
+        reply_markup=build_return_keyboard(settings, successful_payment.invoice_payload),
     )
 
 

@@ -15,7 +15,7 @@ os.environ.setdefault("PUBLIC_BASE_URL", "https://example.com")
 
 
 from app.db.base import Base
-from app.db.models import CryptoPaymentOrder, PaymentOrderStatus, PaymentProvider, User
+from app.db.models import PaymentOrderStatus, PaymentProvider, User
 from app.services.payments import ALLOWED_STARS_AMOUNTS, PaymentService
 
 
@@ -50,8 +50,9 @@ async def test_create_stars_order_uses_one_star_to_one_credit(session_factory, c
         assert order.credits == 300
         assert order.currency == "XTR"
         assert order.payload is not None
-        assert order.payload.startswith(f"stars:{order.id}:")
-        assert re.fullmatch(r"stars:[0-9a-f-]{36}:[A-Za-z0-9_-]+", order.payload)
+        assert order.payload.startswith("stars_")
+        assert len(order.payload) <= 64
+        assert re.fullmatch(r"[A-Za-z0-9_-]+", order.payload)
         assert any(
             isinstance(record.msg, dict)
             and record.msg.get("action") == "payment_order_created"
@@ -88,7 +89,7 @@ async def test_create_stars_order_generates_unique_payloads(session_factory) -> 
 
         payloads = [order.payload for order in orders]
         assert len(payloads) == len(set(payloads))
-        assert all(payload is not None and payload.startswith("stars:") for payload in payloads)
+        assert all(payload is not None and payload.startswith("stars_") and len(payload) <= 64 for payload in payloads)
 
 
 @pytest.mark.asyncio
@@ -207,28 +208,3 @@ async def test_mark_external_stars_payment_paid_credits_user_once(session_factor
         assert paid_order.external_payment_id == "wallet-payment-206"
         assert repeated_order.external_payment_id == "wallet-payment-206"
 
-
-@pytest.mark.asyncio
-async def test_create_crypto_draft_order_creates_crypto_details(session_factory) -> None:
-    async with session_factory() as session:
-        session.add(User(id=205, balance=0))
-        await session.commit()
-        service = PaymentService(session)
-
-        order = await service.create_crypto_draft_order(
-            user_id=205,
-            amount=1000,
-            asset="USDT",
-            network="TRON",
-        )
-
-        result = await session.execute(
-            select(CryptoPaymentOrder).where(CryptoPaymentOrder.payment_order_id == order.id)
-        )
-        crypto_order = result.scalar_one()
-        assert order.provider == PaymentProvider.CRYPTO.value
-        assert order.amount == 1000
-        assert order.currency == "USDT"
-        assert crypto_order.asset == "USDT"
-        assert crypto_order.network == "TRON"
-        assert crypto_order.status == "draft"

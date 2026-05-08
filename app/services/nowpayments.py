@@ -1,27 +1,38 @@
-"""NOWPayments API integration."""
+"""NOWPayments checkout-link integration."""
 from __future__ import annotations
 
 import hashlib
 import hmac
 import json
+from dataclasses import dataclass
 from decimal import Decimal
-from datetime import datetime, timedelta, timezone
 from typing import Any, Optional
 
 import httpx
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import settings
-from app.db import PaymentProvider, PaymentRepository
-from app.services.crypto_payments import CryptoInvoice, CryptoPaymentProvider, CryptoPaymentStatus
+from app.db import PaymentOrder, PaymentOrderStatus, PaymentProvider, PaymentRepository
 from app.utils import logger
 
 
-class NowPaymentsService:
-    """Small async client for NOWPayments payments and IPN verification."""
+@dataclass(frozen=True)
+class NowPaymentsOrderLink:
+    """Checkout link created by NOWPayments for a payment order."""
 
-    def __init__(self, *, client: Optional[httpx.AsyncClient] = None):
+    order: PaymentOrder
+    payment_url: str
+    price_amount: str
+    payment_id: str | None = None
+
+
+class NowPaymentsService:
+    """Small async client for NOWPayments invoices and IPN verification."""
+
+    def __init__(self, *, client: Optional[httpx.AsyncClient] = None, session: Optional[AsyncSession] = None):
         self.client = client
+        self.session = session
+        self.payment_repo = PaymentRepository(session) if session is not None else None
 
     @property
     def base_url(self) -> str:
@@ -33,63 +44,96 @@ class NowPaymentsService:
         return base_url if base_url.endswith("/v1") else f"{base_url}/v1"
 
     @property
-    def return_url(self) -> str:
-        if not settings.main_bot_username.strip():
-            logger.warning({"action": "nowpayments_main_bot_username_missing", "fallback_url": "https://t.me"})
-            return "https://t.me"
-        return settings.main_bot_url
-
-    @property
     def ipn_callback_url(self) -> str:
-        configured_url = settings.nowpayments_ipn_callback_url.strip()
-        if configured_url:
-            return configured_url
         return f"{settings.public_base_url.strip().rstrip('/')}/webhooks/nowpayments"
 
-    async def create_payment(
-        self,
-        *,
-        order_id: str,
-        credits: int,
-        amount_usd: Decimal | float | str,
-        pay_currency: Optional[str] = None,
-    ) -> dict[str, Any]:
-        return_url = self.return_url
+    async def create_payment_order_link(self, user_id: int, credits: int) -> NowPaymentsOrderLink:
+        """Create a local payment order and a NOWPayments checkout URL."""
+        if self.payment_repo is None:
+            raise RuntimeError("create_payment_order_link requires a database session")
+        if credits <= 0:
+            raise ValueError("Credits amount must be positive")
+
+        price_amount = _credits_to_usd(credits)
+        order = await self.payment_repo.create_payment_order(
+            user_id=user_id,
+            provider=PaymentProvider.NOWPAYMENTS.value,
+            amount=credits,
+            credits=credits,
+            currency="USD",
+            metadata={
+                "provider": "nowpayments",
+                "price_amount": price_amount,
+                "price_currency": "usd",
+            },
+        )
+        response = await self.create_invoice(
+            order_id=str(order.id),
+            credits=credits,
+            price_amount=price_amount,
+        )
+        payment_url = _extract_payment_url(response)
+        payment_id = _extract_payment_id(response)
+        metadata = {
+            "provider": "nowpayments",
+            "price_amount": price_amount,
+            "price_currency": "usd",
+            "payment_url": payment_url,
+            "nowpayments_response": _sanitize_for_log(response),
+        }
+        updated_order = await self.payment_repo.update_nowpayments_order_metadata(
+            order.id,
+            payment_id=payment_id,
+            status=PaymentOrderStatus.PENDING.value,
+            metadata=metadata,
+        )
+        if updated_order is None:
+            raise ValueError("Payment order not found")
+        logger.info(
+            {
+                "action": "nowpayments_order_link_created",
+                "order_id": str(updated_order.id),
+                "user_id": user_id,
+                "credits": credits,
+                "price_amount": price_amount,
+                "has_payment_url": bool(payment_url),
+            }
+        )
+        return NowPaymentsOrderLink(
+            order=updated_order,
+            payment_url=payment_url,
+            price_amount=price_amount,
+            payment_id=payment_id,
+        )
+
+    async def create_invoice(self, *, order_id: str, credits: int, price_amount: Decimal | float | str) -> dict[str, Any]:
+        """Create a NOWPayments invoice/checkout page without choosing currency for the user."""
+        normalized_price_amount = _normalize_price_amount(price_amount)
         payload: dict[str, Any] = {
-            "price_amount": str(amount_usd),
+            "price_amount": normalized_price_amount,
             "price_currency": "usd",
             "order_id": str(order_id),
-            "order_description": f"Top up {credits} credits",
+            "order_description": f"{credits} IMai credits",
             "ipn_callback_url": self.ipn_callback_url,
-            "success_url": return_url,
-            "cancel_url": return_url,
         }
-        if pay_currency:
-            payload["pay_currency"] = pay_currency
+        if settings.nowpayments_success_url.strip():
+            payload["success_url"] = settings.nowpayments_success_url.strip()
+        if settings.nowpayments_cancel_url.strip():
+            payload["cancel_url"] = settings.nowpayments_cancel_url.strip()
 
         headers = {
             "x-api-key": settings.nowpayments_api_key.strip(),
             "Content-Type": "application/json",
         }
         if self.client is not None:
-            response = await self.client.post(f"{self.api_base_url}/payment", json=payload, headers=headers)
+            response = await self.client.post(f"{self.api_base_url}/invoice", json=payload, headers=headers)
+            _log_nowpayments_error_response(response, payload)
             response.raise_for_status()
             return response.json()
 
         async with httpx.AsyncClient(timeout=30.0) as client:
-            response = await client.post(f"{self.api_base_url}/payment", json=payload, headers=headers)
-            response.raise_for_status()
-            return response.json()
-
-    async def get_payment_status(self, payment_id: str) -> dict[str, Any]:
-        headers = {"x-api-key": settings.nowpayments_api_key.strip()}
-        if self.client is not None:
-            response = await self.client.get(f"{self.api_base_url}/payment/{payment_id}", headers=headers)
-            response.raise_for_status()
-            return response.json()
-
-        async with httpx.AsyncClient(timeout=30.0) as client:
-            response = await client.get(f"{self.api_base_url}/payment/{payment_id}", headers=headers)
+            response = await client.post(f"{self.api_base_url}/invoice", json=payload, headers=headers)
+            _log_nowpayments_error_response(response, payload)
             response.raise_for_status()
             return response.json()
 
@@ -109,125 +153,71 @@ class NowPaymentsService:
         ).hexdigest()
         return hmac.compare_digest(expected_signature, signature)
 
-
-class NOWPaymentsProvider(CryptoPaymentProvider):
-    """Crypto payment provider backed by NOWPayments."""
-
-    def __init__(self, session: AsyncSession, *, service: Optional[NowPaymentsService] = None):
-        self.session = session
-        self.payment_repo = PaymentRepository(session)
-        self.service = service or NowPaymentsService()
-
-    async def create_invoice(
-        self,
-        user_id: int,
-        amount_credits: int,
-        asset: str,
-        network: str,
-    ) -> CryptoInvoice:
-        if amount_credits <= 0:
-            raise ValueError("Crypto invoice amount must be positive")
-
-        price_amount = _credits_to_usd(amount_credits)
-        order = await self.payment_repo.create_payment_order(
-            user_id=user_id,
-            provider=PaymentProvider.CRYPTO.value,
-            amount=amount_credits,
-            credits=amount_credits,
-            currency="USD",
-            metadata={"provider": "nowpayments"},
-        )
-        await self.payment_repo.create_crypto_payment_order(
-            order.id,
-            asset=asset.strip().upper() or None,
-            network=network.strip().upper() or None,
-            price_amount=price_amount,
-            price_currency="usd",
-            status="draft",
-        )
-        payment = await self.service.create_payment(
-            order_id=str(order.id),
-            credits=amount_credits,
-            amount_usd=price_amount,
-            pay_currency=_build_pay_currency(asset, network),
-        )
-        payment_id = str(payment.get("payment_id") or payment.get("paymentID") or "").strip()
-        pay_address = str(payment.get("pay_address") or "").strip()
-        pay_amount = str(payment.get("pay_amount") or payment.get("actually_paid") or "").strip()
-        pay_currency = str(payment.get("pay_currency") or "").strip()
-        invoice_url = payment.get("invoice_url") or payment.get("payment_url")
-        if not payment_id or not pay_address or not pay_currency:
-            raise ValueError("NOWPayments response missing required payment fields")
-
-        parsed_asset, parsed_network = _parse_pay_currency(pay_currency)
-        await self.payment_repo.attach_nowpayments_payment_details(
-            order.id,
-            nowpayments_payment_id=payment_id,
-            payment_url=str(invoice_url) if invoice_url else None,
-            pay_address=pay_address,
-            pay_currency=pay_currency,
-            price_amount=price_amount,
-            price_currency="usd",
-            status="pending",
-        )
-        crypto_order = await self.payment_repo.get_crypto_payment_order_by_payment_order_id(order.id)
-        if crypto_order is not None:
-            crypto_order.asset = parsed_asset
-            crypto_order.network = parsed_network
-            crypto_order.wallet_address = pay_address
-            crypto_order.expected_amount = pay_amount or price_amount
-            await self.session.commit()
-
-        logger.info({"action": "nowpayments_payment_created", "order_id": str(order.id), "payment_id": payment_id})
-        return CryptoInvoice(
-            invoice_id=payment_id,
-            asset=parsed_asset,
-            network=parsed_network,
-            amount=pay_amount or price_amount,
-            address=pay_address,
-            expires_at=datetime.now(timezone.utc) + timedelta(minutes=30),
-            payment_url=str(invoice_url) if invoice_url else None,
-        )
-
-    async def verify_payment(self, invoice_id: str) -> CryptoPaymentStatus:
-        payment = await self.service.get_payment_status(invoice_id)
-        payment_status = str(payment.get("payment_status") or "").lower()
-        status = "paid" if payment_status == "finished" else "pending"
-        if payment_status in {"failed", "expired", "refunded"}:
-            status = "failed" if payment_status != "expired" else "expired"
-        tx_hash = payment.get("payin_hash") or payment.get("outcome_hash") or payment.get("tx_hash")
-        paid_amount = payment.get("actually_paid") or payment.get("pay_amount")
-        return CryptoPaymentStatus(
-            status=status,
-            tx_hash=str(tx_hash) if tx_hash else None,
-            paid_amount=str(paid_amount) if paid_amount else None,
-        )
+    async def handle_ipn(self, payload: dict[str, Any]) -> None:
+        """Compatibility hook; IPN processing lives in app.services.nowpayments_webhook."""
+        logger.info({"action": "nowpayments_handle_ipn_received", "payload_keys": sorted(payload)})
 
 
 def _credits_to_usd(credits: int) -> str:
-    return f"{Decimal(credits) * Decimal('0.01'):.2f}"
+    return f"{Decimal(credits) * settings.credit_usd_price:.2f}"
 
 
-def _build_pay_currency(asset: str, network: str) -> Optional[str]:
-    asset_value = asset.strip().lower()
-    network_value = network.strip().lower()
-    if not asset_value:
-        return None
-    if asset_value == "usdt" and network_value in {"trc20", "tron"}:
-        return "usdttrc20"
-    if asset_value == "usdt" and network_value in {"erc20", "ethereum"}:
-        return "usdterc20"
-    return asset_value
+def _normalize_price_amount(amount_usd: Decimal | float | str) -> float:
+    amount = Decimal(str(amount_usd))
+    if amount <= 0:
+        raise ValueError("NOWPayments price_amount must be greater than zero")
+    return float(amount)
 
 
-def _parse_pay_currency(pay_currency: str) -> tuple[str, str]:
-    normalized = pay_currency.strip().lower()
-    if normalized == "usdttrc20":
-        return "USDT", "TRC20"
-    if normalized == "usdterc20":
-        return "USDT", "ERC20"
-    if normalized == "btc":
-        return "BTC", "BTC"
-    if normalized == "eth":
-        return "ETH", "ERC20"
-    return normalized.upper(), normalized.upper()
+def _extract_payment_id(response: dict[str, Any]) -> str | None:
+    payment_id = response.get("payment_id") or response.get("paymentID") or response.get("id") or response.get("invoice_id")
+    return str(payment_id).strip() if payment_id else None
+
+
+def _extract_payment_url(response: dict[str, Any]) -> str:
+    payment_url = response.get("invoice_url") or response.get("payment_url") or response.get("url")
+    if not payment_url:
+        raise ValueError("NOWPayments response missing payment_url/invoice_url")
+    return str(payment_url)
+
+
+def _sanitize_for_log(value: Any) -> Any:
+    if isinstance(value, str):
+        sanitized_value = value
+        for secret_value in (settings.nowpayments_api_key.strip(), settings.nowpayments_ipn_secret.strip()):
+            if secret_value:
+                sanitized_value = sanitized_value.replace(secret_value, "[redacted]")
+        return sanitized_value
+    if isinstance(value, dict):
+        sanitized = {}
+        for key, nested_value in value.items():
+            normalized_key = str(key).lower()
+            if any(secret_marker in normalized_key for secret_marker in ("key", "secret", "token", "authorization", "signature")):
+                sanitized[key] = "[redacted]"
+            else:
+                sanitized[key] = _sanitize_for_log(nested_value)
+        return sanitized
+    if isinstance(value, list):
+        return [_sanitize_for_log(item) for item in value]
+    return value
+
+
+def _get_response_body_for_log(response: httpx.Response) -> Any:
+    try:
+        return _sanitize_for_log(response.json())
+    except Exception:
+        return _sanitize_for_log(getattr(response, "text", ""))
+
+
+def _log_nowpayments_error_response(response: httpx.Response, payload: dict[str, Any]) -> None:
+    status_code = getattr(response, "status_code", 200)
+    if status_code < 400:
+        return
+    logger.error(
+        {
+            "action": "nowpayments_create_invoice_error_response",
+            "status_code": status_code,
+            "response_body": _get_response_body_for_log(response),
+            "payload_keys": sorted(payload),
+        }
+    )

@@ -1,43 +1,50 @@
 from __future__ import annotations
 
+import json
 import os
-from datetime import datetime, timezone
 
 import pytest
 import pytest_asyncio
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 
-
 os.environ.setdefault("BOT_TOKEN", "test-bot-token")
 os.environ.setdefault("WAVESPEED_API_KEY", "test-api-key")
 os.environ.setdefault("PUBLIC_BASE_URL", "https://example.com")
 
-
+from app.config import settings
 from app.db.base import Base
-from app.db.models import CryptoPaymentOrder, PaymentOrder, PaymentOrderStatus, PaymentProvider, User
-from app.services.crypto_payments import StubCryptoPaymentProvider
-from app.services.nowpayments import NOWPaymentsProvider
+from app.db.models import PaymentOrder, PaymentOrderStatus, PaymentProvider, User
+from app.services.nowpayments import NowPaymentsService
 
 
-class FakeNowPaymentsService:
-    async def create_payment(self, *, order_id, credits, amount_usd, pay_currency=None):
-        return {
-            "payment_id": "np-provider-1",
-            "invoice_url": "https://nowpayments.test/invoice/np-provider-1",
-            "pay_address": "TProviderAddress",
-            "pay_amount": "2.50",
-            "pay_currency": "usdttrc20",
-            "order_id": order_id,
-        }
+class FakeResponse:
+    status_code = 200
 
-    async def get_payment_status(self, payment_id: str):
-        return {
-            "payment_id": payment_id,
-            "payment_status": "finished",
-            "payin_hash": "tx-provider-1",
-            "actually_paid": "2.50",
-        }
+    def __init__(self, payload: dict[str, object]):
+        self.payload = payload
+        self.text = json.dumps(payload)
+
+    def raise_for_status(self) -> None:
+        return None
+
+    def json(self) -> dict[str, object]:
+        return self.payload
+
+
+class FakeClient:
+    def __init__(self):
+        self.posts: list[dict[str, object]] = []
+
+    async def post(self, url: str, json: dict[str, object], headers: dict[str, str]) -> FakeResponse:
+        self.posts.append({"url": url, "json": json, "headers": headers})
+        return FakeResponse(
+            {
+                "payment_id": "np-checkout-1",
+                "invoice_url": "https://nowpayments.test/invoice/np-checkout-1",
+                "order_id": json["order_id"],
+            }
+        )
 
 
 @pytest_asyncio.fixture
@@ -55,103 +62,53 @@ async def session_factory(tmp_path):
 
 
 @pytest.mark.asyncio
-async def test_stub_crypto_provider_creates_draft_order_without_crediting(session_factory, monkeypatch) -> None:
+async def test_nowpayments_checkout_link_creates_payment_order_without_wallet_details(session_factory, monkeypatch) -> None:
+    monkeypatch.setattr(settings, "nowpayments_api_key", "api-key")
+    monkeypatch.setattr(settings, "nowpayments_base_url", "https://api.nowpayments.test")
+    monkeypatch.setattr(settings, "public_base_url", "https://bot.test")
+    monkeypatch.setattr(settings, "nowpayments_success_url", "")
+    monkeypatch.setattr(settings, "nowpayments_cancel_url", "")
+    client = FakeClient()
+
     async with session_factory() as session:
-        session.add(User(id=901, balance=12))
+        session.add(User(id=301, balance=0))
         await session.commit()
-        provider = StubCryptoPaymentProvider(session)
 
-        invoice = await provider.create_invoice(
-            user_id=901,
-            amount_credits=250,
-            asset="usdt",
-            network="trc20",
+        payment_link = await NowPaymentsService(client=client, session=session).create_payment_order_link(
+            user_id=301,
+            credits=100,
         )
 
-        payment_order_result = await session.execute(select(PaymentOrder).where(PaymentOrder.user_id == 901))
-        payment_order = payment_order_result.scalar_one()
-        crypto_order_result = await session.execute(
-            select(CryptoPaymentOrder).where(CryptoPaymentOrder.payment_order_id == payment_order.id)
-        )
-        crypto_order = crypto_order_result.scalar_one()
-        balance_result = await session.execute(select(User.balance).where(User.id == 901))
+        order = (await session.execute(select(PaymentOrder).where(PaymentOrder.user_id == 301))).scalar_one()
 
-        assert invoice.invoice_id == str(payment_order.id)
-        assert invoice.asset == "USDT"
-        assert invoice.network == "TRC20"
-        assert invoice.amount == 250
-        assert invoice.address == ""
-        assert invoice.payment_url is None
-        assert invoice.expires_at > datetime.now(timezone.utc)
-        assert payment_order.provider == PaymentProvider.CRYPTO.value
-        assert payment_order.status == PaymentOrderStatus.CREATED.value
-        assert payment_order.credits == 250
-        assert payment_order.currency == "USDT"
-        assert crypto_order.status == "draft"
-        assert crypto_order.asset == "USDT"
-        assert crypto_order.network == "TRC20"
-        assert crypto_order.wallet_address == ""
-        assert crypto_order.expected_amount == "250"
-        assert balance_result.scalar_one() == 12
+    assert payment_link.payment_url == "https://nowpayments.test/invoice/np-checkout-1"
+    assert payment_link.price_amount == "1.00"
+    assert order.provider == PaymentProvider.NOWPAYMENTS.value
+    assert order.status == PaymentOrderStatus.PENDING.value
+    assert order.amount == 100
+    assert order.credits == 100
+    assert order.currency == "USD"
+    assert order.nowpayments_payment_id == "np-checkout-1"
+    assert order.metadata_["payment_url"] == "https://nowpayments.test/invoice/np-checkout-1"
+    assert "wallet_address" not in order.metadata_
+    assert "network" not in order.metadata_
+    assert "tx_hash" not in order.metadata_
+
+    payload = client.posts[0]["json"]
+    assert client.posts[0]["url"] == "https://api.nowpayments.test/v1/invoice"
+    assert payload["price_amount"] == 1.0
+    assert payload["price_currency"] == "usd"
+    assert payload["order_id"] == str(order.id)
+    assert payload["order_description"] == "100 IMai credits"
+    assert payload["ipn_callback_url"] == "https://bot.test/webhooks/nowpayments"
+    assert "pay_currency" not in payload
 
 
 @pytest.mark.asyncio
-async def test_stub_crypto_provider_verify_payment_is_always_pending(session_factory) -> None:
+async def test_nowpayments_checkout_link_rejects_invalid_credit_amount(session_factory) -> None:
     async with session_factory() as session:
-        provider = StubCryptoPaymentProvider(session)
-
-        status = await provider.verify_payment("invoice-id")
-
-        assert status.status == "pending"
-        assert status.tx_hash is None
-        assert status.paid_amount is None
-
-
-@pytest.mark.asyncio
-async def test_nowpayments_provider_creates_pending_order_without_crediting(session_factory) -> None:
-    async with session_factory() as session:
-        session.add(User(id=902, balance=17))
-        await session.commit()
-        provider = NOWPaymentsProvider(session, service=FakeNowPaymentsService())
-
-        invoice = await provider.create_invoice(
-            user_id=902,
-            amount_credits=250,
-            asset="USDT",
-            network="TRC20",
-        )
-
-        payment_order = (await session.execute(select(PaymentOrder).where(PaymentOrder.user_id == 902))).scalar_one()
-        crypto_order = (
-            await session.execute(select(CryptoPaymentOrder).where(CryptoPaymentOrder.payment_order_id == payment_order.id))
-        ).scalar_one()
-        balance = (await session.execute(select(User.balance).where(User.id == 902))).scalar_one()
-
-        assert invoice.invoice_id == "np-provider-1"
-        assert invoice.asset == "USDT"
-        assert invoice.network == "TRC20"
-        assert invoice.amount == "2.50"
-        assert invoice.address == "TProviderAddress"
-        assert invoice.payment_url == "https://nowpayments.test/invoice/np-provider-1"
-        assert payment_order.provider == PaymentProvider.CRYPTO.value
-        assert payment_order.status == PaymentOrderStatus.PENDING.value
-        assert payment_order.credits == 250
-        assert payment_order.nowpayments_payment_id == "np-provider-1"
-        assert crypto_order.status == "pending"
-        assert crypto_order.nowpayments_payment_id == "np-provider-1"
-        assert crypto_order.pay_currency == "usdttrc20"
-        assert crypto_order.wallet_address == "TProviderAddress"
-        assert crypto_order.expected_amount == "2.50"
-        assert balance == 17
-
-
-@pytest.mark.asyncio
-async def test_nowpayments_provider_verify_payment_maps_provider_status(session_factory) -> None:
-    async with session_factory() as session:
-        provider = NOWPaymentsProvider(session, service=FakeNowPaymentsService())
-
-        status = await provider.verify_payment("np-provider-1")
-
-        assert status.status == "paid"
-        assert status.tx_hash == "tx-provider-1"
-        assert status.paid_amount == "2.50"
+        with pytest.raises(ValueError, match="Credits amount"):
+            await NowPaymentsService(client=FakeClient(), session=session).create_payment_order_link(
+                user_id=302,
+                credits=0,
+            )

@@ -202,10 +202,23 @@ async def test_start_paid_payload_checks_payment_without_crediting_pending_order
 
         result = await session.execute(select(User.balance).where(User.id == 711))
         assert result.scalar_one() == 5
-        assert message.answers == [
-            "Проверяем оплату...",
-            "Платёж пока не подтверждён. Если вы уже оплатили, подождите немного и откройте бота ещё раз.",
-        ]
+        assert message.answers == ["Проверяем оплату..."]
+
+
+@pytest.mark.asyncio
+async def test_start_direct_stars_payload_checks_payment_without_crediting(session_factory) -> None:
+    async with session_factory() as session:
+        session.add(User(id=717, balance=8))
+        await session.commit()
+        order = await PaymentService(session).create_stars_order(user_id=717, stars_amount=300)
+        state = FakeState()
+        message = FakeMessage(user_id=717, text=f"/start {order.payload}")
+
+        await start.start_command(message, state, session, command=SimpleNamespace(args=order.payload))
+
+        result = await session.execute(select(User.balance).where(User.id == 717))
+        assert result.scalar_one() == 8
+        assert message.answers == ["Проверяем оплату..."]
 
 
 @pytest.mark.asyncio
@@ -220,10 +233,7 @@ async def test_start_paid_payload_does_not_trust_unknown_payload(session_factory
 
         result = await session.execute(select(User.balance).where(User.id == 714))
         assert result.scalar_one() == 33
-        assert message.answers == [
-            "Проверяем оплату...",
-            "Платёж пока не подтверждён. Если вы уже оплатили, подождите немного и откройте бота ещё раз.",
-        ]
+        assert message.answers == ["Проверяем оплату..."]
 
 
 @pytest.mark.asyncio
@@ -243,10 +253,7 @@ async def test_start_paid_payload_does_not_confirm_another_users_paid_order(sess
         requester_balance = (await session.execute(select(User.balance).where(User.id == 716))).scalar_one()
         assert owner_balance == 105
         assert requester_balance == 20
-        assert message.answers == [
-            "Проверяем оплату...",
-            "Платёж пока не подтверждён. Если вы уже оплатили, подождите немного и откройте бота ещё раз.",
-        ]
+        assert message.answers == ["Проверяем оплату..."]
 
 
 @pytest.mark.asyncio
@@ -264,10 +271,7 @@ async def test_start_paid_payload_reports_confirmed_external_payment(session_fac
 
         result = await session.execute(select(User.balance).where(User.id == 712))
         assert result.scalar_one() == 105
-        assert message.answers == [
-            "Проверяем оплату...",
-            "✅ Платёж получен. Добавлено кредитов: 100. Баланс: 105",
-        ]
+        assert message.answers == ["Проверяем оплату..."]
 
 
 @pytest.mark.asyncio
