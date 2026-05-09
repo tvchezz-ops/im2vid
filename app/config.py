@@ -76,10 +76,6 @@ class Settings(BaseSettings):
         default=30,
         description="TTL временных media-файлов в минутах",
     )
-    max_parallel_generations_per_user: int = Field(
-        default=3,
-        description="Максимальное количество активных generation_request на пользователя",
-    )
     wavespeed_poll_fast_seconds: int = Field(
         default=10,
         description="Интервал polling Wavespeed в первые 3 минуты",
@@ -242,7 +238,6 @@ except Exception as e:
         f"- PUBLIC_BASE_URL\n"
         f"- TEMP_MEDIA_DIR (опционально, по умолчанию tmp/media)\n"
         f"- TEMP_MEDIA_TTL_MINUTES (опционально, по умолчанию 30)\n"
-        f"- MAX_PARALLEL_GENERATIONS_PER_USER (опционально, по умолчанию 3)\n"
         f"- WAVESPEED_POLL_FAST_SECONDS (опционально, по умолчанию 10)\n"
         f"- WAVESPEED_POLL_NORMAL_SECONDS (опционально, по умолчанию 30)\n"
         f"- WAVESPEED_POLL_SLOW_SECONDS (опционально, по умолчанию 60)\n"

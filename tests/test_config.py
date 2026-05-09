@@ -43,17 +43,6 @@ def test_wallet_bot_username_missing_env_defaults_to_none(monkeypatch: pytest.Mo
     assert settings.wallet_bot_username is None
 
 
-def test_max_parallel_generations_defaults_to_three() -> None:
-    settings = Settings(
-        bot_token="test-bot-token",
-        wavespeed_api_key="test-api-key",
-        public_base_url="https://example.com",
-        _env_file=None,
-    )
-
-    assert settings.max_parallel_generations_per_user == 3
-
-
 def test_wavespeed_polling_defaults() -> None:
     settings = Settings(
         bot_token="test-bot-token",

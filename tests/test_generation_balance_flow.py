@@ -220,11 +220,15 @@ async def test_show_generation_menu_starts_with_generation_type_selection() -> N
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("active_count", [0, 1, 2])
-async def test_show_generation_menu_allows_under_parallel_limit(session_factory, active_count: int) -> None:
+async def test_show_generation_menu_ignores_active_generation_count(session_factory, monkeypatch) -> None:
+    async def fake_count_active_generations(self, user_id: int) -> int:
+        return 999
+
+    monkeypatch.setattr(GenerationRepository, "count_active_generations", fake_count_active_generations)
+
     async with session_factory() as session:
         await create_user(session, user_id=421, balance=5)
-        for index in range(active_count):
+        for index in range(3):
             await GenerationRepository(session).create_generation_request(
                 user_id=421,
                 model_key="nano_banana",
@@ -242,12 +246,35 @@ async def test_show_generation_menu_allows_under_parallel_limit(session_factory,
 
         assert state.state == GenerationStates.choosing_generation_type
         assert "Выберите тип генерации:" in message.answers[-1]
+        removed_warning_fragment = "Можно запускать" + " не больше"
+        assert not any(removed_warning_fragment in answer for answer in message.answers)
 
 
 @pytest.mark.asyncio
-async def test_show_generation_menu_blocks_at_parallel_limit(session_factory) -> None:
+async def test_confirm_generation_ignores_active_generation_count(session_factory, monkeypatch, tmp_path) -> None:
+    async def fake_count_active_generations(self, user_id: int) -> int:
+        return 999
+
+    async def fake_submit_generation_request(**kwargs) -> str:
+        return "pred-no-limit"
+
+    async def fake_poll_generation_result(**kwargs) -> None:
+        return None
+
+    class FakeTelegramFilesService:
+        def __init__(self, bot):
+            self.bot = bot
+
+        async def download_temp_file_and_get_public_url(self, file_id: str):
+            return SimpleNamespace(local_path=tmp_path / "input.png", public_url="https://example.com/input.png")
+
+    monkeypatch.setattr(GenerationRepository, "count_active_generations", fake_count_active_generations)
+    monkeypatch.setattr(generations, "TelegramFilesService", FakeTelegramFilesService)
+    monkeypatch.setattr(generations, "submit_generation_request", fake_submit_generation_request)
+    monkeypatch.setattr(generations, "poll_generation_result", fake_poll_generation_result)
+
     async with session_factory() as session:
-        await create_user(session, user_id=422, balance=5)
+        await create_user(session, user_id=422, balance=30)
         for index, status in enumerate(("created", "processing", "pending")):
             await GenerationRepository(session).create_generation_request(
                 user_id=422,
@@ -259,13 +286,33 @@ async def test_show_generation_menu_blocks_at_parallel_limit(session_factory) ->
                 cost=1,
             )
 
-        message = FakeMessage(chat_id=422)
-        state = FakeState()
+        menu_message = FakeMessage(chat_id=422)
+        menu_state = FakeState()
+        await generations.show_generation_menu(menu_message, menu_state, session)
 
-        await generations.show_generation_menu(message, state, session)
+        state = FakeState(
+            {
+                "model_key": "nano_banana",
+                "model_title": "Nano Banana",
+                "model_endpoint": "/api/v3/nano-banana",
+                "prompt": "Make the image brighter and keep the subject intact",
+                "input_image_file_id": "telegram-file-id",
+                "user_settings": {"aspect_ratio": "1:1", "resolution": "4k", "output_format": "png"},
+            }
+        )
+        callback = FakeCallback(user_id=422)
 
+        await generations.confirm_generation(callback, state, session)
+        await await_background_generation_tasks()
+
+        assert menu_state.state == GenerationStates.choosing_generation_type
+        assert "Выберите тип генерации:" in menu_message.answers[-1]
         assert state.state is None
-        assert message.answers[-1] == "⚠️ У вас уже запущено 3 генерации. Дождитесь завершения одной из них."
+        assert callback.message.answers[-1] == "Генерация запущена в фоне. Результат придёт сюда автоматически."
+        all_answers = [*menu_message.answers, *callback.message.answers]
+        removed_warning_fragment = "Можно запускать" + " не больше"
+        assert not any(removed_warning_fragment in answer for answer in all_answers)
+        assert not any("Дождитесь завершения" in answer for answer in all_answers)
 
 
 @pytest.mark.asyncio

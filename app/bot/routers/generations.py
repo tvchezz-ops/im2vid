@@ -147,24 +147,6 @@ class ErrorCode:
     E012_MEDIA_UPLOAD_FAILED = "E012"
 
 
-async def count_active_generations_for_user(user_id: int, session: Optional[AsyncSession] = None) -> int:
-    if session is not None:
-        return await GenerationRepository(session).count_active_generations(user_id)
-    async with db_manager.session_factory() as new_session:
-        return await GenerationRepository(new_session).count_active_generations(user_id)
-
-
-def log_parallel_generation_event(action: str, user_id: int, count: int, limit: int) -> None:
-    logger.info(
-        {
-            "action": action,
-            "user_id": user_id,
-            "active_count": count,
-            "limit": limit,
-        }
-    )
-
-
 def format_user_error(code: str, message: str, lang: str = "en") -> str:
     return t("errors.formatted", lang, code=code, message=message)
 
@@ -2773,16 +2755,6 @@ async def show_generation_menu(message: Message, state: FSMContext, session: Opt
     try:
         lang = get_actor_language(message.from_user)
         current_state = await state.get_state()
-        active_count = await count_active_generations_for_user(message.from_user.id, session)
-        limit = settings.max_parallel_generations_per_user
-        if active_count >= limit:
-            log_parallel_generation_event("parallel_generation_limit_reached", message.from_user.id, active_count, limit)
-            await message.answer(
-                t("generation.parallel_limit_reached", lang, count=active_count),
-                reply_markup=get_main_menu_keyboard(lang),
-            )
-            return
-        log_parallel_generation_event("parallel_generation_allowed", message.from_user.id, active_count, limit)
 
         if is_generation_flow_state(current_state):
             await reset_generation_flow(state, reason="main_menu_generations")
@@ -3730,25 +3702,6 @@ async def confirm_generation(callback: CallbackQuery, state: FSMContext, session
         total_cost = get_total_generation_cost(model, user_settings)
         allocated_generation_costs = allocate_generation_cost_credits(model, user_settings, num_generations)
         single_generation_cost = allocated_generation_costs[0]
-        active_count = await generation_repo.count_active_generations(user.id)
-        limit = settings.max_parallel_generations_per_user
-        if active_count >= limit:
-            log_parallel_generation_event("parallel_generation_limit_reached", user.id, active_count, limit)
-            await callback.message.answer(
-                t("generation.parallel_limit_reached", lang, count=active_count),
-                reply_markup=get_main_menu_keyboard(lang),
-            )
-            await callback.answer()
-            return
-        if active_count + num_generations > limit:
-            log_parallel_generation_event("parallel_generation_limit_reached", user.id, active_count, limit)
-            await callback.message.answer(
-                t("generation.parallel_limit_would_exceed", lang, limit=limit),
-                reply_markup=get_main_menu_keyboard(lang),
-            )
-            await callback.answer()
-            return
-        log_parallel_generation_event("parallel_generation_allowed", user.id, active_count, limit)
 
         if not await user_repo.decrease_balance(user.id, total_cost):
             log_balance_event("insufficient_balance", user.id, total_cost)
