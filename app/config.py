@@ -135,6 +135,14 @@ class Settings(BaseSettings):
     nowpayments_success_url: str = Field(default="", description="Optional NOWPayments success URL")
     nowpayments_cancel_url: str = Field(default="", description="Optional NOWPayments cancel URL")
     credit_usd_price: Decimal = Field(default=Decimal("0.013"), description="USD price for one credit")
+    pricing_markup_multiplier: Decimal = Field(
+        default=Decimal("2"),
+        description="Markup multiplier applied to provider generation prices",
+    )
+    usd_per_100_credits: Decimal = Field(
+        default=Decimal("1.30"),
+        description="USD price for 100 credits used for generation cost conversion",
+    )
     r2_endpoint_url: str = Field(
         default="",
         description="Endpoint URL для Cloudflare R2",
@@ -253,6 +261,8 @@ except Exception as e:
         f"- NOWPAYMENTS_SUCCESS_URL (опционально, success redirect от NOWPayments)\n"
         f"- NOWPAYMENTS_CANCEL_URL (опционально, cancel redirect от NOWPayments)\n"
         f"- CREDIT_USD_PRICE (опционально, по умолчанию 0.013)\n"
+        f"- PRICING_MARKUP_MULTIPLIER (опционально, по умолчанию 2)\n"
+        f"- USD_PER_100_CREDITS (опционально, по умолчанию 1.30)\n"
         f"- R2_ENDPOINT_URL (опционально, для Cloudflare R2)\n"
         f"- R2_ACCESS_KEY_ID (опционально, для Cloudflare R2)\n"
         f"- R2_SECRET_ACCESS_KEY (опционально, для Cloudflare R2)\n"

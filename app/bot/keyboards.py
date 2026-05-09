@@ -8,7 +8,13 @@ from aiogram.utils.keyboard import InlineKeyboardBuilder
 
 from app.i18n import get_user_language, t
 from app.services.payments import ALLOWED_STARS_AMOUNTS
-from app.services.generation_service import list_generation_types, list_providers
+from app.services.generation_service import (
+    generation_cost_has_minimum_label,
+    get_minimum_generation_cost_credits,
+    is_generation_cost_estimated,
+    list_generation_types,
+    list_providers,
+)
 
 
 CALLBACK_DATA_LIMIT = 64
@@ -28,6 +34,7 @@ BUTTON_ICONS = {
     "common.back": "⬅️",
     "common.back_to_settings": "⬅️",
     "common.continue": "✅",
+    "common.clear_images": "🗑",
     "common.download_file": "🔗",
     "common.change_settings": "⚙️",
     "profile.top_up": "💳",
@@ -148,6 +155,20 @@ def resolve_model_key_from_token(models: Sequence[Any], token: str) -> str | Non
     return None
 
 
+def format_model_price_label(model: Any, lang: str = "en") -> str:
+    """Build a compact price suffix for model selection buttons."""
+    try:
+        cost = get_minimum_generation_cost_credits(model)
+        prefix = "от " if get_user_language(lang) == "ru" and generation_cost_has_minimum_label(model) else ""
+        if get_user_language(lang) != "ru" and generation_cost_has_minimum_label(model):
+            prefix = "from "
+        if is_generation_cost_estimated(model):
+            prefix = f"{prefix}≈ "
+        return f"{prefix}{cost} credits"
+    except Exception:
+        return ""
+
+
 def build_main_menu_keyboard(lang: str = "en") -> ReplyKeyboardMarkup:
     """Главное меню Telegram reply keyboard."""
     return ReplyKeyboardMarkup(
@@ -185,9 +206,16 @@ def build_back_to_settings_reply_keyboard(lang: str = "en") -> ReplyKeyboardMark
     )
 
 
-def build_media_upload_reply_keyboard(*, show_continue: bool, lang: str = "en") -> ReplyKeyboardMarkup:
+def build_media_upload_reply_keyboard(
+    *,
+    show_continue: bool,
+    lang: str = "en",
+    show_clear_images: bool = False,
+) -> ReplyKeyboardMarkup:
     """Reply keyboard для этапа загрузки media с optional continue action."""
     keyboard = [[KeyboardButton(text=get_button_text("common.back_to_settings", lang))]]
+    if show_clear_images:
+        keyboard.insert(0, [KeyboardButton(text=get_button_text("common.clear_images", lang))])
     if show_continue:
         keyboard.insert(0, [KeyboardButton(text=get_button_text("common.continue", lang))])
     return ReplyKeyboardMarkup(
@@ -234,10 +262,14 @@ def build_models_keyboard(models: Iterable[Any], back_callback: str, lang: str =
     rows = []
     for model_index, model in enumerate(model_list):
         token = get_model_callback_token(model_list, model, model_index)
+        price_label = format_model_price_label(model, lang)
+        button_text = str(model.title)
+        if price_label:
+            button_text = f"{button_text} — {price_label}"
         rows.append(
             [
                 InlineKeyboardButton(
-                    text=str(model.title),
+                    text=button_text,
                     callback_data=validate_callback_length(f"gen:model:{token}"),
                 )
             ]

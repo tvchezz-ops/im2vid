@@ -2,10 +2,12 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field, replace
+from decimal import Decimal, ROUND_CEILING
 from typing import Any, Literal, Mapping, Optional, TYPE_CHECKING
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.config import settings
 from app.db import GenerationRepository
 from app.utils import logger
 
@@ -67,6 +69,25 @@ class GenerationModel:
     input_schema: dict[str, Any] = field(default_factory=dict)
     user_settings: dict[str, GenerationSetting] = field(default_factory=dict)
     system_settings: dict[str, Any] = field(default_factory=dict)
+    base_wavespeed_price_usd: Decimal = Decimal("0.05")
+    pricing_rules: dict[str, Any] | None = None
+
+    @property
+    def wavespeed_price_usd(self) -> Decimal:
+        """Backward-compatible name for the provider base price."""
+        return self.base_wavespeed_price_usd
+
+    @property
+    def fallback_price_usd(self) -> Decimal:
+        """Backward-compatible default used for unknown model pricing."""
+        return Decimal("0.05")
+
+    @property
+    def pricing_type(self) -> str:
+        """Backward-compatible coarse pricing type."""
+        if generation_price_depends_on_duration(self):
+            return "per_second_video"
+        return "per_generation"
 
     @property
     def required_fields(self) -> tuple[str, ...]:
@@ -237,6 +258,262 @@ def _select_setting(
     )
 
 
+def _to_decimal(value: Any, default: Decimal) -> Decimal:
+    try:
+        return Decimal(str(value))
+    except Exception:
+        return default
+
+
+def is_generation_cost_estimated(model: GenerationModel) -> bool:
+    return model.base_wavespeed_price_usd == Decimal("0.05") and model.pricing_rules is None
+
+
+def generation_price_depends_on_duration(model: GenerationModel) -> bool:
+    return bool((model.pricing_rules or {}).get("duration_multiplier_per_second"))
+
+
+def _get_duration_seconds(model: GenerationModel, user_settings: Mapping[str, Any]) -> Decimal:
+    raw_duration = user_settings.get("duration")
+    if raw_duration is None:
+        duration_setting = model.user_settings.get("duration")
+        raw_duration = duration_setting.default if duration_setting is not None else "1"
+    duration = _to_decimal(raw_duration, Decimal("1"))
+    return max(duration, Decimal("1"))
+
+
+def _get_per_image_count(user_settings: Mapping[str, Any]) -> int:
+    for key in ("max_images", "num_images", "image_count"):
+        raw_value = user_settings.get(key)
+        if raw_value is None:
+            continue
+        try:
+            return max(1, int(str(raw_value).strip()))
+        except (TypeError, ValueError):
+            return 1
+    return 1
+
+
+def _credit_usd_price() -> Decimal:
+    return settings.credit_usd_price
+
+
+def _get_int(value: Any, default: int = 1) -> int:
+    try:
+        return int(str(value).strip())
+    except (TypeError, ValueError):
+        return default
+
+
+def _truthy(value: Any) -> bool:
+    if isinstance(value, bool):
+        return value
+    return str(value).strip().lower() in {"1", "true", "yes", "on", "enabled"}
+
+
+def _get_multiplier(rules: Mapping[str, Any], rule_key: str, selected_value: Any) -> Decimal:
+    if selected_value is None:
+        return Decimal("1")
+    multipliers = rules.get(rule_key)
+    if not isinstance(multipliers, Mapping):
+        return Decimal("1")
+    return _to_decimal(multipliers.get(str(selected_value)), Decimal("1"))
+
+
+def _get_resolution_value(settings_map: Mapping[str, Any]) -> Any:
+    return settings_map.get("resolution") or settings_map.get("size")
+
+
+def _get_quality_value(settings_map: Mapping[str, Any]) -> Any:
+    return settings_map.get("quality") or settings_map.get("mode") or settings_map.get("shot_type")
+
+
+def _get_duration_value(model: GenerationModel, settings_map: Mapping[str, Any]) -> Decimal | None:
+    if "duration" not in settings_map and "duration" not in model.user_settings:
+        return None
+    return _get_duration_seconds(model, settings_map)
+
+
+def _get_output_count(settings_map: Mapping[str, Any], rules: Mapping[str, Any]) -> int:
+    fields = rules.get("output_count_fields") or ("output_count", "num_outputs", "num_images", "max_images")
+    if isinstance(fields, str):
+        fields = (fields,)
+    for field_name in fields:
+        raw_value = settings_map.get(str(field_name))
+        if raw_value is not None:
+            return max(1, _get_int(raw_value))
+    return 1
+
+
+def _format_decimal(value: Decimal) -> str:
+    normalized = value.quantize(Decimal("0.000001")).normalize()
+    return format(normalized, "f")
+
+
+def _ceil_credits(price_usd: Decimal) -> int:
+    credits = (price_usd / _credit_usd_price()).to_integral_value(rounding=ROUND_CEILING)
+    return max(1, int(credits))
+
+
+def _calculate_generation_price_details(
+    model: GenerationModel,
+    user_settings: Optional[Mapping[str, Any]],
+    num_generations: int = 1,
+) -> tuple[Decimal, int, dict[str, Any]]:
+    rules = model.pricing_rules or {}
+    settings_map = dict(user_settings or {})
+    requested_generations = max(1, _get_int(num_generations))
+    price = model.base_wavespeed_price_usd
+
+    resolution = _get_resolution_value(settings_map)
+    quality = _get_quality_value(settings_map)
+    duration = _get_duration_value(model, settings_map)
+    aspect_ratio = settings_map.get("aspect_ratio")
+    steps = settings_map.get("steps") or settings_map.get("num_inference_steps")
+
+    price *= _get_multiplier(rules, "resolution_multipliers", resolution)
+    price *= _get_multiplier(rules, "quality_multipliers", quality)
+    price *= _get_multiplier(rules, "mode_multipliers", quality)
+    price *= _get_multiplier(rules, "aspect_ratio_multipliers", aspect_ratio)
+
+    if rules.get("duration_multiplier_per_second") and duration is not None:
+        price *= duration
+
+    steps_rule = rules.get("steps_multiplier")
+    if isinstance(steps_rule, Mapping) and steps is not None:
+        selected_steps = _get_int(steps, _get_int(steps_rule.get("base_steps"), 20))
+        base_steps = _get_int(steps_rule.get("base_steps"), 20)
+        extra_steps = max(0, selected_steps - base_steps)
+        step_multiplier = _to_decimal(steps_rule.get("price_per_extra_step_multiplier"), Decimal("0"))
+        price *= Decimal("1") + Decimal(extra_steps) * step_multiplier
+
+    output_count = _get_output_count(settings_map, rules)
+    if rules.get("output_count_multiplier"):
+        price *= Decimal(output_count)
+    else:
+        price *= _get_multiplier(rules, "output_count_multipliers", output_count)
+
+    boolean_multipliers = rules.get("boolean_multipliers")
+    if isinstance(boolean_multipliers, Mapping):
+        for setting_key, multiplier in boolean_multipliers.items():
+            if _truthy(settings_map.get(str(setting_key))):
+                price *= _to_decimal(multiplier, Decimal("1"))
+
+    price *= Decimal(requested_generations)
+    price *= settings.pricing_markup_multiplier
+    credits = _ceil_credits(price)
+    context = {
+        "action": "generation_dynamic_price_calculated",
+        "model_key": model.key,
+        "base_price": _format_decimal(model.base_wavespeed_price_usd),
+        "resolution": str(resolution) if resolution is not None else None,
+        "quality": str(quality) if quality is not None else None,
+        "duration": _format_decimal(duration) if duration is not None else None,
+        "num_generations": requested_generations,
+        "final_price_usd": _format_decimal(price),
+        "final_credits": credits,
+    }
+    return price, credits, context
+
+
+def calculate_generation_price_usd(
+    model: GenerationModel,
+    user_settings: Optional[Mapping[str, Any]],
+    num_generations: int = 1,
+) -> Decimal:
+    price, _, context = _calculate_generation_price_details(model, user_settings, num_generations)
+    logger.info(context)
+    return price
+
+
+def calculate_generation_cost_credits(
+    model: GenerationModel,
+    user_settings: Optional[Mapping[str, Any]],
+    num_generations: int = 1,
+) -> int:
+    _, credits, context = _calculate_generation_price_details(model, user_settings, num_generations)
+    logger.info(context)
+    return credits
+
+
+def calculate_generation_price_quote(
+    model: GenerationModel,
+    user_settings: Optional[Mapping[str, Any]],
+    num_generations: int = 1,
+) -> tuple[Decimal, int]:
+    price, credits, context = _calculate_generation_price_details(model, user_settings, num_generations)
+    logger.info(context)
+    return price, credits
+
+
+def allocate_generation_cost_credits(
+    model: GenerationModel,
+    user_settings: Optional[Mapping[str, Any]],
+    num_generations: int,
+) -> list[int]:
+    requested_generations = max(1, _get_int(num_generations))
+    total_cost = calculate_generation_cost_credits(model, user_settings, requested_generations)
+    base_cost = total_cost // requested_generations
+    remainder = total_cost % requested_generations
+    return [base_cost + (1 if index < remainder else 0) for index in range(requested_generations)]
+
+
+def _estimate_settings_for_cost(model: GenerationModel, *, maximize: bool) -> dict[str, Any]:
+    rules = model.pricing_rules or {}
+    estimated_settings = get_default_settings(model.key)
+
+    def choose_by_multiplier(setting_key: str, rule_key: str) -> None:
+        setting = model.user_settings.get(setting_key)
+        multipliers = rules.get(rule_key)
+        if setting is None or not isinstance(multipliers, Mapping) or not setting.options:
+            return
+        candidates = [
+            (option.value, _to_decimal(multipliers.get(option.value), Decimal("1")))
+            for option in setting.options
+        ]
+        selected = max(candidates, key=lambda item: item[1]) if maximize else min(candidates, key=lambda item: item[1])
+        estimated_settings[setting_key] = selected[0]
+
+    choose_by_multiplier("resolution", "resolution_multipliers")
+    choose_by_multiplier("size", "resolution_multipliers")
+    choose_by_multiplier("quality", "quality_multipliers")
+    choose_by_multiplier("mode", "mode_multipliers")
+    choose_by_multiplier("shot_type", "quality_multipliers")
+    choose_by_multiplier("aspect_ratio", "aspect_ratio_multipliers")
+
+    duration_setting = model.user_settings.get("duration")
+    if rules.get("duration_multiplier_per_second") and duration_setting is not None and duration_setting.options:
+        durations = [(option.value, _to_decimal(option.value, Decimal("1"))) for option in duration_setting.options]
+        selected_duration = max(durations, key=lambda item: item[1]) if maximize else min(durations, key=lambda item: item[1])
+        estimated_settings["duration"] = selected_duration[0]
+
+    for setting_key in ("num_generations", "output_count", "num_outputs", "num_images", "max_images", "steps", "num_inference_steps"):
+        setting = model.user_settings.get(setting_key)
+        if setting is None or not setting.options:
+            continue
+        numeric_options = [(option.value, _to_decimal(option.value, Decimal("1"))) for option in setting.options]
+        selected_option = max(numeric_options, key=lambda item: item[1]) if maximize else min(numeric_options, key=lambda item: item[1])
+        estimated_settings[setting_key] = selected_option[0]
+
+    return estimated_settings
+
+
+def estimate_minimum_generation_cost(model: GenerationModel) -> int:
+    return calculate_generation_cost_credits(model, _estimate_settings_for_cost(model, maximize=False))
+
+
+def estimate_maximum_generation_cost(model: GenerationModel) -> int:
+    return calculate_generation_cost_credits(model, _estimate_settings_for_cost(model, maximize=True))
+
+
+def get_minimum_generation_cost_credits(model: GenerationModel) -> int:
+    return estimate_minimum_generation_cost(model)
+
+
+def generation_cost_has_minimum_label(model: GenerationModel) -> bool:
+    return bool(model.pricing_rules)
+
+
 def _build_num_generations_setting(max_generations: int = 4) -> GenerationSetting:
     capped_limit = max(1, min(4, max_generations))
     values = tuple(str(value) for value in range(1, capped_limit + 1))
@@ -343,6 +620,10 @@ def _model(
     input_schema: Optional[dict[str, Any]] = None,
     user_settings: Optional[dict[str, GenerationSetting]] = None,
     system_settings: Optional[dict[str, Any]] = None,
+    base_wavespeed_price_usd: Decimal = Decimal("0.05"),
+    pricing_rules: Optional[dict[str, Any]] = None,
+    wavespeed_price_usd: Optional[Decimal] = None,
+    pricing_type: Optional[str] = None,
 ) -> GenerationModel:
     normalized_user_settings = dict(user_settings or {})
     if is_enabled:
@@ -350,6 +631,10 @@ def _model(
             "num_generations",
             _build_num_generations_setting(),
         )
+    resolved_base_price = wavespeed_price_usd if wavespeed_price_usd is not None else base_wavespeed_price_usd
+    resolved_pricing_rules = pricing_rules
+    if resolved_pricing_rules is None and pricing_type == "per_second_video":
+        resolved_pricing_rules = {"duration_multiplier_per_second": True}
 
     return GenerationModel(
         key=key,
@@ -375,6 +660,8 @@ def _model(
         input_schema=input_schema or {},
         user_settings=normalized_user_settings,
         system_settings=system_settings or {},
+        base_wavespeed_price_usd=resolved_base_price,
+        pricing_rules=resolved_pricing_rules,
     )
 
 
@@ -426,6 +713,137 @@ SEEDREAM_EDIT_SETTINGS = {
 COMMON_IMAGE_SYSTEM_SETTINGS = {
     "enable_sync_mode": False,
     "enable_base64_output": False,
+}
+
+ASPECT_RATIO_PRICING_MULTIPLIERS = {
+    "1:1": 1.0,
+    "3:2": 1.05,
+    "2:3": 1.05,
+    "3:4": 1.1,
+    "4:3": 1.1,
+    "4:5": 1.1,
+    "5:4": 1.1,
+    "16:9": 1.2,
+    "9:16": 1.2,
+    "21:9": 1.35,
+}
+
+IMAGE_SIZE_PRICING_MULTIPLIERS = {
+    "512*512": 0.7,
+    "768*768": 0.85,
+    "1024*1024": 1.0,
+    "1280*720": 1.1,
+    "720*1280": 1.1,
+    "1536*1536": 1.8,
+    "2048*2048": 2.5,
+    "4096*4096": 4.0,
+}
+
+VIDEO_RESOLUTION_PRICING_MULTIPLIERS = {
+    "720p": 1.0,
+    "1080p": 1.8,
+    "2k": 2.4,
+    "4k": 3.5,
+    "1280*720": 1.0,
+    "720*1280": 1.0,
+    "1920*1080": 1.8,
+    "1080*1920": 1.8,
+}
+
+NANO_BANANA_PRICING_RULES = {
+    "resolution_multipliers": {
+        "4k": 1.0,
+        "8k": 2.0,
+    },
+    "aspect_ratio_multipliers": ASPECT_RATIO_PRICING_MULTIPLIERS,
+}
+
+VEO_3_1_PRICING_RULES = {
+    "resolution_multipliers": VIDEO_RESOLUTION_PRICING_MULTIPLIERS,
+    "aspect_ratio_multipliers": {
+        "16:9": 1.0,
+        "9:16": 1.0,
+    },
+    "duration_multiplier_per_second": True,
+    "quality_multipliers": {
+        "fast": 1.0,
+        "standard": 1.5,
+        "high": 2.2,
+    },
+}
+
+WAN_2_6_PRICING_RULES = {
+    "resolution_multipliers": VIDEO_RESOLUTION_PRICING_MULTIPLIERS,
+    "quality_multipliers": {
+        "single": 1.0,
+        "multi": 1.3,
+        "fast": 1.0,
+        "standard": 1.4,
+        "high": 2.0,
+    },
+    "aspect_ratio_multipliers": ASPECT_RATIO_PRICING_MULTIPLIERS,
+    "duration_multiplier_per_second": True,
+}
+
+SEEDREAM_PRICING_RULES = {
+    "resolution_multipliers": IMAGE_SIZE_PRICING_MULTIPLIERS,
+    "output_count_fields": ("max_images", "num_images", "output_count"),
+    "output_count_multiplier": True,
+}
+
+FLUX_PRICING_RULES = {
+    "resolution_multipliers": IMAGE_SIZE_PRICING_MULTIPLIERS,
+    "quality_multipliers": {
+        "fast": 1.0,
+        "standard": 1.4,
+        "high": 2.1,
+    },
+    "steps_multiplier": {
+        "base_steps": 20,
+        "price_per_extra_step_multiplier": 0.03,
+    },
+}
+
+KLING_PRICING_RULES = {
+    "resolution_multipliers": VIDEO_RESOLUTION_PRICING_MULTIPLIERS,
+    "quality_multipliers": {
+        "standard": 1.0,
+        "pro": 1.8,
+        "master": 2.4,
+    },
+    "aspect_ratio_multipliers": ASPECT_RATIO_PRICING_MULTIPLIERS,
+    "duration_multiplier_per_second": True,
+}
+
+HUNYUAN_PRICING_RULES = {
+    "resolution_multipliers": VIDEO_RESOLUTION_PRICING_MULTIPLIERS,
+    "quality_multipliers": {
+        "fast": 1.0,
+        "standard": 1.3,
+        "high": 1.9,
+    },
+    "aspect_ratio_multipliers": ASPECT_RATIO_PRICING_MULTIPLIERS,
+    "duration_multiplier_per_second": True,
+    "steps_multiplier": {
+        "base_steps": 30,
+        "price_per_extra_step_multiplier": 0.02,
+    },
+}
+
+RUNWAY_LIKE_VIDEO_PRICING_RULES = {
+    "resolution_multipliers": VIDEO_RESOLUTION_PRICING_MULTIPLIERS,
+    "quality_multipliers": {
+        "turbo": 0.8,
+        "fast": 1.0,
+        "standard": 1.5,
+        "high": 2.2,
+    },
+    "aspect_ratio_multipliers": ASPECT_RATIO_PRICING_MULTIPLIERS,
+    "duration_multiplier_per_second": True,
+    "boolean_multipliers": {
+        "upscale": 1.7,
+        "enable_upscale": 1.7,
+    },
 }
 
 
@@ -513,11 +931,14 @@ MODEL_REGISTRY = build_model_registry((
         requires_prompt=True,
         input_media_field=None,
         required_payload_fields=("prompt",),
-        allowed_payload_fields=("prompt", "negative_prompt", "audio", "size"),
+        allowed_payload_fields=("prompt", "negative_prompt", "audio", "size", "duration"),
         user_settings={
             "size": _select_setting("size", "Размер", "1280*720", ("1280*720", "720*1280", "1920*1080", "1080*1920")),
+            "duration": _select_setting("duration", "Длительность", "5", ("5", "8", "10", "15")),
             "negative_prompt": _text_setting("negative_prompt", "Negative prompt", "", "Что нужно исключить из результата"),
         },
+        base_wavespeed_price_usd=Decimal("0.08"),
+        pricing_rules=WAN_2_6_PRICING_RULES,
     ),
     _model(
         key="alibaba_wan_2_6_image_to_video",
@@ -558,6 +979,8 @@ MODEL_REGISTRY = build_model_registry((
             "shot_type": _select_setting("shot_type", "Тип кадра", "single", ("single", "multi")),
             "negative_prompt": _text_setting("negative_prompt", "Negative prompt", "", "Что нужно исключить из результата"),
         },
+        base_wavespeed_price_usd=Decimal("0.11"),
+        pricing_rules=WAN_2_6_PRICING_RULES,
     ),
     _model(
         key="alibaba_wan_2_6_image_to_video_flash",
@@ -581,6 +1004,8 @@ MODEL_REGISTRY = build_model_registry((
             "shot_type": _select_setting("shot_type", "Тип кадра", "single", ("single", "multi")),
             "negative_prompt": _text_setting("negative_prompt", "Negative prompt", "", "Что нужно исключить из результата"),
         },
+        base_wavespeed_price_usd=Decimal("0.05"),
+        pricing_rules=WAN_2_6_PRICING_RULES,
     ),
     _model(
         key="alibaba_happyhorse_1_0_image_to_video",
@@ -617,6 +1042,8 @@ MODEL_REGISTRY = build_model_registry((
             "resolution": _select_setting("resolution", "Разрешение", "720p", ("720p", "1080p")),
             "duration": _select_setting("duration", "Длительность", "5", ("3", "5", "8", "10", "15")),
         },
+        base_wavespeed_price_usd=Decimal("0.06"),
+        pricing_rules=RUNWAY_LIKE_VIDEO_PRICING_RULES,
     ),
     _model(
         key="openai_gpt_image_2_text_to_image",
@@ -724,6 +1151,8 @@ MODEL_REGISTRY = build_model_registry((
             "output_format": _select_setting("output_format", "Формат файла", "jpeg", ("jpeg", "png")),
         },
         system_settings=COMMON_IMAGE_SYSTEM_SETTINGS,
+        base_wavespeed_price_usd=Decimal("0.025"),
+        pricing_rules=SEEDREAM_PRICING_RULES,
     ),
     _model(
         key="bytedance_seedream_v4_sequential",
@@ -742,6 +1171,8 @@ MODEL_REGISTRY = build_model_registry((
             "size": _select_setting("size", "Размер", "1024*1024", ("512*512", "768*768", "1024*1024", "1280*720", "720*1280", "2048*2048")),
         },
         system_settings=COMMON_IMAGE_SYSTEM_SETTINGS,
+        base_wavespeed_price_usd=Decimal("0.03"),
+        pricing_rules=SEEDREAM_PRICING_RULES,
     ),
     _model(
         key="bytedance_seedream_v4_5",
@@ -776,6 +1207,8 @@ MODEL_REGISTRY = build_model_registry((
         allowed_payload_fields=("images", "prompt", "size", "enable_sync_mode", "enable_base64_output"),
         user_settings=SEEDREAM_EDIT_SETTINGS,
         system_settings=COMMON_IMAGE_SYSTEM_SETTINGS,
+        base_wavespeed_price_usd=Decimal("0.04"),
+        pricing_rules=SEEDREAM_PRICING_RULES,
     ),
     _model(
         key="bytedance_seedream_v3_1",
@@ -794,6 +1227,8 @@ MODEL_REGISTRY = build_model_registry((
             "size": _select_setting("size", "Размер", "1024*1024", ("512*512", "768*768", "1024*1024", "1280*720", "720*1280", "2048*2048")),
         },
         system_settings=COMMON_IMAGE_SYSTEM_SETTINGS,
+        base_wavespeed_price_usd=Decimal("0.03"),
+        pricing_rules=SEEDREAM_PRICING_RULES,
     ),
     _model(
         key="bytedance_seedream_v3",
@@ -858,6 +1293,8 @@ MODEL_REGISTRY = build_model_registry((
         allowed_payload_fields=("images", "prompt", "aspect_ratio", "resolution", "output_format", "enable_sync_mode", "enable_base64_output"),
         user_settings=NANO_BANANA_SETTINGS,
         system_settings=COMMON_IMAGE_SYSTEM_SETTINGS,
+        base_wavespeed_price_usd=Decimal("0.14"),
+        pricing_rules=NANO_BANANA_PRICING_RULES,
     ),
     _model(
         key="google_veo3",
@@ -878,6 +1315,8 @@ MODEL_REGISTRY = build_model_registry((
             "aspect_ratio": _select_setting("aspect_ratio", "Формат", "16:9", ("16:9", "9:16")),
         },
         system_settings=COMMON_IMAGE_SYSTEM_SETTINGS,
+        base_wavespeed_price_usd=Decimal("0.22"),
+        pricing_rules=VEO_3_1_PRICING_RULES,
     ),
     _model(
         key="google_veo3_fast",
@@ -898,6 +1337,8 @@ MODEL_REGISTRY = build_model_registry((
             "aspect_ratio": _select_setting("aspect_ratio", "Формат", "16:9", ("16:9", "9:16")),
         },
         system_settings=COMMON_IMAGE_SYSTEM_SETTINGS,
+        base_wavespeed_price_usd=Decimal("0.12"),
+        pricing_rules=VEO_3_1_PRICING_RULES,
     ),
     _model(
         key="google_veo3_1_fast_video_extend",
@@ -919,6 +1360,8 @@ MODEL_REGISTRY = build_model_registry((
             "prompt": _text_setting("prompt", "Описание продолжения", ""),
         },
         system_settings=COMMON_IMAGE_SYSTEM_SETTINGS,
+        base_wavespeed_price_usd=Decimal("0.12"),
+        pricing_rules=VEO_3_1_PRICING_RULES,
     ),
 ))
 

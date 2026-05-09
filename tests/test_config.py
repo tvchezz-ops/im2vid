@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import os
+from decimal import Decimal
 
 import pytest
 
@@ -65,3 +66,15 @@ def test_wavespeed_polling_defaults() -> None:
     assert settings.wavespeed_poll_normal_seconds == 60
     assert settings.wavespeed_poll_slow_seconds == 120
     assert settings.wavespeed_poll_timeout_seconds == 1800
+
+
+def test_generation_pricing_defaults() -> None:
+    settings = Settings(
+        bot_token="test-bot-token",
+        wavespeed_api_key="test-api-key",
+        public_base_url="https://example.com",
+        _env_file=None,
+    )
+
+    assert settings.pricing_markup_multiplier == Decimal("2")
+    assert settings.usd_per_100_credits == Decimal("1.30")

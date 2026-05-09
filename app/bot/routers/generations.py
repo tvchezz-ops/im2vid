@@ -3,11 +3,12 @@ from __future__ import annotations
 
 import asyncio
 from dataclasses import dataclass
+from decimal import Decimal
 from html import escape
 from pathlib import Path
 import re
 import tempfile
-from typing import Any, Dict, Optional
+from typing import Any, Dict, Mapping, Optional
 from urllib.parse import unquote, urlparse
 import uuid
 
@@ -42,11 +43,16 @@ from app.db.session import db_manager
 from app.i18n import get_user_language, t
 from app.services.generation_service import (
     GenerationModel,
+    allocate_generation_cost_credits,
     build_payload,
+    calculate_generation_cost_credits,
+    calculate_generation_price_quote,
+    generation_cost_has_minimum_label,
     get_default_settings,
     get_generation_model,
     get_model_num_generations,
     get_required_input_type,
+    is_generation_cost_estimated,
     list_generation_types,
     list_generation_models,
     list_models_by_provider,
@@ -90,10 +96,14 @@ def get_state_language(state_data: dict[str, Any], actor: Any | None = None, use
     return get_actor_language(actor)
 
 BACKGROUND_GENERATIONS: Dict[Any, Dict[str, Any]] = {}
-GENERATION_COST = 1
 DOCUMENT_SEND_REQUEST_TIMEOUT_SECONDS = 3600
 DOCUMENT_SEND_RETRY_COUNT = 3
 OUTPUT_DOWNLOAD_TIMEOUT_SECONDS = 300
+MEDIA_GROUP_DEBOUNCE_SECONDS = 1.0
+MEDIA_GROUP_BUFFERS: dict[str, list[Message]] = {}
+MEDIA_GROUP_STATES: dict[str, FSMContext] = {}
+MEDIA_GROUP_TASKS: dict[str, asyncio.Task] = {}
+MEDIA_GROUP_MODES: dict[str, str] = {}
 
 GENERATION_FLOW_STATE_NAMES = {
     GenerationStates.choosing_generation_type.state,
@@ -266,18 +276,48 @@ def format_generation_settings(model: GenerationModel, user_settings: dict[str, 
 
 
 def get_total_generation_cost(model: GenerationModel, user_settings: dict[str, Any]) -> int:
-    return GENERATION_COST * get_model_num_generations(model, user_settings)
+    return calculate_generation_cost_credits(
+        model,
+        user_settings,
+        num_generations=get_model_num_generations(model, user_settings),
+    )
+
+
+def get_single_generation_cost(model: GenerationModel, user_settings: dict[str, Any]) -> int:
+    return calculate_generation_cost_credits(model, user_settings, num_generations=1)
+
+
+def format_price_usd(price_usd) -> str:
+    return format(price_usd.quantize(Decimal("0.01")), "f")
+
+
+def format_settings_price_line(model: GenerationModel, user_settings: dict[str, Any], lang: str = "en") -> str:
+    num_generations = get_model_num_generations(model, user_settings)
+    price_usd, cost = calculate_generation_price_quote(model, user_settings, num_generations=num_generations)
+    usd_label = format_price_usd(price_usd)
+    if lang == "ru":
+        prefix = "от " if generation_cost_has_minimum_label(model) and not user_settings else ""
+        if is_generation_cost_estimated(model):
+            prefix = f"{prefix}≈ "
+        return f"💰 Цена: {prefix}{cost} credits (~${usd_label})"
+    prefix = "from " if generation_cost_has_minimum_label(model) and not user_settings else ""
+    if is_generation_cost_estimated(model):
+        prefix = f"{prefix}≈ "
+    return f"💰 Price: {prefix}{cost} credits (~${usd_label})"
 
 
 def build_settings_text(model: GenerationModel, user_settings: dict[str, Any], lang: str = "en") -> str:
     """Собрать экран настроек модели."""
+    price_line = format_settings_price_line(model, user_settings, lang)
     if not model.user_settings:
         return (
             f"{t('generation.settings_header', lang, model=escape(model.title))}\n\n"
+            f"{price_line}\n\n"
             f"{t('generation.settings_no_extra_full', lang)}"
         )
     return (
         f"{t('generation.settings_header', lang, model=escape(model.title))}\n\n"
+        f"{price_line}\n\n"
         f"{t('generation.settings_choose', lang)}\n\n"
         f"{t('generation.settings_current', lang, values=format_generation_settings(model, user_settings))}"
     )
@@ -667,24 +707,156 @@ def build_input_media_payload(message: Message) -> dict[str, str]:
 
 
 def get_input_media_items(state_data: dict[str, Any]) -> list[dict[str, str]]:
+    urls = get_input_media_urls(state_data)
+    if urls:
+        paths = get_input_media_paths(state_data)
+        file_ids = get_input_media_file_ids(state_data)
+        return [
+            {
+                "type": "image",
+                "file_id": file_ids[index] if index < len(file_ids) else "",
+                "local_path": paths[index] if index < len(paths) else "",
+                "public_url": public_url,
+            }
+            for index, public_url in enumerate(urls)
+        ]
+
     raw_items = state_data.get("input_media_items")
     if not isinstance(raw_items, list):
         return []
     return [item for item in raw_items if isinstance(item, dict)]
 
 
+def _get_string_list(state_data: dict[str, Any], key: str) -> list[str]:
+    raw_values = state_data.get(key)
+    if not isinstance(raw_values, list):
+        return []
+    return [value for value in raw_values if isinstance(value, str) and value]
+
+
+def get_input_media_urls(state_data: dict[str, Any]) -> list[str]:
+    urls = _get_string_list(state_data, "input_media_urls")
+    if urls:
+        return urls
+    raw_items = state_data.get("input_media_items")
+    if not isinstance(raw_items, list):
+        return []
+    return [str(item.get("public_url")) for item in raw_items if isinstance(item, dict) and item.get("public_url")]
+
+
+def get_input_media_paths(state_data: dict[str, Any]) -> list[str]:
+    paths = _get_string_list(state_data, "input_media_paths")
+    if paths:
+        return paths
+    raw_items = state_data.get("input_media_items")
+    if not isinstance(raw_items, list):
+        return []
+    return [str(item.get("local_path")) for item in raw_items if isinstance(item, dict) and item.get("local_path")]
+
+
+def get_input_media_file_ids(state_data: dict[str, Any]) -> list[str]:
+    file_ids = _get_string_list(state_data, "input_media_file_ids")
+    if file_ids:
+        return file_ids
+    raw_items = state_data.get("input_media_items")
+    if not isinstance(raw_items, list):
+        return []
+    return [str(item.get("file_id")) for item in raw_items if isinstance(item, dict) and item.get("file_id")]
+
+
+def build_input_media_items_from_lists(
+    urls: list[str],
+    paths: list[str],
+    file_ids: list[str],
+    media_type: str = "image",
+) -> list[dict[str, str]]:
+    return [
+        {
+            "type": media_type,
+            "file_id": file_ids[index] if index < len(file_ids) else "",
+            "local_path": paths[index] if index < len(paths) else "",
+            "public_url": public_url,
+        }
+        for index, public_url in enumerate(urls)
+    ]
+
+
+def get_media_group_key(message: Message) -> str | None:
+    media_group_id = getattr(message, "media_group_id", None)
+    if not media_group_id:
+        return None
+    return f"{message.from_user.id}:{message.chat.id}:{media_group_id}"
+
+
+def append_media_items_to_state_data(
+    state_data: dict[str, Any],
+    media_items: list[dict[str, str]],
+    *,
+    max_images: int,
+) -> tuple[dict[str, Any], int, bool]:
+    current_urls = get_input_media_urls(state_data)
+    current_paths = get_input_media_paths(state_data)
+    current_file_ids = get_input_media_file_ids(state_data)
+    seen_file_ids = {file_id for file_id in current_file_ids if file_id}
+    seen_urls = {url for url in current_urls if url}
+    added_count = 0
+    limit_reached = len(current_urls) >= max_images
+
+    for media_item in media_items:
+        if len(current_urls) >= max_images:
+            limit_reached = True
+            break
+        public_url = media_item.get("public_url")
+        local_path = media_item.get("local_path")
+        file_id = media_item.get("file_id", "")
+        if not public_url or not local_path:
+            continue
+        if (file_id and file_id in seen_file_ids) or public_url in seen_urls:
+            continue
+        current_urls.append(public_url)
+        current_paths.append(local_path)
+        current_file_ids.append(file_id)
+        if file_id:
+            seen_file_ids.add(file_id)
+        seen_urls.add(public_url)
+        added_count += 1
+
+    updated_items = build_input_media_items_from_lists(current_urls, current_paths, current_file_ids)
+    return (
+        {
+            "input_media_items": updated_items,
+            "input_media_urls": current_urls,
+            "input_media_paths": current_paths,
+            "input_media_file_ids": current_file_ids,
+            "input_media": {"type": "images", "count": len(current_urls)} if current_urls else None,
+            "input_image_file_id": current_file_ids[0] if current_file_ids else None,
+        },
+        added_count,
+        limit_reached,
+    )
+
+
 async def cleanup_media_items(media_items: list[dict[str, str]]) -> None:
+    cleaned_paths: set[str] = set()
     for item in media_items:
         local_path = item.get("local_path")
-        if local_path:
+        if local_path and local_path not in cleaned_paths:
             Path(local_path).unlink(missing_ok=True)
+            cleaned_paths.add(local_path)
 
 
 async def cleanup_state_media(state: FSMContext) -> None:
     state_data = await state.get_data()
     media_items = get_input_media_items(state_data)
     await cleanup_media_items(media_items)
-    await state.update_data(input_media=None, input_media_items=[], input_image_file_id=None)
+    await state.update_data(
+        input_media=None,
+        input_media_items=[],
+        input_media_urls=[],
+        input_media_paths=[],
+        input_media_file_ids=[],
+        input_image_file_id=None,
+    )
 
 
 async def set_waiting_for_prompt_with_diagnostic(
@@ -714,6 +886,162 @@ async def upload_message_media_item(message: Message) -> dict[str, str]:
         "local_path": str(temp_media.local_path),
         "public_url": temp_media.public_url,
     }
+
+
+async def add_media_group_message(message: Message, state: FSMContext, *, mode: str) -> None:
+    media_group_id = getattr(message, "media_group_id", None)
+    group_key = get_media_group_key(message)
+    if not media_group_id or not group_key:
+        return
+
+    MEDIA_GROUP_BUFFERS.setdefault(group_key, []).append(message)
+    MEDIA_GROUP_STATES[group_key] = state
+    MEDIA_GROUP_MODES[group_key] = mode
+    existing_task = MEDIA_GROUP_TASKS.get(group_key)
+    if existing_task and not existing_task.done():
+        existing_task.cancel()
+    MEDIA_GROUP_TASKS[group_key] = asyncio.create_task(process_media_group_after_delay(group_key))
+    log_media_group_event(
+        "media_group_received",
+        message,
+        media_group_id=str(media_group_id),
+        buffered_count=len(MEDIA_GROUP_BUFFERS[group_key]),
+        mode=mode,
+    )
+
+
+async def process_media_group_after_delay(group_key: str) -> None:
+    try:
+        await asyncio.sleep(MEDIA_GROUP_DEBOUNCE_SECONDS)
+        messages = MEDIA_GROUP_BUFFERS.pop(group_key, [])
+        state = MEDIA_GROUP_STATES.pop(group_key, None)
+        mode = MEDIA_GROUP_MODES.pop(group_key, "multi_image")
+        MEDIA_GROUP_TASKS.pop(group_key, None)
+        if not messages or state is None:
+            return
+        if mode == "single_image":
+            await process_single_image_media_group(messages, state)
+            return
+        await process_multi_image_media_group(messages, state)
+    except asyncio.CancelledError:
+        raise
+    except Exception:
+        logger.exception("Media group processing failed")
+
+
+async def process_single_image_media_group(messages: list[Message], state: FSMContext) -> None:
+    first_message = messages[0]
+    media_group_id = str(getattr(first_message, "media_group_id", ""))
+    lang = get_actor_language(first_message.from_user)
+    image_messages = [message for message in messages if is_supported_image_input(message)]
+    skipped_count = len(messages) - len(image_messages)
+    if not image_messages:
+        log_media_group_event(
+            "media_group_processed",
+            first_message,
+            media_group_id=media_group_id,
+            added_count=0,
+            skipped_count=skipped_count,
+            mode="single_image",
+        )
+        await first_message.answer(
+            build_invalid_input_message("image", "image_edit", lang=lang),
+            reply_markup=build_back_to_settings_keyboard(lang),
+        )
+        return
+
+    await process_generation_image(image_messages[0], state, from_media_group=True)
+    ignored_count = max(0, len(image_messages) - 1) + skipped_count
+    log_media_group_event(
+        "media_group_processed",
+        first_message,
+        media_group_id=media_group_id,
+        added_count=1,
+        skipped_count=ignored_count,
+        mode="single_image",
+    )
+    if ignored_count:
+        await first_message.answer(t("generation.single_image_album_first_used", lang))
+
+
+async def process_multi_image_media_group(messages: list[Message], state: FSMContext) -> None:
+    first_message = messages[0]
+    media_group_id = str(getattr(first_message, "media_group_id", ""))
+    state_data = await state.get_data()
+    lang = get_state_language(state_data, first_message.from_user)
+    model_key = state_data.get("model_key")
+    model = get_generation_model(model_key) if model_key else None
+    if not model:
+        await first_message.answer(format_user_error(ErrorCode.E005_UNSUPPORTED_MODEL, t("errors.model_unavailable", lang), lang))
+        return
+
+    current_urls = get_input_media_urls(state_data)
+    capacity = max(0, model.max_images - len(current_urls))
+    image_messages = [message for message in messages if is_supported_image_input(message)]
+    skipped_non_image_count = len(messages) - len(image_messages)
+    selected_messages = image_messages[:capacity]
+    limit_reached = len(image_messages) > len(selected_messages) or capacity <= 0
+    uploaded_items: list[dict[str, str]] = []
+    seen_file_ids = set(get_input_media_file_ids(state_data))
+    for album_message in selected_messages:
+        input_media = build_input_media_payload(album_message)
+        file_id = str(input_media.get("file_id") or "")
+        if file_id and file_id in seen_file_ids:
+            continue
+        if file_id:
+            seen_file_ids.add(file_id)
+        try:
+            uploaded_items.append(await upload_message_media_item(album_message))
+        except ImageUploadError:
+            log_generation_error(ErrorCode.E012_MEDIA_UPLOAD_FAILED, user_id=album_message.from_user.id, status="failed")
+
+    state_data = await state.get_data()
+    update_payload, added_count, append_limit_reached = append_media_items_to_state_data(
+        state_data,
+        uploaded_items,
+        max_images=model.max_images,
+    )
+    await state.update_data(**update_payload)
+    updated_count = len(update_payload["input_media_urls"])
+    limit_reached = limit_reached or append_limit_reached or updated_count >= model.max_images
+    if added_count:
+        log_media_group_event(
+            "media_group_images_added",
+            first_message,
+            media_group_id=media_group_id,
+            added_count=added_count,
+            total_count=updated_count,
+            mode="multi_image",
+        )
+    if limit_reached:
+        log_media_group_event(
+            "media_group_limit_reached",
+            first_message,
+            media_group_id=media_group_id,
+            total_count=updated_count,
+            max_images=model.max_images,
+            mode="multi_image",
+        )
+    log_media_group_event(
+        "media_group_processed",
+        first_message,
+        media_group_id=media_group_id,
+        added_count=added_count,
+        skipped_count=skipped_non_image_count + max(0, len(image_messages) - len(selected_messages)),
+        total_count=updated_count,
+        mode="multi_image",
+    )
+
+    if limit_reached:
+        await first_message.answer(
+            t("generation.image_limit_reached", lang, count=model.max_images),
+            reply_markup=build_media_upload_reply_keyboard(show_continue=True, lang=lang, show_clear_images=bool(updated_count)),
+        )
+        return
+    await first_message.answer(
+        t("generation.images_uploaded_progress", lang, count=updated_count, max_count=model.max_images),
+        reply_markup=build_media_upload_reply_keyboard(show_continue=True, lang=lang, show_clear_images=bool(updated_count)),
+    )
 
 
 def build_input_audio_or_text_payload(message: Message) -> dict[str, str]:
@@ -1036,18 +1364,22 @@ async def continue_after_multi_image_upload(message: Message, state: FSMContext)
     state_data = await state.get_data()
     model_key = state_data.get("model_key")
     model = get_generation_model(model_key) if model_key else None
-    media_items = get_input_media_items(state_data)
+    input_media_urls = get_input_media_urls(state_data)
     lang = get_state_language(state_data, message.from_user)
     if not model:
         await message.answer(format_user_error(ErrorCode.E005_UNSUPPORTED_MODEL, t("errors.model_unavailable", lang), lang))
         return
-    if len(media_items) < model.min_images:
+    if len(input_media_urls) < model.min_images:
         await message.answer(
             format_user_error(ErrorCode.E003_MISSING_IMAGE, t("generation.need_min_images", lang, count=model.min_images), lang),
-            reply_markup=build_media_upload_reply_keyboard(show_continue=True, lang=lang),
+            reply_markup=build_media_upload_reply_keyboard(
+                show_continue=True,
+                lang=lang,
+                show_clear_images=bool(input_media_urls),
+            ),
         )
         return
-    await state.update_data(input_media={"type": "images", "count": len(media_items)})
+    await state.update_data(input_media={"type": "images", "count": len(input_media_urls)})
     await set_waiting_for_prompt_with_diagnostic(
         state,
         user_id=message.from_user.id,
@@ -1084,6 +1416,18 @@ def log_balance_event(action: str, user_id: int, amount: int) -> None:
             "action": action,
             "user_id": user_id,
             "amount": amount,
+        }
+    )
+
+
+def log_media_group_event(action: str, message: Message, *, media_group_id: str, **extra: Any) -> None:
+    logger.info(
+        {
+            "action": action,
+            "user_id": message.from_user.id,
+            "chat_id": message.chat.id,
+            "media_group_id": media_group_id,
+            **extra,
         }
     )
 
@@ -2335,7 +2679,9 @@ async def poll_generation_results_batch(
     chat_id: int,
     generation_predictions: list[tuple[Any, str]],
     model_key: str,
+    cost: int,
     temp_input_path: Optional[str] | list[str],
+    generation_costs: Optional[Mapping[Any, int]] = None,
 ) -> None:
     semaphore = asyncio.Semaphore(4)
 
@@ -2348,7 +2694,7 @@ async def poll_generation_results_batch(
                 generation_request_id=generation_request_id,
                 prediction_id=prediction_id,
                 model_key=model_key,
-                cost=GENERATION_COST,
+                cost=(generation_costs or {}).get(generation_request_id, cost),
                 temp_input_path=None,
                 cleanup_inputs=False,
                 use_partial_failure_message=True,
@@ -2477,6 +2823,9 @@ async def choose_generation_model(callback: CallbackQuery, state: FSMContext):
         input_image_file_id=None,
         input_media=None,
         input_media_items=[],
+        input_media_urls=[],
+        input_media_paths=[],
+        input_media_file_ids=[],
         input_audio_or_text=None,
         prompt=None,
     )
@@ -2588,6 +2937,9 @@ async def back_to_generation_models(callback: CallbackQuery, state: FSMContext):
         "input_image_file_id",
         "input_media",
         "input_media_items",
+        "input_media_urls",
+        "input_media_paths",
+        "input_media_file_ids",
         "input_audio_or_text",
         "prompt",
     ):
@@ -2793,8 +3145,26 @@ async def continue_after_settings(callback: CallbackQuery, state: FSMContext):
         )
     elif required_input_type == "image":
         if model.supports_multiple_images and model.input_media_field == "images":
+            existing_urls = get_input_media_urls(state_data)
             await state.set_state(GenerationStates.waiting_for_images)
-            await prompt_for_generation_images(callback.message, edit=True, model=model)
+            if existing_urls:
+                progress_text = t(
+                    "generation.images_uploaded_progress",
+                    lang,
+                    count=len(existing_urls),
+                    max_count=model.max_images,
+                )
+                await callback.message.edit_text(progress_text, reply_markup=None)
+                await callback.message.answer(
+                    progress_text,
+                    reply_markup=build_media_upload_reply_keyboard(
+                        show_continue=True,
+                        lang=lang,
+                        show_clear_images=True,
+                    ),
+                )
+            else:
+                await prompt_for_generation_images(callback.message, edit=True, model=model)
         else:
             await state.set_state(GenerationStates.waiting_for_image)
             await prompt_for_generation_image(callback.message, edit=True, model=model)
@@ -2822,12 +3192,9 @@ async def navigate_back_to_settings(message: Message, state: FSMContext) -> None
         incoming_text_type=get_incoming_text_type(message),
     )
 
-    await cleanup_state_media(state)
     await state.update_data(
         prompt=None,
         input_audio_or_text=None,
-        input_media_urls=[],
-        input_media_paths=[],
         selected_model_key=selected_model_key,
         selected_settings=selected_settings,
     )
@@ -2878,12 +3245,15 @@ async def back_to_settings_from_input_step(message: Message, state: FSMContext):
 
 
 @router.message(GenerationStates.waiting_for_image, lambda message: bool(message.photo) or bool(message.document) or bool(message.video))
-async def process_generation_image(message: Message, state: FSMContext):
+async def process_generation_image(message: Message, state: FSMContext, *, from_media_group: bool = False):
     """Принять изображение для генерации."""
     state_data = await state.get_data()
     lang = get_state_language(state_data, message.from_user)
     is_lipsync = is_lipsync_generation_state(state_data)
     model_generation_type = str(state_data.get("model_generation_type") or "image_edit")
+    if get_media_group_key(message) and not from_media_group and not is_lipsync:
+        await add_media_group_message(message, state, mode="single_image")
+        return
     if is_lipsync:
         document = message.document
         photo = message.photo[-1] if message.photo else None
@@ -2940,6 +3310,9 @@ async def process_generation_image(message: Message, state: FSMContext):
     await state.update_data(
         input_media={"type": media_item["type"], "count": 1},
         input_media_items=[media_item],
+        input_media_urls=[media_item["public_url"]],
+        input_media_paths=[media_item["local_path"]],
+        input_media_file_ids=[media_item.get("file_id", "")],
         input_image_file_id=media_item.get("file_id"),
     )
     await set_waiting_for_prompt_with_diagnostic(
@@ -2967,6 +3340,9 @@ async def process_generation_images(message: Message, state: FSMContext):
     if not model:
         await message.answer(format_user_error(ErrorCode.E005_UNSUPPORTED_MODEL, t("errors.model_unavailable", lang), lang))
         return
+    if get_media_group_key(message):
+        await add_media_group_message(message, state, mode="multi_image")
+        return
     if not is_supported_image_input(message):
         await message.answer(
             build_invalid_input_message("image", model_generation_type, received_type=received_type, lang=get_actor_language(message.from_user)),
@@ -2974,11 +3350,11 @@ async def process_generation_images(message: Message, state: FSMContext):
         )
         return
 
-    media_items = get_input_media_items(state_data)
-    if len(media_items) >= model.max_images:
+    current_urls = get_input_media_urls(state_data)
+    if len(current_urls) >= model.max_images:
         await message.answer(
             t("generation.image_limit_reached", lang, count=model.max_images),
-            reply_markup=build_media_upload_reply_keyboard(show_continue=True, lang=lang),
+            reply_markup=build_media_upload_reply_keyboard(show_continue=True, lang=lang, show_clear_images=True),
         )
         return
 
@@ -2988,17 +3364,28 @@ async def process_generation_images(message: Message, state: FSMContext):
         log_generation_error(ErrorCode.E012_MEDIA_UPLOAD_FAILED, user_id=message.from_user.id, status="failed")
         await message.answer(
             format_user_error(ErrorCode.E012_MEDIA_UPLOAD_FAILED, t("errors.prepare_image_failed", lang), lang),
-            reply_markup=build_media_upload_reply_keyboard(show_continue=True, lang=lang),
+            reply_markup=build_media_upload_reply_keyboard(
+                show_continue=True,
+                lang=lang,
+                show_clear_images=bool(current_urls),
+            ),
         )
         return
 
-    media_items.append(media_item)
+    current_paths = get_input_media_paths(state_data)
+    current_file_ids = get_input_media_file_ids(state_data)
+    updated_urls = [*current_urls, media_item["public_url"]]
+    updated_paths = [*current_paths, media_item["local_path"]]
+    updated_file_ids = [*current_file_ids, media_item.get("file_id", "")]
     await state.update_data(
-        input_media_items=media_items,
-        input_media={"type": "images", "count": len(media_items)},
-        input_image_file_id=media_items[0].get("file_id"),
+        input_media_items=build_input_media_items_from_lists(updated_urls, updated_paths, updated_file_ids),
+        input_media_urls=updated_urls,
+        input_media_paths=updated_paths,
+        input_media_file_ids=updated_file_ids,
+        input_media={"type": "images", "count": len(updated_urls)},
+        input_image_file_id=updated_file_ids[0] if updated_file_ids else None,
     )
-    if len(media_items) >= model.max_images:
+    if len(updated_urls) >= model.max_images:
         await set_waiting_for_prompt_with_diagnostic(
             state,
             user_id=message.from_user.id,
@@ -3011,7 +3398,20 @@ async def process_generation_images(message: Message, state: FSMContext):
         return
 
     await message.answer(
-        t("generation.images_uploaded_progress", lang, count=len(media_items), max_count=model.max_images),
+        t("generation.images_uploaded_progress", lang, count=len(updated_urls), max_count=model.max_images),
+        reply_markup=build_media_upload_reply_keyboard(show_continue=True, lang=lang, show_clear_images=True),
+    )
+
+
+@router.message(GenerationStates.waiting_for_images, lambda message: is_localized_button_text(message.text, "common.clear_images", getattr(message.from_user, "language_code", None)))
+async def clear_uploaded_images(message: Message, state: FSMContext):
+    """Очистить загруженные изображения multi-image flow без сброса настроек модели."""
+    state_data = await state.get_data()
+    lang = get_state_language(state_data, message.from_user)
+    await cleanup_state_media(state)
+    await state.set_state(GenerationStates.waiting_for_images)
+    await message.answer(
+        t("generation.images_cleared", lang),
         reply_markup=build_media_upload_reply_keyboard(show_continue=True, lang=lang),
     )
 
@@ -3072,6 +3472,9 @@ async def process_generation_video(message: Message, state: FSMContext):
     await state.update_data(
         input_media={"type": media_item["type"], "count": 1},
         input_media_items=[media_item],
+        input_media_urls=[media_item["public_url"]],
+        input_media_paths=[media_item["local_path"]],
+        input_media_file_ids=[media_item.get("file_id", "")],
         input_image_file_id=media_item.get("file_id"),
     )
     await set_waiting_for_prompt_with_diagnostic(
@@ -3313,7 +3716,8 @@ async def confirm_generation(callback: CallbackQuery, state: FSMContext, session
     generation_predictions: list[tuple[Any, str]] = []
     temp_input_path: Optional[str] | list[str] = None
     task_started = False
-    total_cost = GENERATION_COST
+    total_cost = 0
+    single_generation_cost = 0
 
     try:
         user_repo = UserRepository(session)
@@ -3324,6 +3728,8 @@ async def confirm_generation(callback: CallbackQuery, state: FSMContext, session
         debited_user_id = user.id
         num_generations = get_model_num_generations(model, user_settings)
         total_cost = get_total_generation_cost(model, user_settings)
+        allocated_generation_costs = allocate_generation_cost_credits(model, user_settings, num_generations)
+        single_generation_cost = allocated_generation_costs[0]
         active_count = await generation_repo.count_active_generations(user.id)
         limit = settings.max_parallel_generations_per_user
         if active_count >= limit:
@@ -3381,7 +3787,8 @@ async def confirm_generation(callback: CallbackQuery, state: FSMContext, session
             temp_input_path = str(temp_media.local_path)
         payload = build_payload(model_key, media_urls, prompt, user_settings)
 
-        for _ in range(num_generations):
+        generation_costs_by_id: dict[Any, int] = {}
+        for generation_cost in allocated_generation_costs:
             generation_request = await generation_repo.create_generation_request(
                 user_id=user.id,
                 chat_id=callback.message.chat.id,
@@ -3396,9 +3803,10 @@ async def confirm_generation(callback: CallbackQuery, state: FSMContext, session
                 size=user_settings.get("size"),
                 output_format=user_settings.get("output_format"),
                 status="created",
-                cost=GENERATION_COST,
+                cost=generation_cost,
             )
             generation_request_ids.append(generation_request.id)
+            generation_costs_by_id[generation_request.id] = generation_cost
 
         generation_request_id = generation_request_ids[0] if generation_request_ids else None
         for current_generation_request_id in generation_request_ids:
@@ -3428,7 +3836,7 @@ async def confirm_generation(callback: CallbackQuery, state: FSMContext, session
                     generation_request_id=generation_request_id,
                     prediction_id=prediction_id,
                     model_key=model_key,
-                    cost=GENERATION_COST,
+                    cost=generation_costs_by_id.get(generation_request_id, single_generation_cost),
                     temp_input_path=temp_input_path,
                 )
             )
@@ -3449,6 +3857,8 @@ async def confirm_generation(callback: CallbackQuery, state: FSMContext, session
                     chat_id=callback.message.chat.id,
                     generation_predictions=generation_predictions,
                     model_key=model_key,
+                    cost=single_generation_cost,
+                    generation_costs=generation_costs_by_id,
                     temp_input_path=temp_input_path,
                 )
             )
@@ -3497,7 +3907,14 @@ async def confirm_generation(callback: CallbackQuery, state: FSMContext, session
                 await user_repo.increase_balance(debited_user_id, total_cost)
             except Exception as refund_exc:
                 logger.exception("Error while refunding balance after image upload failure: %s", refund_exc)
-        await state.update_data(input_image_file_id=None, input_media=None, input_media_items=[])
+        await state.update_data(
+            input_image_file_id=None,
+            input_media=None,
+            input_media_items=[],
+            input_media_urls=[],
+            input_media_paths=[],
+            input_media_file_ids=[],
+        )
         waiting_state = GenerationStates.waiting_for_images if model and model.supports_multiple_images else get_waiting_state_for_input_type(required_input_type)
         await state.set_state(waiting_state)
         await callback.message.answer(

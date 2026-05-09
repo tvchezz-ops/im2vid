@@ -147,6 +147,8 @@ NOWPAYMENTS_BASE_URL=https://api.nowpayments.io
 NOWPAYMENTS_SUCCESS_URL=
 NOWPAYMENTS_CANCEL_URL=
 CREDIT_USD_PRICE=0.013
+PRICING_MARKUP_MULTIPLIER=2
+USD_PER_100_CREDITS=1.30
 ```
 
 ## Crypto Payments With NOWPayments
@@ -161,6 +163,8 @@ Required production env:
 - `NOWPAYMENTS_SUCCESS_URL`, optional success redirect from NOWPayments
 - `NOWPAYMENTS_CANCEL_URL`, optional cancel redirect from NOWPayments
 - `CREDIT_USD_PRICE`, default `0.013`
+- `PRICING_MARKUP_MULTIPLIER`, default `2`
+- `USD_PER_100_CREDITS`, default `1.30`
 
 The webhook endpoint is `POST /webhooks/nowpayments`. It verifies `x-nowpayments-sig` with HMAC SHA512. Credits are added only when a verified webhook has `payment_status == finished` or `confirmed`; client-side callbacks and return links are never treated as proof of payment. Repeated webhooks are idempotent and do not add credits twice.
 

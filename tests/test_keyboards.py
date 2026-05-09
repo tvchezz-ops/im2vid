@@ -30,6 +30,7 @@ from app.bot.keyboards import (
     resolve_model_key_from_token,
     validate_callback_length,
 )
+from app.services.generation_service import get_generation_model
 
 
 def test_build_generation_sections_keyboard_uses_expected_callback_prefix() -> None:
@@ -73,6 +74,24 @@ def test_build_models_keyboard_uses_passed_models_only() -> None:
         "gen:model:nano_banana",
         "gen:model:seedream",
     ]
+
+
+def test_build_models_keyboard_shows_model_price() -> None:
+    keyboard = build_models_keyboard([get_generation_model("nano_banana")], "gen:back:sections")
+
+    assert keyboard.inline_keyboard[0][0].text == "Google Nano Banana Pro Edit Ultra — from 22 credits"
+
+
+def test_build_models_keyboard_shows_minimum_video_duration_price_in_ru() -> None:
+    keyboard = build_models_keyboard([get_generation_model("alibaba_wan_2_6_text_to_video")], "gen:back:sections", "ru")
+
+    assert keyboard.inline_keyboard[0][0].text == "Alibaba Wan 2.6 Text To Video — от 62 credits"
+
+
+def test_build_models_keyboard_marks_fallback_price_as_estimated() -> None:
+    keyboard = build_models_keyboard([get_generation_model("alibaba_wan_2_6_text_to_image")], "gen:back:sections")
+
+    assert keyboard.inline_keyboard[0][0].text == "Alibaba Wan 2.6 Text To Image — ≈ 8 credits"
 
 
 def test_build_models_keyboard_falls_back_to_index_for_long_model_key() -> None:

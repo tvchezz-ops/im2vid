@@ -68,6 +68,7 @@ class FakeMessage:
         self.video = None
         self.voice = None
         self.audio = None
+        self.media_group_id = None
         self.answers: list[str] = []
         self.edits: list[str] = []
         self.answer_markups: list[object] = []
@@ -548,8 +549,241 @@ async def test_process_generation_images_appends_uploaded_media(monkeypatch) -> 
 
     assert state.data["input_media"] == {"type": "images", "count": 1}
     assert state.data["input_image_file_id"] == "photo-file-id"
+    assert state.data["input_media_urls"] == ["https://example.com/photo-file-id.png"]
+    assert state.data["input_media_paths"] == ["/tmp/photo-file-id.png"]
+    assert state.data["input_media_file_ids"] == ["photo-file-id"]
     assert state.data["input_media_items"][0]["public_url"] == "https://example.com/photo-file-id.png"
     assert "Загружено 1 из 14." in message.answers[-1]
+
+
+@pytest.mark.asyncio
+async def test_multi_image_upload_survives_back_to_settings_and_appends_from_current_state(monkeypatch) -> None:
+    async def fake_upload_message_media_item(message):
+        file_id = message.photo[-1].file_id
+        return {
+            "type": "photo",
+            "file_id": file_id,
+            "local_path": f"/tmp/{file_id}.png",
+            "public_url": f"https://example.com/{file_id}.png",
+        }
+
+    monkeypatch.setattr(generations, "upload_message_media_item", fake_upload_message_media_item)
+
+    state = FakeState(
+        {
+            "model_key": "seedream",
+            "model_generation_type": "image_edit",
+            "model_title": "Bytedance Seedream V4.5 Edit",
+            "model_endpoint": "/api/v3/seedream-v4.5/edit",
+            "user_settings": {"size": "1024*1024", "num_generations": "1"},
+        }
+    )
+    state.state = GenerationStates.waiting_for_images
+
+    for index in range(1, 4):
+        upload_message = FakeMessage(chat_id=480)
+        upload_message.photo = [SimpleNamespace(file_id=f"photo-{index}")]
+        await generations.process_generation_images(upload_message, state)
+
+    assert len(state.data["input_media_urls"]) == 3
+    assert "Загружено 3 из 10." in upload_message.answers[-1]
+
+    back_message = FakeMessage(chat_id=480)
+    back_message.text = "⬅️ Назад к настройкам"
+    await generations.back_to_settings_from_input_step(back_message, state)
+
+    assert state.state == GenerationStates.choosing_settings
+    assert len(state.data["input_media_urls"]) == 3
+
+    continue_message = FakeMessage(chat_id=480)
+    callback = FakeCallback(user_id=480, message=continue_message, data="gen:continue")
+    await generations.continue_after_settings(callback, state)
+
+    assert state.state == GenerationStates.waiting_for_images
+    assert "Загружено 3 из 10." in continue_message.answers[-1]
+    assert continue_message.answer_markups[-1].keyboard[1][0].text == "🗑 Очистить изображения"
+
+    fourth_message = FakeMessage(chat_id=480)
+    fourth_message.photo = [SimpleNamespace(file_id="photo-4")]
+    await generations.process_generation_images(fourth_message, state)
+
+    assert len(state.data["input_media_urls"]) == 4
+    assert state.data["input_media_urls"][-1] == "https://example.com/photo-4.png"
+    assert "Загружено 4 из 10." in fourth_message.answers[-1]
+
+
+async def await_media_group_task(message: FakeMessage) -> None:
+    group_key = generations.get_media_group_key(message)
+    assert group_key is not None
+    task = generations.MEDIA_GROUP_TASKS[group_key]
+    await task
+
+
+@pytest.mark.asyncio
+async def test_media_group_album_adds_three_images_with_single_ui_message(monkeypatch) -> None:
+    async def fake_upload_message_media_item(message):
+        file_id = message.photo[-1].file_id
+        return {
+            "type": "photo",
+            "file_id": file_id,
+            "local_path": f"/tmp/{file_id}.png",
+            "public_url": f"https://example.com/{file_id}.png",
+        }
+
+    monkeypatch.setattr(generations, "MEDIA_GROUP_DEBOUNCE_SECONDS", 0.01)
+    monkeypatch.setattr(generations, "upload_message_media_item", fake_upload_message_media_item)
+    generations.MEDIA_GROUP_BUFFERS.clear()
+    generations.MEDIA_GROUP_STATES.clear()
+    generations.MEDIA_GROUP_TASKS.clear()
+    generations.MEDIA_GROUP_MODES.clear()
+
+    state = FakeState({"model_key": "seedream", "model_generation_type": "image_edit"})
+    messages = []
+    for index in range(1, 4):
+        message = FakeMessage(chat_id=482)
+        message.media_group_id = "album-3"
+        message.photo = [SimpleNamespace(file_id=f"album-photo-{index}")]
+        messages.append(message)
+        await generations.process_generation_images(message, state)
+
+    await await_media_group_task(messages[-1])
+
+    assert state.data["input_media_urls"] == [
+        "https://example.com/album-photo-1.png",
+        "https://example.com/album-photo-2.png",
+        "https://example.com/album-photo-3.png",
+    ]
+    assert sum(len(message.answers) for message in messages) == 1
+    assert messages[0].answers[-1] == "Загружено 3 из 10. Отправьте ещё изображение или нажмите ✅ Продолжить."
+
+
+@pytest.mark.asyncio
+async def test_media_group_album_respects_max_images(monkeypatch) -> None:
+    async def fake_upload_message_media_item(message):
+        file_id = message.photo[-1].file_id
+        return {
+            "type": "photo",
+            "file_id": file_id,
+            "local_path": f"/tmp/{file_id}.png",
+            "public_url": f"https://example.com/{file_id}.png",
+        }
+
+    monkeypatch.setattr(generations, "MEDIA_GROUP_DEBOUNCE_SECONDS", 0.01)
+    monkeypatch.setattr(generations, "upload_message_media_item", fake_upload_message_media_item)
+    generations.MEDIA_GROUP_BUFFERS.clear()
+    generations.MEDIA_GROUP_STATES.clear()
+    generations.MEDIA_GROUP_TASKS.clear()
+    generations.MEDIA_GROUP_MODES.clear()
+
+    existing_urls = [f"https://example.com/existing-{index}.png" for index in range(8)]
+    existing_paths = [f"/tmp/existing-{index}.png" for index in range(8)]
+    existing_file_ids = [f"existing-{index}" for index in range(8)]
+    state = FakeState(
+        {
+            "model_key": "seedream",
+            "model_generation_type": "image_edit",
+            "input_media_urls": existing_urls,
+            "input_media_paths": existing_paths,
+            "input_media_file_ids": existing_file_ids,
+        }
+    )
+    messages = []
+    for index in range(1, 6):
+        message = FakeMessage(chat_id=483)
+        message.media_group_id = "album-limit"
+        message.photo = [SimpleNamespace(file_id=f"limit-photo-{index}")]
+        messages.append(message)
+        await generations.process_generation_images(message, state)
+
+    await await_media_group_task(messages[-1])
+
+    assert len(state.data["input_media_urls"]) == 10
+    assert state.data["input_media_urls"][-2:] == [
+        "https://example.com/limit-photo-1.png",
+        "https://example.com/limit-photo-2.png",
+    ]
+    assert sum(len(message.answers) for message in messages) == 1
+    assert messages[0].answers[-1] == "Достигнут лимит 10 изображений."
+
+
+@pytest.mark.asyncio
+async def test_back_to_settings_preserves_media_group_images(monkeypatch) -> None:
+    async def fake_upload_message_media_item(message):
+        file_id = message.photo[-1].file_id
+        return {
+            "type": "photo",
+            "file_id": file_id,
+            "local_path": f"/tmp/{file_id}.png",
+            "public_url": f"https://example.com/{file_id}.png",
+        }
+
+    monkeypatch.setattr(generations, "MEDIA_GROUP_DEBOUNCE_SECONDS", 0.01)
+    monkeypatch.setattr(generations, "upload_message_media_item", fake_upload_message_media_item)
+    generations.MEDIA_GROUP_BUFFERS.clear()
+    generations.MEDIA_GROUP_STATES.clear()
+    generations.MEDIA_GROUP_TASKS.clear()
+    generations.MEDIA_GROUP_MODES.clear()
+
+    state = FakeState(
+        {
+            "model_key": "seedream",
+            "model_title": "Bytedance Seedream V4.5 Edit",
+            "model_endpoint": "/api/v3/seedream-v4.5/edit",
+            "model_generation_type": "image_edit",
+            "user_settings": {"size": "1024*1024", "num_generations": "1"},
+        }
+    )
+    state.state = GenerationStates.waiting_for_images
+    last_message = None
+    for index in range(1, 4):
+        last_message = FakeMessage(chat_id=484)
+        last_message.media_group_id = "album-back"
+        last_message.photo = [SimpleNamespace(file_id=f"back-photo-{index}")]
+        await generations.process_generation_images(last_message, state)
+    assert last_message is not None
+    await await_media_group_task(last_message)
+
+    back_message = FakeMessage(chat_id=484)
+    back_message.text = "⬅️ Назад к настройкам"
+    await generations.back_to_settings_from_input_step(back_message, state)
+
+    assert state.state == GenerationStates.choosing_settings
+    assert len(state.data["input_media_urls"]) == 3
+
+
+@pytest.mark.asyncio
+async def test_single_image_media_group_uses_first_image_only(monkeypatch) -> None:
+    async def fake_upload_message_media_item(message):
+        file_id = message.photo[-1].file_id
+        return {
+            "type": "photo",
+            "file_id": file_id,
+            "local_path": f"/tmp/{file_id}.png",
+            "public_url": f"https://example.com/{file_id}.png",
+        }
+
+    monkeypatch.setattr(generations, "MEDIA_GROUP_DEBOUNCE_SECONDS", 0.01)
+    monkeypatch.setattr(generations, "upload_message_media_item", fake_upload_message_media_item)
+    generations.MEDIA_GROUP_BUFFERS.clear()
+    generations.MEDIA_GROUP_STATES.clear()
+    generations.MEDIA_GROUP_TASKS.clear()
+    generations.MEDIA_GROUP_MODES.clear()
+
+    state = FakeState({"model_key": "alibaba_wan_2_6_image_to_video_pro", "model_generation_type": "image_to_video"})
+    messages = []
+    for index in range(1, 4):
+        message = FakeMessage(chat_id=485)
+        message.media_group_id = "album-single"
+        message.photo = [SimpleNamespace(file_id=f"single-photo-{index}")]
+        messages.append(message)
+        await generations.process_generation_image(message, state)
+
+    await await_media_group_task(messages[-1])
+
+    assert state.state == GenerationStates.waiting_for_prompt
+    assert state.data["input_media_urls"] == ["https://example.com/single-photo-1.png"]
+    assert state.data["input_media_file_ids"] == ["single-photo-1"]
+    assert any("Для этой модели нужно только одно изображение. Использовано первое." in answer for answer in messages[0].answers)
 
 
 @pytest.mark.asyncio
@@ -674,7 +908,7 @@ async def test_process_prompt_rejects_file_when_text_prompt_expected(session_fac
 @pytest.mark.asyncio
 async def test_process_prompt_saves_lipsync_text_input(session_factory) -> None:
     async with session_factory() as session:
-        await create_user(session, user_id=409, balance=2)
+        await create_user(session, user_id=409, balance=30)
         state = FakeState(
             {
                 "model_key": "nano_banana",
@@ -699,7 +933,7 @@ async def test_process_prompt_saves_lipsync_text_input(session_factory) -> None:
 @pytest.mark.asyncio
 async def test_process_prompt_saves_lipsync_voice_input(session_factory) -> None:
     async with session_factory() as session:
-        await create_user(session, user_id=410, balance=2)
+        await create_user(session, user_id=410, balance=30)
         state = FakeState(
             {
                 "model_key": "nano_banana",
@@ -753,7 +987,7 @@ async def test_process_prompt_insufficient_balance_returns_to_settings(session_f
         assert confirmation_opened is False
         assert state.state == GenerationStates.choosing_settings
         assert state.data.get("prompt") is None
-        assert message.answers[0] == "❌ Ошибка E006: недостаточно кредитов. Нужно 4, у вас 0."
+        assert message.answers[0] == "❌ Ошибка E006: недостаточно кредитов. Нужно 31, у вас 0."
         assert message.answers[1] == "Измените количество генераций или пополните баланс."
         assert message.answer_markups[1].keyboard[0][0].text == "🎨 Генерации"
         assert message.answers[2].startswith("Настройки модели:")
@@ -763,7 +997,7 @@ async def test_process_prompt_insufficient_balance_returns_to_settings(session_f
             and record.msg.get("user_id") == 411
             and record.msg.get("state") == GenerationStates.waiting_for_prompt.state
             and record.msg.get("model_key") == "alibaba_wan_2_6_text_to_image"
-            and record.msg.get("total_cost") == 4
+            and record.msg.get("total_cost") == 31
             for record in caplog.records
         )
 
@@ -826,11 +1060,11 @@ async def test_back_to_settings_from_waiting_for_prompt_restores_settings_and_lo
         await generations.back_to_settings_from_input_step(message, state)
 
     assert state.state == GenerationStates.choosing_settings
-    assert state.data["input_media"] is None
+    assert state.data["input_media"] == {"type": "image", "count": 1}
     assert state.data["input_media_items"] == []
-    assert state.data["input_image_file_id"] is None
-    assert state.data["input_media_urls"] == []
-    assert state.data["input_media_paths"] == []
+    assert state.data["input_image_file_id"] == "photo-file-id"
+    assert state.data["input_media_urls"] == ["https://example.com/input.png"]
+    assert state.data["input_media_paths"] == ["/tmp/input.png"]
     assert state.data["prompt"] is None
     assert state.data["selected_model_key"] == "alibaba_wan_2_6_text_to_image"
     assert state.data["selected_settings"] == {}
@@ -846,6 +1080,42 @@ async def test_back_to_settings_from_waiting_for_prompt_restores_settings_and_lo
         and record.msg.get("incoming_text_type") == "text"
         for record in caplog.records
     )
+
+
+@pytest.mark.asyncio
+async def test_clear_uploaded_images_clears_urls_and_deletes_temp_paths(tmp_path) -> None:
+    first_path = tmp_path / "first.png"
+    second_path = tmp_path / "second.png"
+    first_path.write_bytes(b"first")
+    second_path.write_bytes(b"second")
+    state = FakeState(
+        {
+            "model_key": "seedream",
+            "model_generation_type": "image_edit",
+            "input_media": {"type": "images", "count": 2},
+            "input_media_urls": ["https://example.com/first.png", "https://example.com/second.png"],
+            "input_media_paths": [str(first_path), str(second_path)],
+            "input_media_file_ids": ["first", "second"],
+            "input_media_items": [],
+            "input_image_file_id": "first",
+        }
+    )
+    state.state = GenerationStates.waiting_for_images
+    message = FakeMessage(chat_id=481)
+    message.text = "🗑 Очистить изображения"
+
+    await generations.clear_uploaded_images(message, state)
+
+    assert state.state == GenerationStates.waiting_for_images
+    assert state.data["input_media"] is None
+    assert state.data["input_media_urls"] == []
+    assert state.data["input_media_paths"] == []
+    assert state.data["input_media_file_ids"] == []
+    assert state.data["input_media_items"] == []
+    assert state.data["input_image_file_id"] is None
+    assert not first_path.exists()
+    assert not second_path.exists()
+    assert message.answers[-1] == "Изображения очищены. Отправьте изображения заново."
 
 
 @pytest.mark.asyncio
@@ -898,7 +1168,7 @@ async def test_send_generation_outputs_keeps_main_menu_keyboard_without_menu_mes
 @pytest.mark.asyncio
 async def test_confirm_generation_debits_one_credit(session_factory, monkeypatch, tmp_path) -> None:
     async with session_factory() as session:
-        await create_user(session, user_id=101, balance=3)
+        await create_user(session, user_id=101, balance=30)
 
         temp_input_path = tmp_path / "input.png"
         temp_input_path.write_bytes(b"input")
@@ -935,7 +1205,7 @@ async def test_confirm_generation_debits_one_credit(session_factory, monkeypatch
         try:
             await generations.confirm_generation(callback, state, session)
             await await_background_generation_tasks()
-            assert await get_user_balance(session, 101) == 2
+            assert await get_user_balance(session, 101) == 8
         finally:
             generations.BACKGROUND_GENERATIONS.clear()
             Path(temp_input_path).unlink(missing_ok=True)
@@ -944,7 +1214,7 @@ async def test_confirm_generation_debits_one_credit(session_factory, monkeypatch
 @pytest.mark.asyncio
 async def test_confirm_generation_reuses_uploaded_multi_image_items(session_factory, monkeypatch, tmp_path) -> None:
     async with session_factory() as session:
-        await create_user(session, user_id=102, balance=3)
+        await create_user(session, user_id=102, balance=30)
 
         first_path = tmp_path / "input-1.png"
         second_path = tmp_path / "input-2.png"
@@ -1011,7 +1281,7 @@ async def test_confirm_generation_reuses_uploaded_multi_image_items(session_fact
             }
             assert captured["prediction_id"] == "pred-102"
             assert captured["temp_input_path"] == [str(first_path), str(second_path)]
-            assert await get_user_balance(session, 102) == 2
+            assert await get_user_balance(session, 102) == 8
         finally:
             generations.BACKGROUND_GENERATIONS.clear()
             first_path.unlink(missing_ok=True)
@@ -1021,7 +1291,7 @@ async def test_confirm_generation_reuses_uploaded_multi_image_items(session_fact
 @pytest.mark.asyncio
 async def test_confirm_generation_keeps_temp_media_until_polling_finishes(session_factory, monkeypatch, tmp_path) -> None:
     async with session_factory() as session:
-        await create_user(session, user_id=103, balance=3)
+        await create_user(session, user_id=103, balance=30)
 
         temp_input_path = tmp_path / "input-persist.png"
         temp_input_path.write_bytes(b"input")
@@ -1077,7 +1347,7 @@ async def test_confirm_generation_keeps_temp_media_until_polling_finishes(sessio
 @pytest.mark.asyncio
 async def test_confirm_generation_allows_new_flow_while_background_task_runs(session_factory, monkeypatch, tmp_path) -> None:
     async with session_factory() as session:
-        await create_user(session, user_id=104, balance=3)
+        await create_user(session, user_id=104, balance=30)
 
         temp_input_path = tmp_path / "input-background.png"
         temp_input_path.write_bytes(b"input")
@@ -1562,7 +1832,7 @@ async def test_insufficient_balance_does_not_start_submit(session_factory, monke
         await generations.confirm_generation(callback, state, session)
 
         assert called is False
-        assert callback.message.answers[-1] == "❌ Ошибка E006: недостаточно кредитов. Нужно 3, у вас 0."
+        assert callback.message.answers[-1] == "❌ Ошибка E006: недостаточно кредитов. Нужно 65, у вас 0."
         assert await get_user_balance(session, 401) == 0
 
 
@@ -1573,18 +1843,38 @@ def test_build_confirmation_text_shows_num_generations_and_total_cost() -> None:
         model,
         {"aspect_ratio": "1:1", "resolution": "4k", "output_format": "png", "num_generations": "3"},
         "Generate three variants",
-        balance=10,
+        balance=100,
     )
 
-    assert "Generation count: <code>3</code>" in text
-    assert "Cost: 3 credits" in text
-    assert "Balance after launch: <code>7</code>" in text
+    assert "📦 Generation count: <code>3</code>" in text
+    assert "💰 Cost: 65 credits" in text
+    assert "💳 Balance after launch: <code>35</code>" in text
+
+
+def test_build_settings_text_shows_price_and_recalculates_duration() -> None:
+    model = generations.get_generation_model("alibaba_wan_2_6_text_to_video")
+
+    default_text = generations.build_settings_text(
+        model,
+        {"size": "1280*720", "duration": "5", "negative_prompt": "", "num_generations": "1"},
+        "ru",
+    )
+    longer_text = generations.build_settings_text(
+        model,
+        {"size": "1280*720", "duration": "10", "negative_prompt": "", "num_generations": "1"},
+        "ru",
+    )
+
+    assert "💰 Цена: 62 credits" in default_text
+    assert "(~$0.80)" in default_text
+    assert "💰 Цена: 124 credits" in longer_text
+    assert "(~$1.60)" in longer_text
 
 
 @pytest.mark.asyncio
 async def test_confirm_generation_debits_total_cost_and_persists_num_generations(session_factory, monkeypatch) -> None:
     async with session_factory() as session:
-        await create_user(session, user_id=451, balance=10)
+        await create_user(session, user_id=451, balance=100)
         captured: dict[str, object] = {}
 
         async def fake_poll_generation_results_batch(**kwargs) -> None:
@@ -1627,9 +1917,10 @@ async def test_confirm_generation_debits_total_cost_and_persists_num_generations
         generation_requests = result.scalars().all()
 
         assert len(generation_requests) == 3
-        assert all(generation.cost == 1 for generation in generation_requests)
+        assert sorted(generation.cost for generation in generation_requests) == [21, 22, 22]
+        assert sum(generation.cost for generation in generation_requests) == 65
         assert all(generation.settings["num_generations"] == "3" for generation in generation_requests)
-        assert await get_user_balance(session, 451) == 7
+        assert await get_user_balance(session, 451) == 35
         assert len(captured["generation_predictions"]) == 3
         assert len(captured["submit_calls"]) == 3
 
@@ -1637,7 +1928,7 @@ async def test_confirm_generation_debits_total_cost_and_persists_num_generations
 @pytest.mark.asyncio
 async def test_num_generations_four_starts_four_submit_requests(session_factory, monkeypatch, tmp_path) -> None:
     async with session_factory() as session:
-        await create_user(session, user_id=452, balance=10)
+        await create_user(session, user_id=452, balance=100)
 
         temp_input_path = tmp_path / "input.png"
         temp_input_path.write_bytes(b"input")
@@ -1738,6 +2029,7 @@ async def test_batch_failure_refunds_only_one_credit_and_cleans_up_after_all_tas
         chat_id=460,
         generation_predictions=generation_predictions,
         model_key="nano_banana",
+        cost=1,
         temp_input_path=str(temp_input_path),
     )
 

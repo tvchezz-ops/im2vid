@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import os
+from decimal import Decimal
 
 import pytest
 
@@ -20,6 +21,8 @@ from app.services.generation_service import (
     get_default_settings,
     build_model_registry,
     build_payload,
+    calculate_generation_cost_credits,
+    calculate_generation_price_usd,
     get_generation_model,
     GenerationModel,
     infer_generation_type_from_endpoint,
@@ -33,6 +36,7 @@ from app.services.generation_service import (
     model_requires_image,
     model_requires_media,
     model_requires_video,
+    is_generation_cost_estimated,
 )
 
 
@@ -290,6 +294,103 @@ def test_generation_model_exposes_new_fields_and_legacy_aliases() -> None:
     assert model.min_images == 1
     assert model.max_images == 14
     assert model.user_settings["num_generations"].default == "1"
+    assert model.wavespeed_price_usd == Decimal("0.14")
+    assert model.pricing_type == "per_generation"
+    assert model.fallback_price_usd == Decimal("0.05")
+
+
+def test_calculate_generation_cost_for_nano_banana_uses_markup_and_credit_price() -> None:
+    model = get_generation_model("nano_banana")
+
+    assert calculate_generation_cost_credits(model, get_default_settings(model.key)) == 22
+
+
+def test_calculate_generation_cost_recalculates_video_duration() -> None:
+    model = get_generation_model("alibaba_wan_2_6_text_to_video")
+
+    assert calculate_generation_cost_credits(model, {"duration": "5"}) == 62
+    assert calculate_generation_cost_credits(model, {"duration": "10"}) == 124
+
+
+def test_calculate_generation_cost_multiplies_num_generations() -> None:
+    model = get_generation_model("nano_banana")
+
+    assert calculate_generation_price_usd(model, get_default_settings(model.key), num_generations=3) == Decimal("0.840")
+    assert calculate_generation_cost_credits(model, get_default_settings(model.key), num_generations=3) == 65
+
+
+def test_calculate_generation_cost_ceil_credits() -> None:
+    model = GenerationModel(
+        key="ceil-model",
+        title="Ceil Model",
+        provider="google",
+        generation_type="text_to_image",
+        endpoint="https://example.com/text-to-image",
+        docs_url="https://example.com/docs/text-to-image",
+        description="Ceil price model",
+        max_images=1,
+        requires_prompt=True,
+        requires_image=False,
+        requires_video=False,
+        requires_audio=False,
+        outputs="image",
+        base_wavespeed_price_usd=Decimal("0.0066"),
+    )
+
+    assert calculate_generation_price_usd(model, {}, num_generations=1) == Decimal("0.0132")
+    assert calculate_generation_cost_credits(model, {}, num_generations=1) == 2
+
+
+def test_resolution_multiplier_makes_1080p_more_expensive_than_720p() -> None:
+    model = get_generation_model("google_veo3_fast")
+
+    low = calculate_generation_cost_credits(model, {"duration": "5", "resolution": "720p", "aspect_ratio": "16:9"})
+    high = calculate_generation_cost_credits(model, {"duration": "5", "resolution": "1080p", "aspect_ratio": "16:9"})
+
+    assert high > low
+
+
+def test_quality_multiplier_makes_high_more_expensive_than_fast() -> None:
+    model = GenerationModel(
+        key="quality-model",
+        title="Quality Model",
+        provider="google",
+        generation_type="text_to_image",
+        endpoint="https://example.com/text-to-image",
+        docs_url="https://example.com/docs/text-to-image",
+        description="Quality price model",
+        max_images=1,
+        requires_prompt=True,
+        requires_image=False,
+        requires_video=False,
+        requires_audio=False,
+        outputs="image",
+        base_wavespeed_price_usd=Decimal("0.10"),
+        pricing_rules={"quality_multipliers": {"fast": 1.0, "high": 2.2}},
+    )
+
+    assert calculate_generation_cost_credits(model, {"quality": "high"}) > calculate_generation_cost_credits(model, {"quality": "fast"})
+
+
+def test_calculate_generation_cost_uses_fallback_price_when_unknown() -> None:
+    model = GenerationModel(
+        key="estimated-model",
+        title="Estimated Model",
+        provider="google",
+        generation_type="text_to_image",
+        endpoint="https://example.com/text-to-image",
+        docs_url="https://example.com/docs/text-to-image",
+        description="Estimated price model",
+        max_images=1,
+        requires_prompt=True,
+        requires_image=False,
+        requires_video=False,
+        requires_audio=False,
+        outputs="image",
+    )
+
+    assert is_generation_cost_estimated(model) is True
+    assert calculate_generation_cost_credits(model, {}) == 8
 
 
 def test_all_enabled_models_have_num_generations_setting() -> None:
