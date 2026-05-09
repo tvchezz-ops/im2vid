@@ -81,16 +81,16 @@ class Settings(BaseSettings):
         description="Максимальное количество активных generation_request на пользователя",
     )
     wavespeed_poll_fast_seconds: int = Field(
-        default=30,
-        description="Интервал polling Wavespeed в первые 5 минут",
+        default=10,
+        description="Интервал polling Wavespeed в первые 3 минуты",
     )
     wavespeed_poll_normal_seconds: int = Field(
-        default=60,
-        description="Интервал polling Wavespeed после 5 минут",
+        default=30,
+        description="Интервал polling Wavespeed с 3 до 10 минут",
     )
     wavespeed_poll_slow_seconds: int = Field(
-        default=120,
-        description="Интервал polling Wavespeed после 15 минут",
+        default=60,
+        description="Интервал polling Wavespeed после 10 минут",
     )
     wavespeed_poll_timeout_seconds: int = Field(
         default=1800,
@@ -243,9 +243,9 @@ except Exception as e:
         f"- TEMP_MEDIA_DIR (опционально, по умолчанию tmp/media)\n"
         f"- TEMP_MEDIA_TTL_MINUTES (опционально, по умолчанию 30)\n"
         f"- MAX_PARALLEL_GENERATIONS_PER_USER (опционально, по умолчанию 3)\n"
-        f"- WAVESPEED_POLL_FAST_SECONDS (опционально, по умолчанию 30)\n"
-        f"- WAVESPEED_POLL_NORMAL_SECONDS (опционально, по умолчанию 60)\n"
-        f"- WAVESPEED_POLL_SLOW_SECONDS (опционально, по умолчанию 120)\n"
+        f"- WAVESPEED_POLL_FAST_SECONDS (опционально, по умолчанию 10)\n"
+        f"- WAVESPEED_POLL_NORMAL_SECONDS (опционально, по умолчанию 30)\n"
+        f"- WAVESPEED_POLL_SLOW_SECONDS (опционально, по умолчанию 60)\n"
         f"- WAVESPEED_POLL_TIMEOUT_SECONDS (опционально, по умолчанию 1800)\n"
         f"- STORE_INPUT_MEDIA (опционально, по умолчанию false)\n"
         f"- STORE_OUTPUT_URLS (опционально, по умолчанию false)\n"

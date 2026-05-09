@@ -152,8 +152,8 @@ class WavespeedService:
     TERMINAL_STATUSES = {"completed", "failed"}
     MAX_RESULT_RETRIES = 3
     BASE_BACKOFF_SECONDS = 1
-    COMPLETED_EMPTY_OUTPUT_RETRIES = 2
-    COMPLETED_EMPTY_OUTPUT_RETRY_SECONDS = 10
+    COMPLETED_EMPTY_OUTPUT_RETRIES = 3
+    COMPLETED_EMPTY_OUTPUT_RETRY_SECONDS = 5
 
     def __init__(self):
         """Инициализация."""
@@ -451,9 +451,9 @@ class WavespeedService:
     def get_poll_interval_seconds(elapsed_seconds: int, fixed_interval: Optional[int] = None) -> int:
         if fixed_interval is not None:
             return fixed_interval
-        if elapsed_seconds < 5 * 60:
+        if elapsed_seconds < 3 * 60:
             return settings.wavespeed_poll_fast_seconds
-        if elapsed_seconds < 15 * 60:
+        if elapsed_seconds < 10 * 60:
             return settings.wavespeed_poll_normal_seconds
         return settings.wavespeed_poll_slow_seconds
 

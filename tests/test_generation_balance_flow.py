@@ -1681,11 +1681,22 @@ async def test_startup_recovery_restarts_polling_for_processing_generations(sess
             wavespeed_prediction_id="pred-recover",
             cost=1,
         )
+        second_generation = await GenerationRepository(session).create_generation_request(
+            user_id=307,
+            chat_id=777307,
+            model_key="nano_banana",
+            model_endpoint="/api/v3/nano-banana",
+            prompt="Prompt 2",
+            settings={},
+            status="processing",
+            wavespeed_prediction_id="pred-recover-2",
+            cost=2,
+        )
 
-    captured = {}
+    captured = []
 
     async def fake_poll_generation_result(**kwargs) -> None:
-        captured.update(kwargs)
+        captured.append(kwargs)
 
     monkeypatch.setattr(generations, "poll_generation_result", fake_poll_generation_result)
 
@@ -1695,13 +1706,16 @@ async def test_startup_recovery_restarts_polling_for_processing_generations(sess
     finally:
         generations.BACKGROUND_GENERATIONS.clear()
 
-    assert recovered_count == 1
-    assert captured["user_id"] == 307
-    assert captured["chat_id"] == 777307
-    assert captured["generation_request_id"] == generation.id
-    assert captured["prediction_id"] == "pred-recover"
-    assert captured["cost"] == 1
-    assert captured["temp_input_path"] is None
+    assert recovered_count == 2
+    captured_by_prediction = {item["prediction_id"]: item for item in captured}
+    assert set(captured_by_prediction) == {"pred-recover", "pred-recover-2"}
+    assert captured_by_prediction["pred-recover"]["user_id"] == 307
+    assert captured_by_prediction["pred-recover"]["chat_id"] == 777307
+    assert captured_by_prediction["pred-recover"]["generation_request_id"] == generation.id
+    assert captured_by_prediction["pred-recover"]["cost"] == 1
+    assert captured_by_prediction["pred-recover"]["temp_input_path"] is None
+    assert captured_by_prediction["pred-recover-2"]["generation_request_id"] == second_generation.id
+    assert captured_by_prediction["pred-recover-2"]["cost"] == 2
 
 
 @pytest.mark.asyncio

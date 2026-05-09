@@ -62,9 +62,9 @@ def test_wavespeed_polling_defaults() -> None:
         _env_file=None,
     )
 
-    assert settings.wavespeed_poll_fast_seconds == 30
-    assert settings.wavespeed_poll_normal_seconds == 60
-    assert settings.wavespeed_poll_slow_seconds == 120
+    assert settings.wavespeed_poll_fast_seconds == 10
+    assert settings.wavespeed_poll_normal_seconds == 30
+    assert settings.wavespeed_poll_slow_seconds == 60
     assert settings.wavespeed_poll_timeout_seconds == 1800
 
 

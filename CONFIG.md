@@ -21,9 +21,9 @@ INSTANCE_NAME=local-dev
 TEMP_MEDIA_DIR=tmp/media
 TEMP_MEDIA_TTL_MINUTES=30
 MAX_PARALLEL_GENERATIONS_PER_USER=3
-WAVESPEED_POLL_FAST_SECONDS=30
-WAVESPEED_POLL_NORMAL_SECONDS=60
-WAVESPEED_POLL_SLOW_SECONDS=120
+WAVESPEED_POLL_FAST_SECONDS=10
+WAVESPEED_POLL_NORMAL_SECONDS=30
+WAVESPEED_POLL_SLOW_SECONDS=60
 WAVESPEED_POLL_TIMEOUT_SECONDS=1800
 TELEGRAM_STARS_RETURN_BOT_USERNAME=
 TELEGRAM_STARS_WEBHOOK_SECRET=
@@ -54,9 +54,9 @@ STORE_OUTPUT_URLS=false
 | `temp_media_dir` | `str` | ❌ | `tmp/media` | Временная директория для входных изображений |
 | `temp_media_ttl_minutes` | `int` | ❌ | `30` | TTL временных файлов на диске |
 | `max_parallel_generations_per_user` | `int` | ❌ | `3` | Максимум активных `generation_request` со статусами `created`, `pending`, `processing` на пользователя |
-| `wavespeed_poll_fast_seconds` | `int` | ❌ | `30` | Интервал polling Wavespeed в первые 5 минут |
-| `wavespeed_poll_normal_seconds` | `int` | ❌ | `60` | Интервал polling Wavespeed после 5 минут |
-| `wavespeed_poll_slow_seconds` | `int` | ❌ | `120` | Интервал polling Wavespeed после 15 минут |
+| `wavespeed_poll_fast_seconds` | `int` | ❌ | `10` | Интервал polling Wavespeed в первые 3 минуты |
+| `wavespeed_poll_normal_seconds` | `int` | ❌ | `30` | Интервал polling Wavespeed с 3 до 10 минут |
+| `wavespeed_poll_slow_seconds` | `int` | ❌ | `60` | Интервал polling Wavespeed после 10 минут |
 | `wavespeed_poll_timeout_seconds` | `int` | ❌ | `1800` | Общий timeout polling Wavespeed в секундах |
 | `telegram_stars_return_bot_username` | `str` | ❌ | `""` | Username текущего бота для возврата из wallet bot без `@` |
 | `telegram_stars_webhook_secret` | `str` | ❌ | `""` | Секрет `X-Webhook-Secret` для `POST /webhooks/stars-wallet` |
@@ -88,9 +88,9 @@ INSTANCE_NAME=local-dev
 TEMP_MEDIA_DIR=tmp/media
 TEMP_MEDIA_TTL_MINUTES=30
 MAX_PARALLEL_GENERATIONS_PER_USER=3
-WAVESPEED_POLL_FAST_SECONDS=30
-WAVESPEED_POLL_NORMAL_SECONDS=60
-WAVESPEED_POLL_SLOW_SECONDS=120
+WAVESPEED_POLL_FAST_SECONDS=10
+WAVESPEED_POLL_NORMAL_SECONDS=30
+WAVESPEED_POLL_SLOW_SECONDS=60
 WAVESPEED_POLL_TIMEOUT_SECONDS=1800
 TELEGRAM_STARS_RETURN_BOT_USERNAME=
 TELEGRAM_STARS_WEBHOOK_SECRET=
