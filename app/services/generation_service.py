@@ -399,8 +399,8 @@ def _calculate_generation_price_details(
             if _truthy(settings_map.get(str(setting_key))):
                 price *= _to_decimal(multiplier, Decimal("1"))
 
-    price *= Decimal(requested_generations)
     price *= settings.pricing_markup_multiplier
+    price *= Decimal(requested_generations)
     credits = _ceil_credits(price)
     context = {
         "action": "generation_dynamic_price_calculated",
@@ -409,6 +409,7 @@ def _calculate_generation_price_details(
         "resolution": str(resolution) if resolution is not None else None,
         "quality": str(quality) if quality is not None else None,
         "duration": _format_decimal(duration) if duration is not None else None,
+        "markup_multiplier": _format_decimal(settings.pricing_markup_multiplier),
         "num_generations": requested_generations,
         "final_price_usd": _format_decimal(price),
         "final_credits": credits,

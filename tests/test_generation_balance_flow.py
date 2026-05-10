@@ -220,12 +220,7 @@ async def test_show_generation_menu_starts_with_generation_type_selection() -> N
 
 
 @pytest.mark.asyncio
-async def test_show_generation_menu_ignores_active_generation_count(session_factory, monkeypatch) -> None:
-    async def fake_count_active_generations(self, user_id: int) -> int:
-        return 999
-
-    monkeypatch.setattr(GenerationRepository, "count_active_generations", fake_count_active_generations)
-
+async def test_show_generation_menu_ignores_active_generation_count(session_factory) -> None:
     async with session_factory() as session:
         await create_user(session, user_id=421, balance=5)
         for index in range(3):
@@ -251,14 +246,19 @@ async def test_show_generation_menu_ignores_active_generation_count(session_fact
 
 
 @pytest.mark.asyncio
-async def test_confirm_generation_ignores_active_generation_count(session_factory, monkeypatch, tmp_path) -> None:
-    async def fake_count_active_generations(self, user_id: int) -> int:
-        return 999
-
+@pytest.mark.parametrize("active_generation_count", [0, 999])
+async def test_confirm_generation_allows_four_generations_with_existing_active_requests(
+    session_factory,
+    monkeypatch,
+    tmp_path,
+    active_generation_count: int,
+) -> None:
     async def fake_submit_generation_request(**kwargs) -> str:
-        return "pred-no-limit"
+        submit_calls.append(kwargs)
+        return f"pred-no-limit-{len(submit_calls)}"
 
-    async def fake_poll_generation_result(**kwargs) -> None:
+    async def fake_poll_generation_results_batch(**kwargs) -> None:
+        batch_calls.update(kwargs)
         return None
 
     class FakeTelegramFilesService:
@@ -268,21 +268,22 @@ async def test_confirm_generation_ignores_active_generation_count(session_factor
         async def download_temp_file_and_get_public_url(self, file_id: str):
             return SimpleNamespace(local_path=tmp_path / "input.png", public_url="https://example.com/input.png")
 
-    monkeypatch.setattr(GenerationRepository, "count_active_generations", fake_count_active_generations)
+    submit_calls: list[dict[str, object]] = []
+    batch_calls: dict[str, object] = {}
     monkeypatch.setattr(generations, "TelegramFilesService", FakeTelegramFilesService)
     monkeypatch.setattr(generations, "submit_generation_request", fake_submit_generation_request)
-    monkeypatch.setattr(generations, "poll_generation_result", fake_poll_generation_result)
+    monkeypatch.setattr(generations, "poll_generation_results_batch", fake_poll_generation_results_batch)
 
     async with session_factory() as session:
-        await create_user(session, user_id=422, balance=30)
-        for index, status in enumerate(("created", "processing", "pending")):
+        await create_user(session, user_id=422, balance=100)
+        for index in range(active_generation_count):
             await GenerationRepository(session).create_generation_request(
                 user_id=422,
                 model_key="nano_banana",
                 model_endpoint="/api/v3/nano-banana",
                 prompt=f"Prompt {index}",
                 settings={},
-                status=status,
+                status="processing",
                 cost=1,
             )
 
@@ -297,7 +298,7 @@ async def test_confirm_generation_ignores_active_generation_count(session_factor
                 "model_endpoint": "/api/v3/nano-banana",
                 "prompt": "Make the image brighter and keep the subject intact",
                 "input_image_file_id": "telegram-file-id",
-                "user_settings": {"aspect_ratio": "1:1", "resolution": "4k", "output_format": "png"},
+                "user_settings": {"aspect_ratio": "1:1", "resolution": "4k", "output_format": "png", "num_generations": "4"},
             }
         )
         callback = FakeCallback(user_id=422)
@@ -309,29 +310,13 @@ async def test_confirm_generation_ignores_active_generation_count(session_factor
         assert "Выберите тип генерации:" in menu_message.answers[-1]
         assert state.state is None
         assert callback.message.answers[-1] == "Генерация запущена в фоне. Результат придёт сюда автоматически."
+        assert len(submit_calls) == 4
+        assert len(batch_calls["generation_predictions"]) == 4
+        assert await get_user_balance(session, 422) == 35
         all_answers = [*menu_message.answers, *callback.message.answers]
         removed_warning_fragment = "Можно запускать" + " не больше"
         assert not any(removed_warning_fragment in answer for answer in all_answers)
         assert not any("Дождитесь завершения" in answer for answer in all_answers)
-
-
-@pytest.mark.asyncio
-async def test_count_active_generations_uses_only_active_statuses(session_factory) -> None:
-    async with session_factory() as session:
-        await create_user(session, user_id=423, balance=5)
-        repository = GenerationRepository(session)
-        for status in ("created", "processing", "pending", "completed", "failed", "timeout", "cancelled"):
-            await repository.create_generation_request(
-                user_id=423,
-                model_key="nano_banana",
-                model_endpoint="/api/v3/nano-banana",
-                prompt=status,
-                settings={},
-                status=status,
-                cost=1,
-            )
-
-        assert await repository.count_active_generations(423) == 3
 
 
 @pytest.mark.asyncio
@@ -1034,7 +1019,7 @@ async def test_process_prompt_insufficient_balance_returns_to_settings(session_f
         assert confirmation_opened is False
         assert state.state == GenerationStates.choosing_settings
         assert state.data.get("prompt") is None
-        assert message.answers[0] == "❌ Ошибка E006: недостаточно кредитов. Нужно 31, у вас 0."
+        assert message.answers[0] == "❌ Ошибка E006: недостаточно кредитов. Нужно 24, у вас 0."
         assert message.answers[1] == "Измените количество генераций или пополните баланс."
         assert message.answer_markups[1].keyboard[0][0].text == "🎨 Генерации"
         assert message.answers[2].startswith("Настройки модели:")
@@ -1044,7 +1029,7 @@ async def test_process_prompt_insufficient_balance_returns_to_settings(session_f
             and record.msg.get("user_id") == 411
             and record.msg.get("state") == GenerationStates.waiting_for_prompt.state
             and record.msg.get("model_key") == "alibaba_wan_2_6_text_to_image"
-            and record.msg.get("total_cost") == 31
+            and record.msg.get("total_cost") == 24
             for record in caplog.records
         )
 
@@ -1252,7 +1237,7 @@ async def test_confirm_generation_debits_one_credit(session_factory, monkeypatch
         try:
             await generations.confirm_generation(callback, state, session)
             await await_background_generation_tasks()
-            assert await get_user_balance(session, 101) == 8
+            assert await get_user_balance(session, 101) == 13
         finally:
             generations.BACKGROUND_GENERATIONS.clear()
             Path(temp_input_path).unlink(missing_ok=True)
@@ -1328,7 +1313,7 @@ async def test_confirm_generation_reuses_uploaded_multi_image_items(session_fact
             }
             assert captured["prediction_id"] == "pred-102"
             assert captured["temp_input_path"] == [str(first_path), str(second_path)]
-            assert await get_user_balance(session, 102) == 8
+            assert await get_user_balance(session, 102) == 13
         finally:
             generations.BACKGROUND_GENERATIONS.clear()
             first_path.unlink(missing_ok=True)
@@ -1893,7 +1878,7 @@ async def test_insufficient_balance_does_not_start_submit(session_factory, monke
         await generations.confirm_generation(callback, state, session)
 
         assert called is False
-        assert callback.message.answers[-1] == "❌ Ошибка E006: недостаточно кредитов. Нужно 65, у вас 0."
+        assert callback.message.answers[-1] == "❌ Ошибка E006: недостаточно кредитов. Нужно 49, у вас 0."
         assert await get_user_balance(session, 401) == 0
 
 
@@ -1908,8 +1893,8 @@ def test_build_confirmation_text_shows_num_generations_and_total_cost() -> None:
     )
 
     assert "📦 Generation count: <code>3</code>" in text
-    assert "💰 Cost: 65 credits" in text
-    assert "💳 Balance after launch: <code>35</code>" in text
+    assert "💰 Cost: 49 credits" in text
+    assert "💳 Balance after launch: <code>51</code>" in text
 
 
 def test_build_settings_text_shows_price_and_recalculates_duration() -> None:
@@ -1926,10 +1911,10 @@ def test_build_settings_text_shows_price_and_recalculates_duration() -> None:
         "ru",
     )
 
-    assert "💰 Цена: 62 credits" in default_text
-    assert "(~$0.80)" in default_text
-    assert "💰 Цена: 124 credits" in longer_text
-    assert "(~$1.60)" in longer_text
+    assert "💰 Цена: 47 credits" in default_text
+    assert "(~$0.60)" in default_text
+    assert "💰 Цена: 93 credits" in longer_text
+    assert "(~$1.20)" in longer_text
 
 
 @pytest.mark.asyncio
@@ -1978,10 +1963,10 @@ async def test_confirm_generation_debits_total_cost_and_persists_num_generations
         generation_requests = result.scalars().all()
 
         assert len(generation_requests) == 3
-        assert sorted(generation.cost for generation in generation_requests) == [21, 22, 22]
-        assert sum(generation.cost for generation in generation_requests) == 65
+        assert sorted(generation.cost for generation in generation_requests) == [16, 16, 17]
+        assert sum(generation.cost for generation in generation_requests) == 49
         assert all(generation.settings["num_generations"] == "3" for generation in generation_requests)
-        assert await get_user_balance(session, 451) == 35
+        assert await get_user_balance(session, 451) == 51
         assert len(captured["generation_predictions"]) == 3
         assert len(captured["submit_calls"]) == 3
 
@@ -2021,7 +2006,7 @@ async def test_num_generations_four_starts_four_submit_requests(session_factory,
                 "model_endpoint": "/api/v3/nano-banana",
                 "prompt": "Generate three variants",
                 "input_image_file_id": "telegram-file-id",
-                "user_settings": {"aspect_ratio": "1:1", "resolution": "4k", "output_format": "png", "num_generations": "3"},
+                "user_settings": {"aspect_ratio": "1:1", "resolution": "4k", "output_format": "png", "num_generations": "4"},
             }
         )
         callback = FakeCallback(user_id=452)
@@ -2029,9 +2014,22 @@ async def test_num_generations_four_starts_four_submit_requests(session_factory,
         await generations.confirm_generation(callback, state, session)
         await await_background_generation_tasks()
 
-        assert len(batch_calls["generation_predictions"]) == 3
-        assert len(batch_calls["submit_calls"]) == 3
+        assert len(batch_calls["generation_predictions"]) == 4
+        assert len(batch_calls["submit_calls"]) == 4
         assert callback.message.answers[-1] == "Генерация запущена в фоне. Результат придёт сюда автоматически."
+
+
+def test_parallel_generation_limit_artifacts_are_absent() -> None:
+    source_text = "\n".join(
+        path.read_text(encoding="utf-8")
+        for root in (Path("app"), Path("tests"))
+        for path in root.rglob("*.py")
+    )
+
+    removed_warning = "Можно запускать" + " не больше 3 генераций"
+    removed_action = "parallel_generation_" + "limit_reached"
+    assert removed_warning not in source_text
+    assert removed_action not in source_text
 
 
 @pytest.mark.asyncio

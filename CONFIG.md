@@ -34,7 +34,7 @@ NOWPAYMENTS_BASE_URL=https://api.nowpayments.io
 NOWPAYMENTS_SUCCESS_URL=
 NOWPAYMENTS_CANCEL_URL=
 CREDIT_USD_PRICE=0.013
-PRICING_MARKUP_MULTIPLIER=2
+PRICING_MARKUP_MULTIPLIER=1.5
 USD_PER_100_CREDITS=1.30
 STORE_INPUT_MEDIA=false
 STORE_OUTPUT_URLS=false
@@ -66,7 +66,7 @@ STORE_OUTPUT_URLS=false
 | `nowpayments_success_url` | `str` | ❌ | `""` | Optional success redirect от NOWPayments |
 | `nowpayments_cancel_url` | `str` | ❌ | `""` | Optional cancel redirect от NOWPayments |
 | `credit_usd_price` | `Decimal` | ❌ | `0.013` | USD цена одного кредита для crypto top-ups |
-| `pricing_markup_multiplier` | `Decimal` | ❌ | `2` | Множитель на цену провайдера для расчёта стоимости генерации |
+| `pricing_markup_multiplier` | `Decimal` | ❌ | `1.5` | Множитель на цену провайдера для расчёта стоимости генерации |
 | `usd_per_100_credits` | `Decimal` | ❌ | `1.30` | USD цена 100 кредитов для пересчёта стоимости генерации |
 | `store_input_media` | `bool` | ❌ | `false` | Всегда `false`, поле совместимости |
 | `store_output_urls` | `bool` | ❌ | `false` | Всегда `false`, поле совместимости |
@@ -99,7 +99,7 @@ NOWPAYMENTS_BASE_URL=https://api.nowpayments.io
 NOWPAYMENTS_SUCCESS_URL=
 NOWPAYMENTS_CANCEL_URL=
 CREDIT_USD_PRICE=0.013
-PRICING_MARKUP_MULTIPLIER=2
+PRICING_MARKUP_MULTIPLIER=1.5
 USD_PER_100_CREDITS=1.30
 STORE_INPUT_MEDIA=false
 STORE_OUTPUT_URLS=false

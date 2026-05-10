@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import os
+import logging
 from decimal import Decimal
 
 import pytest
@@ -302,21 +303,36 @@ def test_generation_model_exposes_new_fields_and_legacy_aliases() -> None:
 def test_calculate_generation_cost_for_nano_banana_uses_markup_and_credit_price() -> None:
     model = get_generation_model("nano_banana")
 
-    assert calculate_generation_cost_credits(model, get_default_settings(model.key)) == 22
+    assert calculate_generation_price_usd(model, get_default_settings(model.key)) == Decimal("0.210")
+    assert calculate_generation_cost_credits(model, get_default_settings(model.key)) == 17
+
+
+def test_dynamic_price_log_includes_markup_multiplier(caplog) -> None:
+    model = get_generation_model("nano_banana")
+
+    with caplog.at_level(logging.INFO):
+        calculate_generation_cost_credits(model, get_default_settings(model.key))
+
+    assert any(
+        isinstance(record.msg, dict)
+        and record.msg.get("action") == "generation_dynamic_price_calculated"
+        and record.msg.get("markup_multiplier") == "1.5"
+        for record in caplog.records
+    )
 
 
 def test_calculate_generation_cost_recalculates_video_duration() -> None:
     model = get_generation_model("alibaba_wan_2_6_text_to_video")
 
-    assert calculate_generation_cost_credits(model, {"duration": "5"}) == 62
-    assert calculate_generation_cost_credits(model, {"duration": "10"}) == 124
+    assert calculate_generation_cost_credits(model, {"duration": "5"}) == 47
+    assert calculate_generation_cost_credits(model, {"duration": "10"}) == 93
 
 
 def test_calculate_generation_cost_multiplies_num_generations() -> None:
     model = get_generation_model("nano_banana")
 
-    assert calculate_generation_price_usd(model, get_default_settings(model.key), num_generations=3) == Decimal("0.840")
-    assert calculate_generation_cost_credits(model, get_default_settings(model.key), num_generations=3) == 65
+    assert calculate_generation_price_usd(model, get_default_settings(model.key), num_generations=3) == Decimal("0.630")
+    assert calculate_generation_cost_credits(model, get_default_settings(model.key), num_generations=3) == 49
 
 
 def test_calculate_generation_cost_ceil_credits() -> None:
@@ -337,8 +353,8 @@ def test_calculate_generation_cost_ceil_credits() -> None:
         base_wavespeed_price_usd=Decimal("0.0066"),
     )
 
-    assert calculate_generation_price_usd(model, {}, num_generations=1) == Decimal("0.0132")
-    assert calculate_generation_cost_credits(model, {}, num_generations=1) == 2
+    assert calculate_generation_price_usd(model, {}, num_generations=1) == Decimal("0.00990")
+    assert calculate_generation_cost_credits(model, {}, num_generations=1) == 1
 
 
 def test_resolution_multiplier_makes_1080p_more_expensive_than_720p() -> None:
@@ -390,7 +406,7 @@ def test_calculate_generation_cost_uses_fallback_price_when_unknown() -> None:
     )
 
     assert is_generation_cost_estimated(model) is True
-    assert calculate_generation_cost_credits(model, {}) == 8
+    assert calculate_generation_cost_credits(model, {}) == 6
 
 
 def test_all_enabled_models_have_num_generations_setting() -> None:

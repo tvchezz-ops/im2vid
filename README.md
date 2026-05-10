@@ -151,7 +151,7 @@ WAVESPEED_POLL_FAST_SECONDS=10
 WAVESPEED_POLL_NORMAL_SECONDS=30
 WAVESPEED_POLL_SLOW_SECONDS=60
 WAVESPEED_POLL_TIMEOUT_SECONDS=1800
-PRICING_MARKUP_MULTIPLIER=2
+PRICING_MARKUP_MULTIPLIER=1.5
 USD_PER_100_CREDITS=1.30
 ```
 
@@ -167,7 +167,7 @@ Required production env:
 - `NOWPAYMENTS_SUCCESS_URL`, optional success redirect from NOWPayments
 - `NOWPAYMENTS_CANCEL_URL`, optional cancel redirect from NOWPayments
 - `CREDIT_USD_PRICE`, default `0.013`
-- `PRICING_MARKUP_MULTIPLIER`, default `2`
+- `PRICING_MARKUP_MULTIPLIER`, default `1.5`
 - `USD_PER_100_CREDITS`, default `1.30`
 
 The webhook endpoint is `POST /webhooks/nowpayments`. It verifies `x-nowpayments-sig` with HMAC SHA512. Credits are added only when a verified webhook has `payment_status == finished` or `confirmed`; client-side callbacks and return links are never treated as proof of payment. Repeated webhooks are idempotent and do not add credits twice.

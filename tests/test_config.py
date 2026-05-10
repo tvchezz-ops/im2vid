@@ -65,5 +65,5 @@ def test_generation_pricing_defaults() -> None:
         _env_file=None,
     )
 
-    assert settings.pricing_markup_multiplier == Decimal("2")
+    assert settings.pricing_markup_multiplier == Decimal("1.5")
     assert settings.usd_per_100_credits == Decimal("1.30")
