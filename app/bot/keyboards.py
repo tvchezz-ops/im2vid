@@ -1,7 +1,7 @@
 """Клавиатуры для бота."""
 from __future__ import annotations
 
-from typing import Any, Iterable, Sequence
+from typing import Any, Callable, Iterable, Sequence
 
 from aiogram.types import InlineKeyboardButton, InlineKeyboardMarkup, KeyboardButton, ReplyKeyboardMarkup
 from aiogram.utils.keyboard import InlineKeyboardBuilder
@@ -18,14 +18,24 @@ from app.services.generation_service import (
 
 
 CALLBACK_DATA_LIMIT = 64
+DEFAULT_PAGE_SIZE = 8
+PAGINATION_NOOP_CALLBACK = "gen:page:noop"
 
 SECTION_KEYS = {
     "text_to_image": "generation.text_to_image",
-    "text_to_video": "generation.text_to_video",
+    "image_to_image": "generation.image_to_image",
     "image_edit": "generation.image_edit",
+    "text_to_video": "generation.text_to_video",
     "image_to_video": "generation.image_to_video",
+    "reference_to_video": "generation.reference_to_video",
     "video_edit": "generation.video_edit",
+    "video_extend": "generation.video_extend",
     "lipsync": "generation.lipsync",
+    "motion_control": "generation.motion_control",
+    "avatar": "generation.avatar",
+    "audio_to_video": "generation.audio_to_video",
+    "video_to_audio": "generation.video_to_audio",
+    "effects": "generation.effects",
 }
 
 BUTTON_ICONS = {
@@ -42,11 +52,19 @@ BUTTON_ICONS = {
     "payments.back_to_profile": "⬅️",
     "payments.pay_here": "⭐",
     "generation.text_to_image": "🖼",
-    "generation.text_to_video": "🎬",
+    "generation.image_to_image": "🖼",
     "generation.image_edit": "🛠",
+    "generation.text_to_video": "🎬",
     "generation.image_to_video": "🎥",
+    "generation.reference_to_video": "🧭",
     "generation.video_edit": "🎞",
+    "generation.video_extend": "⏩",
     "generation.lipsync": "🗣",
+    "generation.motion_control": "🎚",
+    "generation.avatar": "👥",
+    "generation.audio_to_video": "🎙",
+    "generation.video_to_audio": "🔊",
+    "generation.effects": "✨",
     "generation.all_models": "📚",
     "generation.confirm": "🚀",
     "download.button": "🔗",
@@ -54,9 +72,13 @@ BUTTON_ICONS = {
 
 PROVIDER_LABELS = {
     "alibaba": "Alibaba",
-    "openai": "OpenAI",
     "bytedance": "ByteDance",
     "google": "Google",
+    "openai": "OpenAI",
+    "kling": "Kling",
+    "grok": "Grok",
+    "minimax": "MiniMax",
+    "wavespeed_ai": "Wavespeed AI",
 }
 
 
@@ -82,6 +104,87 @@ def validate_callback_length(callback_data: str) -> str:
     if len(callback_data.encode("utf-8")) >= CALLBACK_DATA_LIMIT:
         raise ValueError(f"callback_data is too long: {callback_data}")
     return callback_data
+
+
+def _call_item_callback_builder(
+    item_callback_builder: Callable[..., str],
+    item: Any,
+    item_index: int,
+) -> str:
+    try:
+        return item_callback_builder(item, item_index)
+    except TypeError:
+        return item_callback_builder(item)
+
+
+def _default_item_text(item: Any) -> str:
+    title = getattr(item, "title", None)
+    if title is not None and not callable(title):
+        return str(title)
+    return str(item)
+
+
+def build_paginated_keyboard(
+    items: Iterable[Any],
+    page: int,
+    page_size: int = DEFAULT_PAGE_SIZE,
+    *,
+    item_callback_builder: Callable[..., str],
+    back_callback: str,
+    item_text_builder: Callable[[Any], str] | None = None,
+    page_callback_builder: Callable[[int], str] | None = None,
+    lang: str = "en",
+) -> InlineKeyboardMarkup:
+    """Build a two-column paginated inline keyboard with navigation and back rows."""
+    item_list = list(items)
+    safe_page_size = max(1, page_size)
+    total_pages = max(1, (len(item_list) + safe_page_size - 1) // safe_page_size)
+    current_page = min(max(page, 0), total_pages - 1)
+    start_index = current_page * safe_page_size
+    page_items = item_list[start_index:start_index + safe_page_size]
+
+    rows: list[list[InlineKeyboardButton]] = []
+    item_row: list[InlineKeyboardButton] = []
+    for offset, item in enumerate(page_items):
+        item_index = start_index + offset
+        text = item_text_builder(item) if item_text_builder is not None else _default_item_text(item)
+        item_row.append(
+            InlineKeyboardButton(
+                text=text,
+                callback_data=validate_callback_length(_call_item_callback_builder(item_callback_builder, item, item_index)),
+            )
+        )
+        if len(item_row) == 2:
+            rows.append(item_row)
+            item_row = []
+    if item_row:
+        rows.append(item_row)
+
+    def page_callback(target_page: int) -> str:
+        if page_callback_builder is None:
+            return PAGINATION_NOOP_CALLBACK
+        return page_callback_builder(target_page)
+
+    previous_page = max(current_page - 1, 0)
+    next_page = min(current_page + 1, total_pages - 1)
+    rows.append(
+        [
+            InlineKeyboardButton(
+                text="⬅️ Prev",
+                callback_data=validate_callback_length(page_callback(previous_page)),
+            ),
+            InlineKeyboardButton(
+                text=f"Page {current_page + 1}/{total_pages}",
+                callback_data=validate_callback_length(PAGINATION_NOOP_CALLBACK),
+            ),
+            InlineKeyboardButton(
+                text="Next ➡️",
+                callback_data=validate_callback_length(page_callback(next_page)),
+            ),
+        ]
+    )
+    rows.append([InlineKeyboardButton(text=get_button_text("common.back", lang), callback_data=validate_callback_length(back_callback))])
+    return InlineKeyboardMarkup(inline_keyboard=rows)
 
 
 def _get_setting_options(options: Iterable[Any]) -> list[tuple[str, str]]:
@@ -241,41 +344,48 @@ def build_generation_sections_keyboard(lang: str = "en") -> InlineKeyboardMarkup
     return InlineKeyboardMarkup(inline_keyboard=rows)
 
 
-def build_providers_keyboard(lang: str = "en") -> InlineKeyboardMarkup:
+def build_providers_keyboard(lang: str = "en", page: int = 0) -> InlineKeyboardMarkup:
     """Построить клавиатуру провайдеров из registry."""
-    rows = [
-        [
-            InlineKeyboardButton(
-                text=PROVIDER_LABELS.get(provider, provider.title()),
-                callback_data=validate_callback_length(f"gen:provider:{provider}"),
-            )
-        ]
-        for provider in list_providers()
-    ]
-    rows.append([InlineKeyboardButton(text=get_button_text("common.back", lang), callback_data="gen:back:sections")])
-    return InlineKeyboardMarkup(inline_keyboard=rows)
+    return build_paginated_keyboard(
+        list_providers(),
+        page,
+        item_callback_builder=lambda provider: f"gen:provider:{provider}:0",
+        item_text_builder=lambda provider: PROVIDER_LABELS.get(provider, str(provider).title()),
+        page_callback_builder=lambda target_page: f"gen:providers:{target_page}",
+        back_callback="gen:back:sections",
+        lang=lang,
+    )
 
 
-def build_models_keyboard(models: Iterable[Any], back_callback: str, lang: str = "en") -> InlineKeyboardMarkup:
+def build_models_keyboard(
+    models: Iterable[Any],
+    back_callback: str,
+    lang: str = "en",
+    page: int = 0,
+    page_callback_builder: Callable[[int], str] | None = None,
+) -> InlineKeyboardMarkup:
     """Построить клавиатуру моделей с настраиваемым callback возврата."""
     model_list = list(models)
-    rows = []
-    for model_index, model in enumerate(model_list):
+    def build_model_callback(model: Any, model_index: int) -> str:
         token = get_model_callback_token(model_list, model, model_index)
+        return f"gen:model:{token}"
+
+    def build_model_text(model: Any) -> str:
         price_label = format_model_price_label(model, lang)
         button_text = str(model.title)
         if price_label:
             button_text = f"{button_text} — {price_label}"
-        rows.append(
-            [
-                InlineKeyboardButton(
-                    text=button_text,
-                    callback_data=validate_callback_length(f"gen:model:{token}"),
-                )
-            ]
-        )
-    rows.append([InlineKeyboardButton(text=get_button_text("common.back", lang), callback_data=validate_callback_length(back_callback))])
-    return InlineKeyboardMarkup(inline_keyboard=rows)
+        return button_text
+
+    return build_paginated_keyboard(
+        model_list,
+        page,
+        item_callback_builder=build_model_callback,
+        item_text_builder=build_model_text,
+        page_callback_builder=page_callback_builder,
+        back_callback=back_callback,
+        lang=lang,
+    )
 
 
 def build_model_settings_keyboard(model: Any, current_settings: dict[str, Any], lang: str = "en") -> InlineKeyboardMarkup:
@@ -336,7 +446,7 @@ def build_generation_type_keyboard(options: Iterable[tuple[str, str]] | None = N
 
     rows = []
     for generation_type, label in options:
-        callback_data = "gen:all" if generation_type == "all" else f"gen:section:{generation_type}"
+        callback_data = "gen:all" if generation_type in {"all", "all_models"} else f"gen:section:{generation_type}"
         rows.append([InlineKeyboardButton(text=label, callback_data=validate_callback_length(callback_data))])
     return InlineKeyboardMarkup(inline_keyboard=rows)
 
@@ -346,17 +456,16 @@ def build_provider_keyboard(providers: Iterable[tuple[str, str]] | None = None, 
     if providers is None:
         return build_providers_keyboard(lang)
 
-    rows = [
-        [
-            InlineKeyboardButton(
-                text=label,
-                callback_data=validate_callback_length(f"gen:provider:{provider}"),
-            )
-        ]
-        for provider, label in providers
-    ]
-    rows.append([InlineKeyboardButton(text=get_button_text("common.back", lang), callback_data="gen:back:sections")])
-    return InlineKeyboardMarkup(inline_keyboard=rows)
+    provider_items = list(providers)
+    return build_paginated_keyboard(
+        provider_items,
+        0,
+        item_callback_builder=lambda provider_item: f"gen:provider:{provider_item[0]}:0",
+        item_text_builder=lambda provider_item: provider_item[1],
+        page_callback_builder=lambda target_page: f"gen:providers:{target_page}",
+        back_callback="gen:back:sections",
+        lang=lang,
+    )
 
 
 def build_model_selection_keyboard(models: Iterable[Any], lang: str = "en") -> InlineKeyboardMarkup:

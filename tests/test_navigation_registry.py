@@ -90,19 +90,26 @@ def _iter_callback_data(markup) -> list[str]:
 def _build_minimal_payload_for_model(model: GenerationModel) -> dict[str, object]:
     image_urls: list[str] = []
     prompt = "Smoke test prompt"
+    user_settings: dict[str, str] = {}
 
     if model.generation_type == "lipsync":
-        image_urls = ["https://example.com/face.png"]
-        prompt = "Lip sync text"
+        image_urls = ["https://example.com/face.mp4"]
+        if model.requires_audio:
+            prompt = ""
+            user_settings["audio_url"] = "https://example.com/input.mp3"
+        else:
+            prompt = "Lip sync text"
     elif model.requires_image:
         image_urls = ["https://example.com/input.png"]
     elif model.requires_video:
         image_urls = ["https://example.com/input.mp4"]
+    if model.requires_audio:
+        user_settings["audio_url"] = "https://example.com/input.mp3"
 
     if not model.requires_prompt and model.generation_type != "lipsync":
         prompt = ""
 
-    return build_payload(model.key, image_urls, prompt)
+    return build_payload(model.key, image_urls, prompt, user_settings)
 
 
 def test_all_generation_sections_return_a_list_without_error() -> None:
@@ -111,14 +118,78 @@ def test_all_generation_sections_return_a_list_without_error() -> None:
         assert isinstance(models, list)
 
 
-def test_all_list_returns_all_providers() -> None:
-    assert list_providers() == PROVIDERS
+def test_all_list_returns_enabled_providers() -> None:
+    assert list_providers() == [
+        "alibaba",
+        "bytedance",
+        "google",
+        "openai",
+        "kling",
+        "grok",
+        "minimax",
+        "wavespeed_ai",
+    ]
+    assert all(provider in PROVIDERS for provider in list_providers())
 
 
 def test_midjourney_is_removed_from_provider_lists_and_keyboard() -> None:
-    assert list_providers() == ["alibaba", "openai", "bytedance", "google"]
+    assert "midjourney" not in list_providers()
     provider_callbacks = _iter_callback_data(build_providers_keyboard())
-    assert "gen:provider:midjourney" not in provider_callbacks
+    assert all(not callback_data.startswith("gen:provider:midjourney") for callback_data in provider_callbacks)
+
+
+def test_bytedance_provider_appears_in_all_models_keyboard() -> None:
+    callbacks = _iter_callback_data(build_providers_keyboard())
+
+    assert "gen:provider:bytedance:0" in callbacks
+    assert "gen:provider:kling:0" in callbacks
+    assert "gen:provider:grok:0" in callbacks
+    assert "gen:provider:minimax:0" in callbacks
+    assert "gen:provider:wavespeed_ai:0" in callbacks
+
+
+def test_new_providers_appear_when_they_have_enabled_models() -> None:
+    injected_providers = ["openai", "kling", "grok", "minimax", "wavespeed_ai"]
+    for provider in injected_providers:
+        MODEL_REGISTRY[f"enabled_{provider}_navigation_model"] = GenerationModel(
+            key=f"enabled_{provider}_navigation_model",
+            title=f"Enabled {provider} Navigation Model",
+            provider=provider,
+            generation_type="text_to_image",
+            endpoint=f"https://api.wavespeed.ai/api/v3/{provider}/enabled-navigation-model",
+            docs_url=f"https://wavespeed.ai/docs/docs-api/{provider}/{provider}-enabled-navigation-model",
+            description="Enabled test model",
+            max_images=1,
+            requires_prompt=True,
+            requires_image=False,
+            requires_video=False,
+            requires_audio=False,
+            outputs="image",
+            is_enabled=True,
+            user_settings={},
+        )
+    try:
+        assert list_providers() == [
+            "alibaba",
+            "bytedance",
+            "google",
+            "openai",
+            "kling",
+            "grok",
+            "minimax",
+            "wavespeed_ai",
+        ]
+        callbacks = _iter_callback_data(build_providers_keyboard())
+        button_texts = [button.text for row in build_providers_keyboard().inline_keyboard for button in row]
+        assert "gen:provider:kling:0" in callbacks
+        assert "gen:provider:grok:0" in callbacks
+        assert "gen:provider:minimax:0" in callbacks
+        assert "gen:provider:wavespeed_ai:0" in callbacks
+        assert "MiniMax" in button_texts
+        assert "Wavespeed AI" in button_texts
+    finally:
+        for provider in injected_providers:
+            MODEL_REGISTRY.pop(f"enabled_{provider}_navigation_model", None)
 
 
 def test_each_enabled_model_has_required_metadata_and_builds_payload() -> None:
@@ -207,6 +278,21 @@ def test_disabled_models_are_hidden_from_user_lists() -> None:
         MODEL_REGISTRY.pop("disabled_navigation_model", None)
 
 
+def test_categories_show_only_enabled_models() -> None:
+    enabled_types = {model.generation_type for model in list_generation_models()}
+    section_callbacks = _iter_callback_data(build_generation_sections_keyboard())
+
+    for generation_type in GENERATION_TYPES:
+        models = list_models_by_type(generation_type)
+        assert all(model.is_enabled for model in models)
+        if generation_type in enabled_types:
+            assert models
+            assert f"gen:section:{generation_type}" in section_callbacks
+        else:
+            assert models == []
+            assert f"gen:section:{generation_type}" not in section_callbacks
+
+
 @pytest.mark.asyncio
 async def test_ui_shows_placeholder_when_provider_has_no_models(monkeypatch) -> None:
     state = FakeState({"selected_generation_type": "all"})
@@ -220,3 +306,56 @@ async def test_ui_shows_placeholder_when_provider_has_no_models(monkeypatch) -> 
     assert message.edits[-1] == "У этого провайдера пока нет подключённых моделей"
     callbacks = _iter_callback_data(message.edit_markups[-1])
     assert "gen:back:sections" in callbacks
+
+
+@pytest.mark.asyncio
+async def test_all_models_section_callback_opens_provider_list() -> None:
+    state = FakeState()
+    message = FakeMessage(chat_id=501)
+    callback = FakeCallback(user_id=501, message=message, data="gen:section:all_models")
+
+    await generations.choose_generation_section(callback, state)
+
+    assert state.state == generations.GenerationStates.choosing_provider
+    assert state.data["selected_generation_type"] == "all"
+    callbacks = _iter_callback_data(message.edit_markups[-1])
+    assert "gen:provider:google:0" in callbacks
+    assert "gen:back:sections" in callbacks
+
+
+@pytest.mark.asyncio
+async def test_generation_models_page_callback_opens_category_page(monkeypatch) -> None:
+    models = [SimpleNamespace(key=f"model_{index}", title=f"Model {index}") for index in range(9)]
+    state = FakeState()
+    message = FakeMessage(chat_id=502)
+    callback = FakeCallback(user_id=502, message=message, data="gen:models:image_edit:1")
+
+    monkeypatch.setattr(generations, "list_models_by_type", lambda generation_type: models)
+
+    await generations.show_generation_models_page(callback, state)
+
+    assert state.state == generations.GenerationStates.choosing_generation_type
+    assert state.data["selected_generation_type"] == "image_edit"
+    assert state.data["selected_model_page"] == 1
+    callbacks = _iter_callback_data(message.edit_markups[-1])
+    assert "gen:model:model_8" in callbacks
+    assert "gen:models:image_edit:0" in callbacks
+
+
+@pytest.mark.asyncio
+async def test_provider_page_callback_opens_provider_model_page(monkeypatch) -> None:
+    models = [SimpleNamespace(key=f"provider_model_{index}", title=f"Provider Model {index}") for index in range(9)]
+    state = FakeState({"selected_generation_type": "all"})
+    message = FakeMessage(chat_id=503)
+    callback = FakeCallback(user_id=503, message=message, data="gen:provider:google:1")
+
+    monkeypatch.setattr(generations, "list_models_by_provider", lambda provider: models)
+
+    await generations.choose_provider(callback, state)
+
+    assert state.state == generations.GenerationStates.choosing_provider
+    assert state.data["selected_provider"] == "google"
+    assert state.data["selected_model_page"] == 1
+    callbacks = _iter_callback_data(message.edit_markups[-1])
+    assert "gen:model:provider_model_8" in callbacks
+    assert "gen:provider:google:0" in callbacks

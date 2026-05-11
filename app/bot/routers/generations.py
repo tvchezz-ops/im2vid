@@ -34,6 +34,7 @@ from app.bot.keyboards import (
     build_setting_options_keyboard,
     get_main_menu_keyboard,
     is_localized_button_text,
+    PAGINATION_NOOP_CALLBACK,
     resolve_model_key_from_token,
 )
 from app.bot.states import GenerationStates
@@ -42,6 +43,7 @@ from app.db import GenerationRepository, GenerationRequestStatus, UserRepository
 from app.db.session import db_manager
 from app.i18n import get_user_language, t
 from app.services.generation_service import (
+    GENERATION_CATEGORIES,
     GenerationModel,
     allocate_generation_cost_credits,
     build_payload,
@@ -51,7 +53,7 @@ from app.services.generation_service import (
     get_default_settings,
     get_generation_model,
     get_model_num_generations,
-    get_required_input_type,
+    get_model_required_input_type,
     is_generation_cost_estimated,
     list_generation_types,
     list_generation_models,
@@ -119,9 +121,13 @@ GENERATION_FLOW_STATE_NAMES = {
 }
 
 MODEL_PREFIX = "gen:model:"
+MODELS_PAGE_PREFIX = "gen:models:"
 GENERATION_SECTION_PREFIX = "gen:section:"
 GENERATION_ALL = "gen:all"
+ALL_MODELS_CATEGORY = "all_models"
+LEGACY_ALL_MODELS_CATEGORY = "all"
 PROVIDER_PREFIX = "gen:provider:"
+PROVIDERS_PAGE_PREFIX = "gen:providers:"
 SETTINGS_OPEN_PREFIX = "gen:setting:"
 SETTINGS_VALUE_PREFIX = "gen:set:"
 BACK_TO_SECTIONS = "gen:back:sections"
@@ -130,6 +136,29 @@ SETTINGS_BACK_PREFIX = "gen:back:settings"
 SETTINGS_BACK_MODELS = "gen:back:models"
 SETTINGS_CONTINUE = "gen:continue"
 GENERATION_CONFIRM = "gen:confirm"
+
+
+def parse_page(value: Any) -> int:
+    try:
+        return max(int(value), 0)
+    except (TypeError, ValueError):
+        return 0
+
+
+def parse_provider_page(callback_data: str) -> tuple[str, int]:
+    payload = callback_data.removeprefix(PROVIDER_PREFIX)
+    provider, separator, page = payload.rpartition(":")
+    if separator and page.isdigit():
+        return provider, parse_page(page)
+    return payload, 0
+
+
+def parse_models_page(callback_data: str) -> tuple[str, int]:
+    payload = callback_data.removeprefix(MODELS_PAGE_PREFIX)
+    generation_type, separator, page = payload.rpartition(":")
+    if separator and page.isdigit():
+        return generation_type, parse_page(page)
+    return payload, 0
 
 
 class ErrorCode:
@@ -192,19 +221,32 @@ class OutputDeliveryResult:
 
 GENERATION_TYPE_LABELS = {
     "text_to_image": "🖼 Text → Image",
-    "text_to_video": "🎬 Text → Video",
+    "image_to_image": "🖼 Image → Image",
     "image_edit": "🧩 Image Edit",
+    "text_to_video": "🎬 Text → Video",
     "image_to_video": "🎥 Image → Video",
+    "reference_to_video": "🧭 Reference → Video",
     "video_edit": "🎞 Video Edit",
+    "video_extend": "⏩ Video Extend",
     "lipsync": "🗣 Lipsync",
-    "all": "📚 All models",
+    "motion_control": "🎚 Motion Control",
+    "avatar": "👥 Avatar",
+    "audio_to_video": "🎙 Audio → Video",
+    "video_to_audio": "🔊 Video → Audio",
+    "effects": "✨ Effects",
+    ALL_MODELS_CATEGORY: "📚 All models",
+    LEGACY_ALL_MODELS_CATEGORY: "📚 All models",
 }
 
 PROVIDER_LABELS = {
     "alibaba": "Alibaba",
-    "openai": "OpenAI",
     "bytedance": "ByteDance",
     "google": "Google",
+    "openai": "OpenAI",
+    "kling": "Kling",
+    "grok": "Grok",
+    "minimax": "MiniMax",
+    "wavespeed_ai": "Wavespeed AI",
 }
 
 
@@ -214,6 +256,10 @@ def get_generation_type_title(generation_type: str, lang: str) -> str:
 
 def get_generation_type_description(generation_type: str, lang: str) -> str:
     return t(f"generation.section_details.{generation_type}", lang)
+
+
+def is_all_models_category(generation_type: Any) -> bool:
+    return generation_type in {ALL_MODELS_CATEGORY, LEGACY_ALL_MODELS_CATEGORY}
 
 
 def extract_prediction_id(payload: Dict[str, Any]) -> Optional[str]:
@@ -432,6 +478,35 @@ def get_media_input_prompt_text(*, is_lipsync: bool, lang: str = "en") -> str:
 def get_lipsync_incomplete_error_text(lang: str = "en") -> str:
     """Вернуть единое сообщение о неполных входных данных lipsync."""
     return f"❌ {t('generation.lipsync_incomplete', lang)}"
+
+
+def is_audio_input_payload(value: Any) -> bool:
+    return isinstance(value, dict) and value.get("type") in {"voice", "audio"}
+
+
+def is_text_input_payload(value: Any) -> bool:
+    return isinstance(value, dict) and value.get("type") == "text" and bool(str(value.get("text") or "").strip())
+
+
+def state_has_required_media(model: GenerationModel, input_media: Any, input_media_items: list[dict[str, str]]) -> bool:
+    if model.input_media_field == "images":
+        has_legacy_single_image = bool(isinstance(input_media, dict) and input_media.get("type") in {"photo", "image", "images"})
+        return len(input_media_items) >= model.min_images or has_legacy_single_image
+    if model.input_media_field == "image":
+        return bool(isinstance(input_media, dict) and input_media.get("type") in {"photo", "image"})
+    if model.input_media_field == "video":
+        return bool(isinstance(input_media, dict) and input_media.get("type") == "video")
+    return True
+
+
+def state_has_required_prompt_or_audio(model: GenerationModel, prompt: str, input_audio_or_text: Any) -> bool:
+    if model.requires_prompt:
+        if model.generation_type == "lipsync":
+            return is_text_input_payload(input_audio_or_text)
+        return bool(prompt.strip())
+    if model.requires_audio:
+        return is_audio_input_payload(input_audio_or_text)
+    return True
 
 
 def get_second_step_prompt_text(*, is_lipsync: bool, lang: str = "en") -> str:
@@ -1074,16 +1149,17 @@ def build_generation_types_screen_text(lang: str = "en") -> str:
 
 def build_generation_type_options() -> list[tuple[str, str]]:
     """Собрать опции клавиатуры выбора типа генерации."""
+    available_generation_types = set(list_generation_types())
     ordered_generation_types = [
         generation_type
-        for generation_type in ("text_to_image", "text_to_video", "image_edit", "image_to_video", "video_edit", "lipsync")
-        if generation_type in set(list_generation_types())
+        for generation_type in GENERATION_CATEGORIES
+        if generation_type != ALL_MODELS_CATEGORY and generation_type in available_generation_types
     ]
     options = [
         (generation_type, GENERATION_TYPE_LABELS[generation_type])
         for generation_type in ordered_generation_types
     ]
-    options.append(("all", GENERATION_TYPE_LABELS["all"]))
+    options.append((ALL_MODELS_CATEGORY, GENERATION_TYPE_LABELS[ALL_MODELS_CATEGORY]))
     return options
 
 
@@ -1105,7 +1181,7 @@ def get_selected_models_for_state(state_data: dict[str, Any]) -> list[Generation
 
     if selected_provider:
         return list_models_by_provider(str(selected_provider))
-    if selected_generation_type and selected_generation_type != "all":
+    if selected_generation_type and not is_all_models_category(selected_generation_type):
         return list_models_by_type(str(selected_generation_type))
     return []
 
@@ -1120,20 +1196,20 @@ async def render_models_screen(message: Message) -> None:
     )
 
 
-async def render_provider_screen(message: Message, *, edit: bool) -> None:
+async def render_provider_screen(message: Message, *, edit: bool, page: int = 0) -> None:
     """Показать список провайдеров для выбора моделей."""
     lang = get_actor_language(message.from_user)
     text = t("generation.choose_provider", lang)
     if edit:
         await message.edit_text(
             text,
-            reply_markup=build_providers_keyboard(lang),
+            reply_markup=build_providers_keyboard(lang, page),
             parse_mode="HTML",
         )
         return
     await message.answer(
         text,
-        reply_markup=build_providers_keyboard(lang),
+        reply_markup=build_providers_keyboard(lang, page),
         parse_mode="HTML",
     )
 
@@ -1145,19 +1221,21 @@ async def render_model_list_screen(
     edit: bool,
     heading: str,
     back_callback: str,
+    page: int = 0,
+    page_callback_builder: Any | None = None,
 ) -> None:
     """Показать список моделей для выбранного типа или провайдера."""
     lang = get_actor_language(message.from_user)
     if edit:
         await message.edit_text(
             heading,
-            reply_markup=build_models_keyboard(models, back_callback, lang),
+            reply_markup=build_models_keyboard(models, back_callback, lang, page, page_callback_builder),
             parse_mode="HTML",
         )
         return
     await message.answer(
         heading,
-        reply_markup=build_models_keyboard(models, back_callback, lang),
+        reply_markup=build_models_keyboard(models, back_callback, lang, page, page_callback_builder),
         parse_mode="HTML",
     )
 
@@ -1280,7 +1358,7 @@ async def send_confirmation_screen(
     model_key = state_data.get("model_key")
     model = get_generation_model(model_key) if model_key else None
     is_lipsync = is_lipsync_generation_state(state_data) or bool(model and model.generation_type == "lipsync")
-    required_input_type = get_required_input_type(model.generation_type) if model else "text"
+    required_input_type = get_model_required_input_type(model) if model else "text"
     prompt = (state_data.get("prompt") or "").strip()
     input_media = state_data.get("input_media")
     input_media_items = get_input_media_items(state_data)
@@ -1292,16 +1370,19 @@ async def send_confirmation_screen(
 
     if is_lipsync:
         prompt = get_input_audio_or_text_display(input_audio_or_text, lang)
-        is_complete = bool(model_key and input_media and input_audio_or_text)
+        is_complete = bool(
+            model_key
+            and model
+            and state_has_required_media(model, input_media, input_media_items)
+            and state_has_required_prompt_or_audio(model, prompt, input_audio_or_text)
+        )
     else:
-        is_complete = bool(model_key and prompt)
-        if model and model.input_media_field == "images":
-            has_legacy_single_image = bool(input_media and input_media.get("type") in {"photo", "image", "images"})
-            is_complete = is_complete and (len(input_media_items) >= model.min_images or has_legacy_single_image)
-        elif required_input_type == "image":
-            is_complete = is_complete and bool(input_media and input_media.get("type") in {"photo", "image"})
-        elif required_input_type == "video":
-            is_complete = is_complete and bool(input_media and input_media.get("type") == "video")
+        is_complete = bool(
+            model_key
+            and model
+            and state_has_required_prompt_or_audio(model, prompt, input_audio_or_text)
+            and state_has_required_media(model, input_media, input_media_items)
+        )
 
     if not is_complete:
         flow_texts = get_flow_texts(model.generation_type, lang) if model else get_flow_texts("text_to_image", lang)
@@ -2805,14 +2886,26 @@ async def choose_generation_model(callback: CallbackQuery, state: FSMContext):
     await callback.answer()
 
 
+@router.callback_query(F.data == PAGINATION_NOOP_CALLBACK)
+async def ignore_pagination_noop(callback: CallbackQuery):
+    """Acknowledge disabled pagination label clicks."""
+    await callback.answer()
+
+
 @router.callback_query(F.data.startswith(GENERATION_SECTION_PREFIX))
 async def choose_generation_section(callback: CallbackQuery, state: FSMContext):
     """Выбрать раздел генерации и показать список моделей."""
     log_generation_callback(callback)
     generation_type = callback.data.removeprefix(GENERATION_SECTION_PREFIX)
+    if is_all_models_category(generation_type):
+        await state.set_state(GenerationStates.choosing_provider)
+        await state.update_data(selected_generation_type=LEGACY_ALL_MODELS_CATEGORY, selected_provider=None, selected_model_page=0, current_screen="providers")
+        await render_provider_screen(callback.message, edit=True)
+        await callback.answer()
+        return
     models = list_models_by_type(generation_type)
     await state.set_state(GenerationStates.choosing_generation_type)
-    await state.update_data(selected_generation_type=generation_type, selected_provider=None)
+    await state.update_data(selected_generation_type=generation_type, selected_provider=None, selected_model_page=0)
     if not models:
         lang = get_actor_language(callback.from_user)
         await callback.message.edit_text(
@@ -2829,6 +2922,31 @@ async def choose_generation_section(callback: CallbackQuery, state: FSMContext):
         edit=True,
         heading=f"{t('generation.choose_model', get_actor_language(callback.from_user))}:",
         back_callback=BACK_TO_SECTIONS,
+        page_callback_builder=lambda target_page: f"{MODELS_PAGE_PREFIX}{generation_type}:{target_page}",
+    )
+    await callback.answer()
+
+
+@router.callback_query(lambda cb: cb.data.startswith(MODELS_PAGE_PREFIX))
+async def show_generation_models_page(callback: CallbackQuery, state: FSMContext):
+    """Показать страницу моделей выбранного раздела."""
+    log_generation_callback(callback)
+    generation_type, page = parse_models_page(callback.data)
+    models = list_models_by_type(generation_type)
+    if not models:
+        await callback.answer(t("generation.no_models_in_section", get_actor_language(callback.from_user)), show_alert=True)
+        return
+
+    await state.set_state(GenerationStates.choosing_generation_type)
+    await state.update_data(selected_generation_type=generation_type, selected_provider=None, selected_model_page=page)
+    await render_model_list_screen(
+        callback.message,
+        models=models,
+        edit=True,
+        heading=f"{t('generation.choose_model', get_actor_language(callback.from_user))}:",
+        back_callback=BACK_TO_SECTIONS,
+        page=page,
+        page_callback_builder=lambda target_page: f"{MODELS_PAGE_PREFIX}{generation_type}:{target_page}",
     )
     await callback.answer()
 
@@ -2838,7 +2956,7 @@ async def show_all_generation_providers(callback: CallbackQuery, state: FSMConte
     """Показать список провайдеров для All List."""
     log_generation_callback(callback)
     await state.set_state(GenerationStates.choosing_provider)
-    await state.update_data(selected_generation_type="all", selected_provider=None, current_screen="providers")
+    await state.update_data(selected_generation_type=LEGACY_ALL_MODELS_CATEGORY, selected_provider=None, selected_model_page=0, current_screen="providers")
     await render_provider_screen(callback.message, edit=True)
     await callback.answer()
 
@@ -2848,7 +2966,7 @@ async def back_to_generation_sections(callback: CallbackQuery, state: FSMContext
     """Вернуться к выбору раздела генерации."""
     log_generation_callback(callback)
     await state.set_state(GenerationStates.choosing_generation_type)
-    await state.update_data(selected_generation_type=None, selected_provider=None)
+    await state.update_data(selected_generation_type=None, selected_provider=None, selected_model_page=0)
     lang = get_actor_language(callback.from_user)
     await callback.message.edit_text(
         build_generation_types_screen_text(lang),
@@ -2858,18 +2976,29 @@ async def back_to_generation_sections(callback: CallbackQuery, state: FSMContext
     await callback.answer()
 
 
+@router.callback_query(lambda cb: cb.data.startswith(PROVIDERS_PAGE_PREFIX))
+async def show_generation_providers_page(callback: CallbackQuery, state: FSMContext):
+    """Показать страницу списка провайдеров."""
+    log_generation_callback(callback)
+    page = parse_page(callback.data.removeprefix(PROVIDERS_PAGE_PREFIX))
+    await state.set_state(GenerationStates.choosing_provider)
+    await state.update_data(selected_generation_type=LEGACY_ALL_MODELS_CATEGORY, selected_provider=None, selected_model_page=0, current_screen="providers")
+    await render_provider_screen(callback.message, edit=True, page=page)
+    await callback.answer()
+
+
 @router.callback_query(lambda cb: cb.data.startswith(PROVIDER_PREFIX))
 async def choose_provider(callback: CallbackQuery, state: FSMContext):
     """Выбрать провайдера и показать его модели."""
     log_generation_callback(callback)
-    provider = callback.data.removeprefix(PROVIDER_PREFIX)
+    provider, page = parse_provider_page(callback.data)
     if provider not in list_providers():
         await callback.answer(t("generation.provider_unavailable", get_actor_language(callback.from_user)), show_alert=True)
         return
     models = list_models_by_provider(provider)
     if not models:
         await state.set_state(GenerationStates.choosing_provider)
-        await state.update_data(selected_generation_type="all", selected_provider=None)
+        await state.update_data(selected_generation_type=LEGACY_ALL_MODELS_CATEGORY, selected_provider=None)
         lang = get_actor_language(callback.from_user)
         await callback.message.edit_text(
             t("generation.no_models_in_provider", lang),
@@ -2880,13 +3009,15 @@ async def choose_provider(callback: CallbackQuery, state: FSMContext):
         return
 
     await state.set_state(GenerationStates.choosing_provider)
-    await state.update_data(selected_generation_type="all", selected_provider=provider)
+    await state.update_data(selected_generation_type=LEGACY_ALL_MODELS_CATEGORY, selected_provider=provider, selected_model_page=page)
     await render_model_list_screen(
         callback.message,
         models=models,
         edit=True,
         heading=f"{t('generation.choose_model', get_actor_language(callback.from_user))}:",
         back_callback=BACK_TO_PROVIDERS,
+        page=page,
+        page_callback_builder=lambda target_page: f"{PROVIDER_PREFIX}{provider}:{target_page}",
     )
     await callback.answer()
 
@@ -2898,6 +3029,7 @@ async def back_to_generation_models(callback: CallbackQuery, state: FSMContext):
     state_data = await state.get_data()
     selected_provider = state_data.get("selected_provider")
     selected_generation_type = state_data.get("selected_generation_type")
+    selected_model_page = parse_page(state_data.get("selected_model_page"))
 
     for key in (
         "model_key",
@@ -2925,11 +3057,13 @@ async def back_to_generation_models(callback: CallbackQuery, state: FSMContext):
             edit=True,
             heading=f"{t('generation.choose_model', get_actor_language(callback.from_user))}:",
             back_callback=BACK_TO_PROVIDERS,
+            page=selected_model_page,
+            page_callback_builder=lambda target_page: f"{PROVIDER_PREFIX}{selected_provider}:{target_page}",
         )
         await callback.answer()
         return
 
-    if selected_generation_type and selected_generation_type != "all":
+    if selected_generation_type and not is_all_models_category(selected_generation_type):
         await state.set_state(GenerationStates.choosing_generation_type)
         await render_model_list_screen(
             callback.message,
@@ -2937,6 +3071,8 @@ async def back_to_generation_models(callback: CallbackQuery, state: FSMContext):
             edit=True,
             heading=f"{t('generation.choose_model', get_actor_language(callback.from_user))}:",
             back_callback=BACK_TO_SECTIONS,
+            page=selected_model_page,
+            page_callback_builder=lambda target_page: f"{MODELS_PAGE_PREFIX}{selected_generation_type}:{target_page}",
         )
         await callback.answer()
         return
@@ -2949,7 +3085,7 @@ async def back_to_generation_providers(callback: CallbackQuery, state: FSMContex
     """Вернуться к списку провайдеров."""
     log_generation_callback(callback)
     await state.set_state(GenerationStates.choosing_provider)
-    await state.update_data(selected_generation_type="all", selected_provider=None)
+    await state.update_data(selected_generation_type=LEGACY_ALL_MODELS_CATEGORY, selected_provider=None, selected_model_page=0)
     await render_provider_screen(callback.message, edit=True)
     await callback.answer()
 
@@ -3103,7 +3239,7 @@ async def continue_after_settings(callback: CallbackQuery, state: FSMContext):
         await callback.answer()
         return
 
-    required_input_type = get_required_input_type(model.generation_type)
+    required_input_type = get_model_required_input_type(model)
     if required_input_type == "text":
         await set_waiting_for_prompt_with_diagnostic(
             state,
@@ -3484,7 +3620,7 @@ async def process_prompt(
         model_key = state_data.get("model_key", "nano_banana")
         model = get_generation_model(model_key)
         is_lipsync = is_lipsync_generation_state(state_data)
-        required_input_type = get_required_input_type(model.generation_type)
+        required_input_type = get_model_required_input_type(model)
         input_media = state_data.get("input_media")
         input_media_items = get_input_media_items(state_data)
         input_audio_or_text = None
@@ -3504,12 +3640,18 @@ async def process_prompt(
             if not input_audio_or_text:
                 await message.answer(format_user_error(ErrorCode.E001_INVALID_INPUT_TYPE, t("generation.lipsync_need_text", lang), lang))
                 return
-            if not input_media:
+            if model.requires_audio and not is_audio_input_payload(input_audio_or_text):
+                await message.answer(format_user_error(ErrorCode.E001_INVALID_INPUT_TYPE, t("generation.lipsync_need_text", lang), lang))
+                return
+            if model.requires_prompt and not is_text_input_payload(input_audio_or_text):
+                await message.answer(format_user_error(ErrorCode.E002_MISSING_PROMPT, get_flow_texts(model.generation_type, lang).missing_prompt, lang))
+                return
+            if not state_has_required_media(model, input_media, input_media_items):
                 await message.answer(
                     format_user_error(ErrorCode.E003_MISSING_IMAGE, t("generation.lipsync_need_media", lang), lang),
                     reply_markup=build_back_to_settings_keyboard(lang),
                 )
-                await state.set_state(GenerationStates.waiting_for_image)
+                await state.set_state(GenerationStates.waiting_for_video if model.input_media_field == "video" else GenerationStates.waiting_for_image)
                 return
         else:
             if message_contains_file(message):
@@ -3626,7 +3768,7 @@ async def confirm_generation(callback: CallbackQuery, state: FSMContext, session
     input_image_file_id = state_data.get("input_image_file_id")
     is_lipsync = is_lipsync_generation_state(state_data)
     model = get_generation_model(model_key) if model_key else None
-    required_input_type = get_required_input_type(model.generation_type) if model else "text"
+    required_input_type = get_model_required_input_type(model) if model else "text"
     log_generation_diagnostic(
         action="confirm_generation",
         user_id=user_id,
@@ -3649,14 +3791,15 @@ async def confirm_generation(callback: CallbackQuery, state: FSMContext, session
         await callback.answer()
         return
 
-    is_complete = bool(model_key and model_title and model_endpoint and prompt)
-    if model and model.input_media_field == "images":
-        has_legacy_single_image = bool(input_media and input_media.get("type") in {"photo", "image", "images"})
-        is_complete = is_complete and (len(input_media_items) >= model.min_images or has_legacy_single_image)
-    elif required_input_type == "image":
-        is_complete = is_complete and bool(input_media and input_media.get("type") in {"photo", "image"})
-    elif required_input_type == "video":
-        is_complete = is_complete and bool(input_media and input_media.get("type") == "video")
+    input_audio_or_text = state_data.get("input_audio_or_text")
+    is_complete = bool(
+        model_key
+        and model_title
+        and model_endpoint
+        and model
+        and state_has_required_prompt_or_audio(model, str(prompt or ""), input_audio_or_text)
+        and state_has_required_media(model, input_media, input_media_items)
+    )
 
     if not is_complete:
         if not model:
@@ -3730,15 +3873,30 @@ async def confirm_generation(callback: CallbackQuery, state: FSMContext, session
         log_balance_event("balance_debited", user.id, total_cost)
 
         media_urls: list[str] = []
+        temp_input_paths: list[str] = []
         if input_media_items:
             media_urls = [item["public_url"] for item in input_media_items if item.get("public_url")]
-            temp_input_path = [item["local_path"] for item in input_media_items if item.get("local_path")]
+            temp_input_paths.extend(item["local_path"] for item in input_media_items if item.get("local_path"))
         elif model and model_requires_media(model) and input_media:
             telegram_files = TelegramFilesService(callback.bot)
             temp_media = await telegram_files.download_temp_file_and_get_public_url(str(input_media.get("file_id")))
             media_urls = [temp_media.public_url]
-            temp_input_path = str(temp_media.local_path)
-        payload = build_payload(model_key, media_urls, prompt, user_settings)
+            temp_input_paths.append(str(temp_media.local_path))
+
+        payload_user_settings = dict(user_settings)
+        if model and model.requires_audio:
+            audio_input = input_audio_or_text if isinstance(input_audio_or_text, dict) else {}
+            audio_file_id = audio_input.get("file_id") if audio_input.get("type") in {"voice", "audio"} else None
+            if audio_file_id:
+                telegram_files = TelegramFilesService(callback.bot)
+                temp_audio = await telegram_files.download_temp_file_and_get_public_url(str(audio_file_id))
+                payload_user_settings["audio_url"] = temp_audio.public_url
+                temp_input_paths.append(str(temp_audio.local_path))
+        if len(temp_input_paths) == 1:
+            temp_input_path = temp_input_paths[0]
+        else:
+            temp_input_path = temp_input_paths or None
+        payload = build_payload(model_key, media_urls, prompt, payload_user_settings)
 
         generation_costs_by_id: dict[Any, int] = {}
         for generation_cost in allocated_generation_costs:

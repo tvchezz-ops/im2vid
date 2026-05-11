@@ -1,6 +1,7 @@
 """Инициализация пакета services."""
 from app.services.generation_service import (
     MODEL_REGISTRY,
+    GENERATION_CATEGORIES,
     GENERATION_MODELS,
     GENERATION_TYPES,
     PROVIDERS,
@@ -71,6 +72,7 @@ __all__ = [
     "GenerationModel",
     "GenerationService",
     "MODEL_REGISTRY",
+    "GENERATION_CATEGORIES",
     "GENERATION_MODELS",
     "GENERATION_TYPES",
     "PROVIDERS",

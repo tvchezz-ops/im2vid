@@ -24,6 +24,7 @@ from app.db.base import Base
 from app.db.models import GenerationRequest, GenerationRequestStatus, User
 from app.db.repositories import GenerationRepository, UserRepository
 from app.bot.states import GenerationStates
+from app.services.generation_service import GenerationModel, GenerationSetting, MODEL_REGISTRY, SettingOption
 from app.utils import WavespeedFailedError, WavespeedTimeoutError
 
 
@@ -104,6 +105,50 @@ class FakeCallback:
 
     async def answer(self, text: str | None = None, show_alert: bool = False) -> None:
         self.answered = True
+
+
+TEXT_SETTING_MODEL_KEY = "test_text_setting_model"
+
+
+def install_text_setting_model() -> None:
+    MODEL_REGISTRY[TEXT_SETTING_MODEL_KEY] = GenerationModel(
+        key=TEXT_SETTING_MODEL_KEY,
+        title="Test Text Setting Model",
+        provider="google",
+        generation_type="text_to_video",
+        endpoint="https://api.wavespeed.ai/api/v3/google/test-text-setting-model",
+        docs_url="https://wavespeed.ai/docs/docs-api/google/test-text-setting-model",
+        description="Test model with text setting",
+        max_images=0,
+        requires_prompt=True,
+        requires_image=False,
+        requires_video=False,
+        requires_audio=False,
+        outputs="video",
+        required_payload_fields=("prompt",),
+        allowed_payload_fields=("prompt", "note"),
+        user_settings={
+            "note": GenerationSetting(
+                key="note",
+                title="Заметка",
+                type="text",
+                default="",
+                options=(),
+                description="Дополнительное описание",
+            ),
+            "num_generations": GenerationSetting(
+                key="num_generations",
+                title="Количество генераций",
+                type="select",
+                default="1",
+                options=(SettingOption(value="1", label="1"),),
+            ),
+        },
+    )
+
+
+def remove_text_setting_model() -> None:
+    MODEL_REGISTRY.pop(TEXT_SETTING_MODEL_KEY, None)
 
 
 class FakeBot:
@@ -216,7 +261,7 @@ async def test_show_generation_menu_starts_with_generation_type_selection() -> N
     assert "Text to Video" in message.answers[-1]
     keyboard = message.answer_markups[-1]
     callback_data = [row[0].callback_data for row in keyboard.inline_keyboard[:-1]]
-    assert "gen:section:lipsync" not in callback_data
+    assert "gen:section:lipsync" in callback_data
 
 
 @pytest.mark.asyncio
@@ -437,60 +482,71 @@ async def test_open_setting_selector_and_choose_setting_value_for_model_with_set
 
 @pytest.mark.asyncio
 async def test_open_setting_selector_for_text_setting_switches_to_text_input() -> None:
-    state = FakeState(
-        {
-            "model_key": "alibaba_wan_2_6_text_to_video",
-            "user_settings": {"size": "1280*720", "negative_prompt": ""},
-        }
-    )
-    message = FakeMessage(chat_id=451)
-    callback = FakeCallback(user_id=451, message=message, data="gen:setting:negative_prompt")
+    install_text_setting_model()
+    try:
+        state = FakeState(
+            {
+                "model_key": TEXT_SETTING_MODEL_KEY,
+                "user_settings": {"note": ""},
+            }
+        )
+        message = FakeMessage(chat_id=451)
+        callback = FakeCallback(user_id=451, message=message, data="gen:setting:note")
 
-    await generations.open_setting_selector(callback, state)
+        await generations.open_setting_selector(callback, state)
 
-    assert state.state == GenerationStates.waiting_for_setting_text
-    assert state.data["current_setting_key"] == "negative_prompt"
-    assert "Параметр: <b>Negative prompt</b>" in message.edits[-1]
-    assert "Что нужно исключить из результата" in message.edits[-1]
+        assert state.state == GenerationStates.waiting_for_setting_text
+        assert state.data["current_setting_key"] == "note"
+        assert "Параметр: <b>Заметка</b>" in message.edits[-1]
+    finally:
+        remove_text_setting_model()
 
 
 @pytest.mark.asyncio
 async def test_process_text_setting_value_saves_text_and_returns_to_settings() -> None:
-    state = FakeState(
-        {
-            "model_key": "alibaba_wan_2_6_text_to_video",
-            "current_setting_key": "negative_prompt",
-            "user_settings": {"size": "1280*720", "negative_prompt": ""},
-        }
-    )
-    state.state = GenerationStates.waiting_for_setting_text
-    message = FakeMessage(chat_id=452)
-    message.text = "blur, noise"
+    install_text_setting_model()
+    try:
+        state = FakeState(
+            {
+                "model_key": TEXT_SETTING_MODEL_KEY,
+                "current_setting_key": "note",
+                "user_settings": {"note": ""},
+            }
+        )
+        state.state = GenerationStates.waiting_for_setting_text
+        message = FakeMessage(chat_id=452)
+        message.text = "blur, noise"
 
-    await generations.process_text_setting_value(message, state)
+        await generations.process_text_setting_value(message, state)
 
-    assert state.state == GenerationStates.choosing_settings
-    assert state.data["user_settings"]["negative_prompt"] == "blur, noise"
-    assert message.answers[0] == "Значение сохранено."
+        assert state.state == GenerationStates.choosing_settings
+        assert state.data["user_settings"]["note"] == "blur, noise"
+        assert message.answers[0] == "Значение сохранено."
+    finally:
+        remove_text_setting_model()
 
 
 @pytest.mark.asyncio
 async def test_process_text_setting_value_clears_dash_to_empty_string() -> None:
-    state = FakeState(
-        {
-            "model_key": "alibaba_wan_2_6_text_to_video",
-            "current_setting_key": "negative_prompt",
-            "user_settings": {"size": "1280*720", "negative_prompt": "existing"},
-        }
-    )
-    state.state = GenerationStates.waiting_for_setting_text
-    message = FakeMessage(chat_id=453)
-    message.text = "-"
+    install_text_setting_model()
+    try:
+        state = FakeState(
+            {
+                "model_key": TEXT_SETTING_MODEL_KEY,
+                "current_setting_key": "note",
+                "user_settings": {"note": "existing"},
+            }
+        )
+        state.state = GenerationStates.waiting_for_setting_text
+        message = FakeMessage(chat_id=453)
+        message.text = "-"
 
-    await generations.process_text_setting_value(message, state)
+        await generations.process_text_setting_value(message, state)
 
-    assert state.state == GenerationStates.choosing_settings
-    assert state.data["user_settings"]["negative_prompt"] == ""
+        assert state.state == GenerationStates.choosing_settings
+        assert state.data["user_settings"]["note"] == ""
+    finally:
+        remove_text_setting_model()
 
 
 @pytest.mark.asyncio
@@ -586,6 +642,65 @@ async def test_process_generation_images_appends_uploaded_media(monkeypatch) -> 
     assert state.data["input_media_file_ids"] == ["photo-file-id"]
     assert state.data["input_media_items"][0]["public_url"] == "https://example.com/photo-file-id.png"
     assert "Загружено 1 из 14." in message.answers[-1]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("model_key", "model_title", "max_images_text"),
+    [
+        ("nano_banana", "Google Nano Banana Pro Edit Ultra", "1 из 14"),
+        ("seedream", "Bytedance Seedream V4.5 Edit", "1 из 10"),
+    ],
+)
+async def test_legacy_nano_banana_and_seedream_generation_flow_still_reaches_confirmation(
+    session_factory,
+    monkeypatch,
+    model_key: str,
+    model_title: str,
+    max_images_text: str,
+) -> None:
+    async def fake_upload_message_media_item(message):
+        return {
+            "type": "photo",
+            "file_id": "legacy-photo-id",
+            "local_path": "/tmp/legacy-photo-id.png",
+            "public_url": "https://example.com/legacy-photo-id.png",
+        }
+
+    monkeypatch.setattr(generations, "upload_message_media_item", fake_upload_message_media_item)
+
+    async with session_factory() as session:
+        await create_user(session, user_id=479, balance=100)
+        state = FakeState(
+            {
+                "model_key": model_key,
+                "model_generation_type": "image_edit",
+                "model_title": model_title,
+                "model_endpoint": f"/api/v3/{model_key}",
+                "user_settings": {},
+            }
+        )
+        state.state = GenerationStates.waiting_for_images
+        upload_message = FakeMessage(chat_id=479)
+        upload_message.photo = [SimpleNamespace(file_id="legacy-photo-id")]
+
+        await generations.process_generation_images(upload_message, state)
+
+        assert f"Загружено {max_images_text}." in upload_message.answers[-1]
+
+        continue_message = FakeMessage(chat_id=479)
+        continue_message.text = "✅ Продолжить"
+        await generations.continue_after_multi_image_upload(continue_message, state)
+
+        assert state.state == GenerationStates.waiting_for_prompt
+
+        prompt_message = FakeMessage(chat_id=479)
+        prompt_message.text = "Make this legacy model flow vivid and clean"
+        await generations.process_prompt(prompt_message, state, session)
+
+        assert state.data["prompt"] == "Make this legacy model flow vivid and clean"
+        assert model_title in prompt_message.answers[-1]
+        assert "legacy-photo-id.png" in str(state.data["input_media_items"])
 
 
 @pytest.mark.asyncio
@@ -943,10 +1058,10 @@ async def test_process_prompt_saves_lipsync_text_input(session_factory) -> None:
         await create_user(session, user_id=409, balance=30)
         state = FakeState(
             {
-                "model_key": "nano_banana",
+                "model_key": "kwaivgi_kling_lipsync_text_to_video",
                 "model_generation_type": "lipsync",
                 "model_title": "Lip Model",
-                "input_media": {"type": "photo", "file_id": "photo-file-id"},
+                "input_media": {"type": "video", "file_id": "video-file-id"},
                 "user_settings": {},
             }
         )
@@ -968,10 +1083,10 @@ async def test_process_prompt_saves_lipsync_voice_input(session_factory) -> None
         await create_user(session, user_id=410, balance=30)
         state = FakeState(
             {
-                "model_key": "nano_banana",
+                "model_key": "kwaivgi_kling_lipsync_audio_to_video",
                 "model_generation_type": "lipsync",
                 "model_title": "Lip Model",
-                "input_media": {"type": "photo", "file_id": "photo-file-id"},
+                "input_media": {"type": "video", "file_id": "video-file-id"},
                 "user_settings": {},
             }
         )
@@ -1911,10 +2026,10 @@ def test_build_settings_text_shows_price_and_recalculates_duration() -> None:
         "ru",
     )
 
-    assert "💰 Цена: 47 credits" in default_text
-    assert "(~$0.60)" in default_text
-    assert "💰 Цена: 93 credits" in longer_text
-    assert "(~$1.20)" in longer_text
+    assert "💰 Цена: ≈ 6 credits" in default_text
+    assert "(~$0.08)" in default_text
+    assert "💰 Цена: ≈ 6 credits" in longer_text
+    assert "(~$0.08)" in longer_text
 
 
 @pytest.mark.asyncio
