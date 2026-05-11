@@ -9,6 +9,7 @@ from .base import (
     GenerationModel,
     GenerationSetting,
     SettingOption,
+    apply_generated_model_params,
     build_model_registry,
     create_wavespeed_model_from_docs_url,
     get_default_allowed_payload_fields,
@@ -21,6 +22,7 @@ from .base import (
     normalize_generation_type,
 )
 from .bytedance import PROVIDER_MODELS as BYTEDANCE_MODELS
+from .generated_params import GENERATED_MODEL_PARAMS
 from .google import PROVIDER_MODELS as GOOGLE_MODELS
 from .grok import PROVIDER_MODELS as GROK_MODELS
 from .kling import PROVIDER_MODELS as KLING_MODELS
@@ -41,7 +43,7 @@ ALL_GENERATION_MODELS: tuple[GenerationModel, ...] = tuple(
     ]
 )
 
-MODEL_REGISTRY = build_model_registry(ALL_GENERATION_MODELS)
+MODEL_REGISTRY = build_model_registry(apply_generated_model_params(ALL_GENERATION_MODELS, GENERATED_MODEL_PARAMS))
 
 LEGACY_MODEL_KEY_ALIASES = {
     "nano_banana": "google_nano_banana_pro_edit_ultra",
@@ -79,6 +81,7 @@ __all__ = [
     "GenerationModel",
     "GenerationSetting",
     "SettingOption",
+    "apply_generated_model_params",
     "build_model_registry",
     "create_wavespeed_model_from_docs_url",
     "get_default_allowed_payload_fields",

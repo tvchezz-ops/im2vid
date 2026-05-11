@@ -45,6 +45,14 @@ alembic upgrade head
 python -m app.main
 ```
 
+### Обновить параметры моделей Wavespeed
+
+To update Wavespeed model parameters run:
+
+```bash
+python scripts/sync_wavespeed_model_params.py
+```
+
 ## Структура проекта
 
 ```

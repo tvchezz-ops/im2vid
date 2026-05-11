@@ -354,8 +354,15 @@ def build_settings_text(model: GenerationModel, user_settings: dict[str, Any], l
 def build_setting_value_text(model: GenerationModel, setting_key: str, current_value: str, lang: str = "en") -> str:
     """Собрать экран выбора конкретной настройки."""
     setting = model.user_settings[setting_key]
-    if setting.type == "text":
+    if setting.type in {"text", "number"}:
         description_block = f"\n\n{escape(setting.description)}" if setting.description else ""
+        range_parts = []
+        if getattr(setting, "min_value", None) is not None:
+            range_parts.append(f"min {setting.min_value}")
+        if getattr(setting, "max_value", None) is not None:
+            range_parts.append(f"max {setting.max_value}")
+        if setting.type == "number" and range_parts:
+            description_block = f"\n\n{' / '.join(range_parts)}{description_block}"
         return (
             f"{t('generation.settings_header', lang, model=escape(model.title))}\n\n"
             f"{t('generation.setting_parameter', lang, parameter=escape(setting.title))}\n"
@@ -3111,7 +3118,7 @@ async def open_setting_selector(callback: CallbackQuery, state: FSMContext):
         return
     setting = model.user_settings[setting_key]
     await state.update_data(current_setting_key=setting_key)
-    if setting.type == "text":
+    if setting.type in {"text", "number"}:
         user_settings = get_model_state_settings(state_data, model_key)
         current_value = str(user_settings.get(setting_key, setting.default))
         await state.set_state(GenerationStates.waiting_for_setting_text)
@@ -3172,6 +3179,13 @@ async def process_text_setting_value(message: Message, state: FSMContext):
     raw_text = (message.text or "").strip()
     value = "" if raw_text in {"", "-"} else raw_text
     user_settings = get_model_state_settings(state_data, model_key)
+    trial_settings = dict(user_settings)
+    trial_settings[str(setting_key)] = value
+    try:
+        validate_model_settings(model_key, trial_settings)
+    except ValueError:
+        await message.answer(format_user_error(ErrorCode.E001_INVALID_INPUT_TYPE, t("generation.invalid_value", lang), lang))
+        return
     user_settings[str(setting_key)] = value
     await state.update_data(user_settings=user_settings, current_setting_key=None)
     await state.set_state(GenerationStates.choosing_settings)

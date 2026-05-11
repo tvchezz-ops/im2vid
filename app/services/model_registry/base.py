@@ -28,6 +28,9 @@ class GenerationSetting:
     default: str
     options: tuple[SettingOption, ...]
     description: str = ""
+    min_value: str | None = None
+    max_value: str | None = None
+    is_user_visible: bool = True
 
     @property
     def allowed_values(self) -> set[str]:
@@ -494,6 +497,157 @@ def build_model_registry(models: tuple[GenerationModel, ...]) -> dict[str, Gener
     return registry
 
 
+def _normalize_generated_setting_type(setting_type: str) -> str:
+    normalized_type = setting_type.strip().lower()
+    if normalized_type in {"enum", "select"}:
+        return "select"
+    if normalized_type in {"string", "text"}:
+        return "text"
+    if normalized_type in {"integer", "number", "float"}:
+        return "number"
+    if normalized_type in {"boolean", "bool", "toggle"}:
+        return "boolean"
+    return normalized_type or "text"
+
+
+def _coerce_setting_options(raw_options: Any) -> tuple[SettingOption, ...]:
+    if raw_options is None:
+        return ()
+    if not isinstance(raw_options, (list, tuple)):
+        raw_options = [raw_options]
+
+    options: list[SettingOption] = []
+    for raw_option in raw_options:
+        if isinstance(raw_option, Mapping):
+            raw_value = raw_option.get("value")
+            if raw_value is None:
+                continue
+            label = str(raw_option.get("label", raw_value))
+            options.append(SettingOption(value=str(raw_value), label=label))
+            continue
+        options.append(SettingOption(value=str(raw_option), label=str(raw_option)))
+    return tuple(options)
+
+
+def generation_setting_from_generated(key: str, data: Mapping[str, Any]) -> GenerationSetting:
+    """Build a GenerationSetting from generated Wavespeed docs metadata."""
+    setting_type = _normalize_generated_setting_type(str(data.get("type", "text")))
+    options = _coerce_setting_options(data.get("options"))
+    if setting_type == "boolean" and not options:
+        options = (
+            SettingOption(value="false", label="Off"),
+            SettingOption(value="true", label="On"),
+        )
+    default = data.get("default")
+    if default is None:
+        if options:
+            default = options[0].value
+        elif setting_type == "boolean":
+            default = "false"
+        else:
+            default = ""
+    return GenerationSetting(
+        key=str(data.get("key", key)),
+        title=str(data.get("title", key.replace("_", " ").title())),
+        type=setting_type,
+        default=str(default).lower() if isinstance(default, bool) else str(default),
+        options=options,
+        description=str(data.get("description", "")),
+        min_value=None if data.get("min_value") is None else str(data.get("min_value")),
+        max_value=None if data.get("max_value") is None else str(data.get("max_value")),
+        is_user_visible=bool(data.get("is_user_visible", True)),
+    )
+
+
+def _coerce_decimal(value: Any, default: Decimal) -> Decimal:
+    if value is None:
+        return default
+    try:
+        return Decimal(str(value))
+    except Exception:
+        return default
+
+
+def apply_generated_model_params(
+    models: tuple[GenerationModel, ...],
+    generated_params: Mapping[str, Mapping[str, Any]],
+) -> tuple[GenerationModel, ...]:
+    """Merge docs-generated model params into base provider metadata."""
+    generated_keys = set(generated_params)
+    model_keys = {model.key for model in models}
+    for missing_key in sorted(generated_keys - model_keys):
+        logger.warning("Generated params reference unknown model key: %s", missing_key)
+
+    merged_models: list[GenerationModel] = []
+    fallback_model_keys: list[str] = []
+    for model in models:
+        generated = generated_params.get(model.key)
+        if not generated:
+            if model.is_enabled:
+                fallback_model_keys.append(model.key)
+            merged_models.append(model)
+            continue
+
+        generated_user_settings = {
+            setting_key: generation_setting_from_generated(setting_key, setting_data)
+            for setting_key, setting_data in dict(generated.get("user_settings", {})).items()
+            if isinstance(setting_data, Mapping)
+        }
+        user_settings = {**generated_user_settings, **model.user_settings}
+        user_settings = {
+            setting_key: setting
+            for setting_key, setting in user_settings.items()
+            if setting.is_user_visible
+        }
+
+        system_settings = {**model.system_settings, **dict(generated.get("system_settings", {}))}
+        replace_kwargs: dict[str, Any] = {
+            "user_settings": user_settings,
+            "system_settings": system_settings,
+        }
+        field_map = {
+            "required_fields": "required_payload_fields",
+            "required_payload_fields": "required_payload_fields",
+            "allowed_payload_fields": "allowed_payload_fields",
+            "pricing_rules": "pricing_rules",
+            "docs_url": "docs_url",
+            "input_media_field": "input_media_field",
+            "min_images": "min_images",
+            "max_images": "max_images",
+            "supports_multiple_images": "supports_multiple_images",
+            "requires_prompt": "requires_prompt",
+            "requires_image": "requires_image",
+            "requires_video": "requires_video",
+            "requires_audio": "requires_audio",
+            "outputs": "outputs",
+        }
+        for source_key, model_field in field_map.items():
+            if source_key in generated:
+                raw_value = generated[source_key]
+                if model_field in {"required_payload_fields", "allowed_payload_fields"}:
+                    replace_kwargs[model_field] = tuple(str(value) for value in raw_value)
+                else:
+                    replace_kwargs[model_field] = raw_value
+        if "base_wavespeed_price_usd" in generated:
+            replace_kwargs["base_wavespeed_price_usd"] = _coerce_decimal(
+                generated.get("base_wavespeed_price_usd"),
+                model.base_wavespeed_price_usd,
+            )
+
+        merged_model = replace(model, **replace_kwargs)
+        merged_model = replace(merged_model, input_schema=build_input_schema(merged_model))
+        merged_models.append(merged_model)
+
+    if fallback_model_keys:
+        logger.warning(
+            "Using inferred fallback params for %s enabled model(s) without generated params: %s",
+            len(fallback_model_keys),
+            ", ".join(fallback_model_keys[:20]),
+        )
+
+    return tuple(merged_models)
+
+
 def _select_setting(
     key: str,
     title: str,
@@ -831,6 +985,9 @@ def build_input_schema(model: GenerationModel) -> dict[str, Any]:
                 "type": setting.type,
                 "default": setting.default,
                 "options": [option.value for option in setting.options],
+                "min_value": setting.min_value,
+                "max_value": setting.max_value,
+                "is_user_visible": setting.is_user_visible,
             }
             for setting_key, setting in model.user_settings.items()
         },

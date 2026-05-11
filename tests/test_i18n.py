@@ -32,6 +32,12 @@ PAYMENT_TRANSLATION_KEYS = {
     "payments.pay_here",
 }
 
+PAGINATION_TRANSLATION_KEYS = {
+    "pagination.prev",
+    "pagination.next",
+    "pagination.page",
+}
+
 
 def test_supported_languages_match_translation_catalog() -> None:
     assert len(SUPPORTED_LANGUAGES) == 10
@@ -47,6 +53,12 @@ def test_all_languages_have_same_translation_keys() -> None:
 def test_all_languages_have_required_payment_translation_keys() -> None:
     for language in SUPPORTED_LANGUAGES:
         assert PAYMENT_TRANSLATION_KEYS <= set(TRANSLATIONS[language])
+
+
+def test_all_languages_have_required_pagination_translation_keys() -> None:
+    for language in SUPPORTED_LANGUAGES:
+        assert PAGINATION_TRANSLATION_KEYS <= set(TRANSLATIONS[language])
+        assert t("pagination.page", language, current=1, total=3)
 
 
 def test_get_user_language_returns_english_for_none() -> None:

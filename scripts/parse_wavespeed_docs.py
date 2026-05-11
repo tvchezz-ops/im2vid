@@ -6,6 +6,15 @@ from dataclasses import dataclass
 import re
 
 from app.services.generation_service import infer_generation_type_from_endpoint
+from app.services.model_docs_parser import (
+    ModelDocsSchema,
+    extract_default_values,
+    extract_enum_options,
+    extract_field_types,
+    extract_optional_fields,
+    extract_required_fields,
+    parse_model_docs,
+)
 
 
 LIPSYNC_TEXT_MARKERS = (

@@ -1,15 +1,8 @@
 """Generation models for the bytedance provider."""
 from __future__ import annotations
 
-from dataclasses import replace
-from decimal import Decimal
-
 from .base import (
-    COMMON_IMAGE_SYSTEM_SETTINGS,
     GenerationModel,
-    SEEDREAM_EDIT_SETTINGS,
-    SEEDREAM_PRICING_RULES,
-    build_input_schema,
     create_wavespeed_model_from_docs_url,
 )
 
@@ -82,39 +75,7 @@ def _docs_url(slug: str) -> str:
     return f"https://wavespeed.ai/docs/docs-api/bytedance/{slug}"
 
 
-def _with_schema(model: GenerationModel) -> GenerationModel:
-    return replace(model, input_schema=build_input_schema(model))
-
-
-def _apply_seedream_contract(model: GenerationModel) -> GenerationModel:
-    if model.key == "bytedance_seedream_v4_5_edit":
-        return _with_schema(
-            replace(
-                model,
-                max_images=10,
-                supports_multiple_images=True,
-                user_settings={**SEEDREAM_EDIT_SETTINGS, **model.user_settings},
-                system_settings=COMMON_IMAGE_SYSTEM_SETTINGS,
-                allowed_payload_fields=("images", "prompt", "size", "enable_sync_mode", "enable_base64_output"),
-                base_wavespeed_price_usd=Decimal("0.04"),
-                pricing_rules=SEEDREAM_PRICING_RULES,
-            )
-        )
-    if model.key in {"bytedance_seedream_v4_sequential", "bytedance_seedream_v3_1"}:
-        return _with_schema(
-            replace(
-                model,
-                user_settings={**SEEDREAM_EDIT_SETTINGS, **model.user_settings},
-                system_settings=COMMON_IMAGE_SYSTEM_SETTINGS,
-                allowed_payload_fields=("prompt", "size", "enable_sync_mode", "enable_base64_output"),
-                base_wavespeed_price_usd=Decimal("0.03"),
-                pricing_rules=SEEDREAM_PRICING_RULES,
-            )
-        )
-    return model
-
-
 PROVIDER_MODELS: list[GenerationModel] = [
-    _apply_seedream_contract(create_wavespeed_model_from_docs_url(_docs_url(slug), provider="bytedance"))
+    create_wavespeed_model_from_docs_url(_docs_url(slug), provider="bytedance")
     for slug in dict.fromkeys(BYTEDANCE_MODEL_SLUGS)
 ]

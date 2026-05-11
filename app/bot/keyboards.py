@@ -133,11 +133,14 @@ def build_paginated_keyboard(
     back_callback: str,
     item_text_builder: Callable[[Any], str] | None = None,
     page_callback_builder: Callable[[int], str] | None = None,
+    columns: int = 1,
+    hide_unavailable_navigation: bool = True,
     lang: str = "en",
 ) -> InlineKeyboardMarkup:
-    """Build a two-column paginated inline keyboard with navigation and back rows."""
+    """Build a paginated inline keyboard with navigation and a back row."""
     item_list = list(items)
     safe_page_size = max(1, page_size)
+    safe_columns = max(1, columns)
     total_pages = max(1, (len(item_list) + safe_page_size - 1) // safe_page_size)
     current_page = min(max(page, 0), total_pages - 1)
     start_index = current_page * safe_page_size
@@ -154,7 +157,7 @@ def build_paginated_keyboard(
                 callback_data=validate_callback_length(_call_item_callback_builder(item_callback_builder, item, item_index)),
             )
         )
-        if len(item_row) == 2:
+        if len(item_row) == safe_columns:
             rows.append(item_row)
             item_row = []
     if item_row:
@@ -167,22 +170,29 @@ def build_paginated_keyboard(
 
     previous_page = max(current_page - 1, 0)
     next_page = min(current_page + 1, total_pages - 1)
-    rows.append(
-        [
+    if total_pages > 1:
+        navigation_row: list[InlineKeyboardButton] = []
+        if current_page > 0 or not hide_unavailable_navigation:
+            navigation_row.append(
+                InlineKeyboardButton(
+                    text=t("pagination.prev", lang),
+                    callback_data=validate_callback_length(page_callback(previous_page)),
+                )
+            )
+        navigation_row.append(
             InlineKeyboardButton(
-                text="⬅️ Prev",
-                callback_data=validate_callback_length(page_callback(previous_page)),
-            ),
-            InlineKeyboardButton(
-                text=f"Page {current_page + 1}/{total_pages}",
+                text=t("pagination.page", lang, current=current_page + 1, total=total_pages),
                 callback_data=validate_callback_length(PAGINATION_NOOP_CALLBACK),
-            ),
-            InlineKeyboardButton(
-                text="Next ➡️",
-                callback_data=validate_callback_length(page_callback(next_page)),
-            ),
-        ]
-    )
+            )
+        )
+        if current_page < total_pages - 1 or not hide_unavailable_navigation:
+            navigation_row.append(
+                InlineKeyboardButton(
+                    text=t("pagination.next", lang),
+                    callback_data=validate_callback_length(page_callback(next_page)),
+                )
+            )
+        rows.append(navigation_row)
     rows.append([InlineKeyboardButton(text=get_button_text("common.back", lang), callback_data=validate_callback_length(back_callback))])
     return InlineKeyboardMarkup(inline_keyboard=rows)
 
@@ -199,7 +209,11 @@ def _get_setting_options(options: Iterable[Any]) -> list[tuple[str, str]]:
 
 def get_model_setting_entries(model: Any) -> list[tuple[str, Any]]:
     """Получить упорядоченный список настроек модели."""
-    return list(model.user_settings.items())
+    return [
+        (setting_key, setting)
+        for setting_key, setting in model.user_settings.items()
+        if getattr(setting, "is_user_visible", True)
+    ]
 
 
 def get_setting_key_by_index(model: Any, setting_index: int) -> str | None:
@@ -353,6 +367,7 @@ def build_providers_keyboard(lang: str = "en", page: int = 0) -> InlineKeyboardM
         item_text_builder=lambda provider: PROVIDER_LABELS.get(provider, str(provider).title()),
         page_callback_builder=lambda target_page: f"gen:providers:{target_page}",
         back_callback="gen:back:sections",
+        columns=2,
         lang=lang,
     )
 
@@ -363,6 +378,7 @@ def build_models_keyboard(
     lang: str = "en",
     page: int = 0,
     page_callback_builder: Callable[[int], str] | None = None,
+    show_price: bool = False,
 ) -> InlineKeyboardMarkup:
     """Построить клавиатуру моделей с настраиваемым callback возврата."""
     model_list = list(models)
@@ -371,9 +387,9 @@ def build_models_keyboard(
         return f"gen:model:{token}"
 
     def build_model_text(model: Any) -> str:
-        price_label = format_model_price_label(model, lang)
         button_text = str(model.title)
-        if price_label:
+        price_label = format_model_price_label(model, lang) if show_price else ""
+        if show_price and price_label:
             button_text = f"{button_text} — {price_label}"
         return button_text
 
@@ -384,6 +400,7 @@ def build_models_keyboard(
         item_text_builder=build_model_text,
         page_callback_builder=page_callback_builder,
         back_callback=back_callback,
+        columns=1,
         lang=lang,
     )
 
@@ -464,6 +481,7 @@ def build_provider_keyboard(providers: Iterable[tuple[str, str]] | None = None, 
         item_text_builder=lambda provider_item: provider_item[1],
         page_callback_builder=lambda target_page: f"gen:providers:{target_page}",
         back_callback="gen:back:sections",
+        columns=2,
         lang=lang,
     )
 

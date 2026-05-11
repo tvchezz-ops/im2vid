@@ -12,7 +12,15 @@ os.environ.setdefault("WAVESPEED_API_KEY", "test-api-key")
 os.environ.setdefault("PUBLIC_BASE_URL", "https://example.com")
 
 
-from scripts.parse_wavespeed_docs import infer_generation_type_from_page
+from scripts.parse_wavespeed_docs import (
+    extract_default_values,
+    extract_enum_options,
+    extract_field_types,
+    extract_optional_fields,
+    extract_required_fields,
+    infer_generation_type_from_page,
+    parse_model_docs,
+)
 
 
 @pytest.mark.parametrize(
@@ -47,3 +55,19 @@ def test_infer_generation_type_from_page_prefers_endpoint_detection_when_availab
 
     assert detection.generation_type == "video_edit"
     assert detection.confidence == "high"
+
+
+def test_parse_model_docs_extracts_json_schema_fields() -> None:
+    schema = parse_model_docs(
+        '{"type":"object","required":["prompt"],"properties":{'
+        '"prompt":{"type":"string"},'
+        '"duration":{"type":"integer","default":5,"minimum":1,"maximum":8},'
+        '"aspect_ratio":{"type":"string","enum":["16:9","9:16"],"default":"16:9"}'
+        '}}'
+    )
+
+    assert extract_required_fields(schema) == ("prompt",)
+    assert "duration" in extract_optional_fields(schema)
+    assert extract_enum_options(schema)["aspect_ratio"] == ("16:9", "9:16")
+    assert extract_default_values(schema)["duration"] == 5
+    assert extract_field_types(schema)["duration"] == "integer"

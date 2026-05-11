@@ -28,9 +28,11 @@ from app.bot.keyboards import (
     build_stars_top_up_keyboard,
     build_top_up_method_keyboard,
     build_wallet_bot_payment_keyboard,
+    get_button_text,
     resolve_model_key_from_token,
     validate_callback_length,
 )
+from app.i18n import t
 from app.services.generation_service import get_generation_model
 from app.services.generation_service import list_generation_models
 
@@ -82,9 +84,7 @@ def test_build_generation_sections_keyboard_always_shows_all_models(monkeypatch)
 def test_build_providers_keyboard_uses_expected_callback_prefix() -> None:
     keyboard = build_providers_keyboard()
 
-    buttons = [button for row in keyboard.inline_keyboard[:-2] for button in row]
-
-    callback_data = [button.callback_data for button in buttons]
+    callback_data = _iter_callback_data(keyboard)
     assert "gen:provider:google:0" in callback_data
     assert "gen:provider:bytedance:0" in callback_data
     assert "gen:provider:kling:0" in callback_data
@@ -101,7 +101,7 @@ def test_build_models_keyboard_uses_passed_models_only() -> None:
     ]
 
     keyboard = build_models_keyboard(models, "gen:back:sections")
-    buttons = [button for row in keyboard.inline_keyboard[:-2] for button in row]
+    buttons = [row[0] for row in keyboard.inline_keyboard[:-1]]
 
     assert [button.text for button in buttons] == [
         "Nano Banana Pro Edit Ultra",
@@ -113,22 +113,25 @@ def test_build_models_keyboard_uses_passed_models_only() -> None:
     ]
 
 
-def test_build_models_keyboard_shows_model_price() -> None:
+def test_build_models_keyboard_hides_model_price() -> None:
     keyboard = build_models_keyboard([get_generation_model("nano_banana")], "gen:back:sections")
 
-    assert keyboard.inline_keyboard[0][0].text == "Google Nano Banana Pro Edit Ultra — from 17 credits"
+    assert keyboard.inline_keyboard[0][0].text == "Google Nano Banana Pro Edit Ultra"
+    assert "credits" not in keyboard.inline_keyboard[0][0].text
 
 
-def test_build_models_keyboard_shows_minimum_video_duration_price_in_ru() -> None:
+def test_build_models_keyboard_hides_minimum_video_duration_price_in_ru() -> None:
     keyboard = build_models_keyboard([get_generation_model("alibaba_wan_2_6_text_to_video")], "gen:back:sections", "ru")
 
-    assert keyboard.inline_keyboard[0][0].text == "Alibaba Wan 2.6 Text To Video — ≈ 6 credits"
+    assert keyboard.inline_keyboard[0][0].text == "Alibaba Wan 2.6 Text To Video"
+    assert "credits" not in keyboard.inline_keyboard[0][0].text
 
 
-def test_build_models_keyboard_marks_fallback_price_as_estimated() -> None:
+def test_build_models_keyboard_hides_estimated_fallback_price() -> None:
     keyboard = build_models_keyboard([get_generation_model("alibaba_wan_2_6_text_to_image")], "gen:back:sections")
 
-    assert keyboard.inline_keyboard[0][0].text == "Alibaba Wan 2.6 Text To Image — ≈ 6 credits"
+    assert keyboard.inline_keyboard[0][0].text == "Alibaba Wan 2.6 Text To Image"
+    assert "credits" not in keyboard.inline_keyboard[0][0].text
 
 
 def test_build_models_keyboard_falls_back_to_index_for_long_model_key() -> None:
@@ -152,9 +155,10 @@ def test_build_paginated_keyboard_first_page() -> None:
         back_callback="back",
     )
 
-    assert [button.text for row in keyboard.inline_keyboard[:4] for button in row] == items[:8]
-    assert [button.callback_data for button in keyboard.inline_keyboard[-2]] == ["page:0", "gen:page:noop", "page:1"]
-    assert keyboard.inline_keyboard[-2][1].text == "Page 1/2"
+    assert [row[0].text for row in keyboard.inline_keyboard[:8]] == items[:8]
+    assert [button.callback_data for button in keyboard.inline_keyboard[-2]] == ["gen:page:noop", "page:1"]
+    assert keyboard.inline_keyboard[-2][0].text == "Page 1/2"
+    assert all(button.text != "⬅️ Prev" for button in keyboard.inline_keyboard[-2])
 
 
 def test_build_paginated_keyboard_next_page() -> None:
@@ -166,7 +170,7 @@ def test_build_paginated_keyboard_next_page() -> None:
         back_callback="back",
     )
 
-    assert keyboard.inline_keyboard[-2][2].callback_data == "page:1"
+    assert keyboard.inline_keyboard[-2][-1].callback_data == "page:1"
 
 
 def test_build_paginated_keyboard_prev_page() -> None:
@@ -178,9 +182,26 @@ def test_build_paginated_keyboard_prev_page() -> None:
         back_callback="back",
     )
 
-    assert [button.text for row in keyboard.inline_keyboard[:1] for button in row] == ["Item 8", "Item 9"]
+    assert [row[0].text for row in keyboard.inline_keyboard[:2]] == ["Item 8", "Item 9"]
     assert keyboard.inline_keyboard[-2][0].callback_data == "page:0"
     assert keyboard.inline_keyboard[-2][1].text == "Page 2/2"
+    assert all(button.text != "Next ➡️" for button in keyboard.inline_keyboard[-2])
+
+
+def test_build_paginated_keyboard_middle_page_has_prev_and_next() -> None:
+    keyboard = build_paginated_keyboard(
+        [f"Item {index}" for index in range(17)],
+        1,
+        item_callback_builder=lambda item, index: f"item:{index}",
+        page_callback_builder=lambda page: f"page:{page}",
+        back_callback="back",
+    )
+
+    assert keyboard.inline_keyboard[-2][0].text == "⬅️ Prev"
+    assert keyboard.inline_keyboard[-2][0].callback_data == "page:0"
+    assert keyboard.inline_keyboard[-2][1].text == "Page 2/3"
+    assert keyboard.inline_keyboard[-2][2].text == "Next ➡️"
+    assert keyboard.inline_keyboard[-2][2].callback_data == "page:2"
 
 
 def test_build_paginated_keyboard_last_page() -> None:
@@ -193,8 +214,39 @@ def test_build_paginated_keyboard_last_page() -> None:
     )
 
     assert keyboard.inline_keyboard[0][0].text == "Item 16"
-    assert keyboard.inline_keyboard[-2][2].callback_data == "page:2"
+    assert keyboard.inline_keyboard[-2][0].callback_data == "page:1"
     assert keyboard.inline_keyboard[-2][1].text == "Page 3/3"
+    assert all(button.text != "Next ➡️" for button in keyboard.inline_keyboard[-2])
+
+
+def test_build_paginated_keyboard_single_page_has_no_navigation_row() -> None:
+    keyboard = build_paginated_keyboard(
+        ["Item 0", "Item 1"],
+        0,
+        item_callback_builder=lambda item, index: f"item:{index}",
+        page_callback_builder=lambda page: f"page:{page}",
+        back_callback="back",
+    )
+
+    assert len(keyboard.inline_keyboard) == 3
+    assert keyboard.inline_keyboard[-1][0].callback_data == "back"
+    assert all("Page" not in button.text for button in _iter_buttons(keyboard))
+
+
+def test_paginated_keyboard_uses_i18n_text() -> None:
+    keyboard = build_paginated_keyboard(
+        [f"Item {index}" for index in range(17)],
+        1,
+        item_callback_builder=lambda item, index: f"item:{index}",
+        page_callback_builder=lambda page: f"page:{page}",
+        back_callback="back",
+        lang="ru",
+    )
+
+    assert keyboard.inline_keyboard[-2][0].text == t("pagination.prev", "ru")
+    assert keyboard.inline_keyboard[-2][1].text == t("pagination.page", "ru", current=2, total=3)
+    assert keyboard.inline_keyboard[-2][2].text == t("pagination.next", "ru")
+    assert keyboard.inline_keyboard[-1][0].text == get_button_text("common.back", "ru")
 
 
 def test_build_paginated_keyboard_rejects_long_callback_data() -> None:
@@ -250,11 +302,13 @@ def test_all_models_provider_pagination_works(monkeypatch) -> None:
     assert "gen:provider:provider_0:0" in _iter_callback_data(first_page)
     assert "gen:provider:provider_7:0" in _iter_callback_data(first_page)
     assert "gen:provider:provider_8:0" not in _iter_callback_data(first_page)
-    assert first_page.inline_keyboard[-2][1].text == "Page 1/2"
-    assert first_page.inline_keyboard[-2][2].callback_data == "gen:providers:1"
+    assert first_page.inline_keyboard[-2][0].text == "Page 1/2"
+    assert first_page.inline_keyboard[-2][1].callback_data == "gen:providers:1"
+    assert all(button.text != "⬅️ Prev" for button in first_page.inline_keyboard[-2])
     assert "gen:provider:provider_8:0" in _iter_callback_data(second_page)
     assert "gen:provider:provider_9:0" in _iter_callback_data(second_page)
     assert second_page.inline_keyboard[-2][0].callback_data == "gen:providers:0"
+    assert all(button.text != "Next ➡️" for button in second_page.inline_keyboard[-2])
 
 
 def test_model_pagination_works_for_more_than_eight_models() -> None:
@@ -274,27 +328,35 @@ def test_model_pagination_works_for_more_than_eight_models() -> None:
     )
 
     assert models[0].title in first_page.inline_keyboard[0][0].text
-    assert models[7].title in first_page.inline_keyboard[3][1].text
+    assert models[7].title in first_page.inline_keyboard[7][0].text
     assert f"gen:model:{models[8].key}" not in _iter_callback_data(first_page)
     assert models[8].title in second_page.inline_keyboard[0][0].text
-    assert first_page.inline_keyboard[-2][2].callback_data == "gen:models:text_to_image:1"
+    assert first_page.inline_keyboard[-2][1].callback_data == "gen:models:text_to_image:1"
     assert second_page.inline_keyboard[-2][0].callback_data == "gen:models:text_to_image:0"
 
 
-def test_price_is_shown_for_every_enabled_model() -> None:
+def test_model_keyboard_has_max_eight_single_button_model_rows_per_page() -> None:
+    models = list_generation_models()[:9]
+
+    first_page = build_models_keyboard(models, "gen:back:sections", page=0)
+    second_page = build_models_keyboard(models, "gen:back:sections", page=1)
+
+    assert len(first_page.inline_keyboard[:-2]) == 8
+    assert all(len(row) == 1 for row in first_page.inline_keyboard[:-2])
+    assert len(second_page.inline_keyboard[:-2]) == 1
+    assert all(len(row) == 1 for row in second_page.inline_keyboard[:-2])
+
+
+def test_model_keyboard_does_not_contain_credits_for_any_enabled_model() -> None:
     enabled_models = list_generation_models()
     page_count = (len(enabled_models) + 7) // 8
-    button_text_by_title: dict[str, str] = {}
 
     for page in range(page_count):
         keyboard = build_models_keyboard(enabled_models, "gen:back:sections", page=page)
-        for button in _iter_buttons(keyboard)[:-4]:
-            if " — " in button.text:
-                title, _separator, price = button.text.partition(" — ")
-                button_text_by_title[title] = price
-
-    assert set(button_text_by_title) == {model.title for model in enabled_models}
-    assert all("credits" in price for price in button_text_by_title.values())
+        for row in keyboard.inline_keyboard[:-2]:
+            assert len(row) == 1
+            assert "credits" not in row[0].text
+            assert "—" not in row[0].text
 
 
 def test_validate_callback_length_rejects_64_byte_callback() -> None:

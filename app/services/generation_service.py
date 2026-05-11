@@ -393,9 +393,60 @@ def get_default_settings(model_key: str) -> dict[str, Any]:
     """Получить настройки модели по умолчанию."""
     model = get_generation_model(model_key)
     return {
-        setting_key: setting.default
+        setting_key: (setting.default.strip().lower() == "true" if setting.type == "boolean" else setting.default)
         for setting_key, setting in model.user_settings.items()
     }
+
+
+def _format_setting_value(value: Any) -> str:
+    return str(value).lower() if isinstance(value, bool) else str(value)
+
+
+def _validate_number_setting(
+    model: GenerationModel,
+    setting: GenerationSetting,
+    raw_value: str,
+) -> str:
+    try:
+        numeric_value = Decimal(raw_value.strip())
+    except Exception as exc:
+        raise ValueError(
+            f"Invalid numeric value '{raw_value}' for setting '{setting.key}' in model '{model.key}'"
+        ) from exc
+
+    if setting.min_value is not None and numeric_value < Decimal(str(setting.min_value)):
+        raise ValueError(
+            f"Value '{raw_value}' for setting '{setting.key}' in model '{model.key}' is below minimum {setting.min_value}"
+        )
+    if setting.max_value is not None and numeric_value > Decimal(str(setting.max_value)):
+        raise ValueError(
+            f"Value '{raw_value}' for setting '{setting.key}' in model '{model.key}' is above maximum {setting.max_value}"
+        )
+    if setting.options and raw_value not in setting.allowed_values:
+        allowed_values = ", ".join(option.value for option in setting.options)
+        raise ValueError(
+            f"Invalid value '{raw_value}' for setting '{setting.key}' in model '{model.key}'. "
+            f"Allowed values: {allowed_values}"
+        )
+    return str(int(numeric_value)) if numeric_value == numeric_value.to_integral_value() else str(numeric_value)
+
+
+def _validate_boolean_setting(
+    model: GenerationModel,
+    setting: GenerationSetting,
+    raw_value: Any,
+) -> bool:
+    normalized_value = _format_setting_value(raw_value).strip().lower()
+    boolean_values = {"true", "false"}
+    if setting.options:
+        boolean_values.update(setting.allowed_values)
+    if normalized_value not in boolean_values:
+        allowed_values = ", ".join(sorted(boolean_values))
+        raise ValueError(
+            f"Invalid boolean value '{raw_value}' for setting '{setting.key}' in model '{model.key}'. "
+            f"Allowed values: {allowed_values}"
+        )
+    return normalized_value == "true"
 
 
 def validate_model_settings(
@@ -411,6 +462,9 @@ def validate_model_settings(
         raw_value = raw_settings.get(setting_key)
         if raw_value is None or raw_value == "":
             continue
+        if setting.type == "boolean":
+            validated_settings[setting_key] = _validate_boolean_setting(model, setting, raw_value)
+            continue
         if not isinstance(raw_value, str):
             raise ValueError(
                 f"Setting '{setting_key}' for model '{model.key}' must be a string value"
@@ -423,6 +477,9 @@ def validate_model_settings(
                     f"Invalid value '{raw_value}' for setting '{setting_key}' in model '{model.key}'"
                 ) from exc
             validated_settings[setting_key] = str(min(max(requested_generations, 1), 4))
+            continue
+        if setting.type == "number":
+            validated_settings[setting_key] = _validate_number_setting(model, setting, raw_value)
             continue
         if setting.type == "select" and raw_value not in setting.allowed_values:
             allowed_values = ", ".join(option.value for option in setting.options)
@@ -590,7 +647,7 @@ def build_payload(
         _assert_required_payload_fields(model, filtered_payload)
         return filtered_payload
 
-    if any(not isinstance(value, (str, int)) for value in validated_settings.values()):
+    if any(not isinstance(value, (str, int, bool)) for value in validated_settings.values()):
         raise ValueError("All validated settings must be string values")
 
     if model.requires_prompt and not cleaned_prompt:

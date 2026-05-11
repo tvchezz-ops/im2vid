@@ -29,6 +29,8 @@ from app.services.generation_service import (
     create_wavespeed_model_from_docs_url,
     get_generation_model,
     GenerationModel,
+    GenerationSetting,
+    SettingOption,
     infer_generation_type_from_endpoint,
     infer_generation_type_from_slug,
     infer_provider_from_url_or_slug,
@@ -54,6 +56,7 @@ from app.services.model_registry.kling import KLING_MODEL_SLUGS, PROVIDER_MODELS
 from app.services.model_registry.minimax import MINIMAX_MODEL_SLUGS, PROVIDER_MODELS as MINIMAX_MODELS
 from app.services.model_registry.openai import OPENAI_MODEL_SLUGS, PROVIDER_MODELS as OPENAI_MODELS
 from app.services.model_registry.wavespeed_ai import WAVESPEED_AI_MODEL_SLUGS, PROVIDER_MODELS as WAVESPEED_AI_MODELS
+from app.services.model_registry.generated_params import GENERATED_MODEL_PARAMS
 
 
 def test_build_payload_nano_banana_defaults() -> None:
@@ -994,6 +997,20 @@ def test_model_specific_defaults_are_used_for_docs_confirmed_models() -> None:
     assert get_default_settings(model.key) == {"num_generations": "1"}
 
 
+def test_generated_params_import_and_reference_registry_models() -> None:
+    assert GENERATED_MODEL_PARAMS
+    assert set(GENERATED_MODEL_PARAMS).issubset(MODEL_REGISTRY)
+
+
+def test_generated_params_are_merged_into_registry() -> None:
+    model = get_generation_model("google_nano_banana_pro_edit_ultra")
+
+    assert model.max_images == 14
+    assert "aspect_ratio" in model.user_settings
+    assert "aspect_ratio" in model.allowed_payload_fields
+    assert model.system_settings["enable_sync_mode"] is False
+
+
 def test_seed_is_not_exposed_for_any_enabled_model() -> None:
     for model in list_generation_models():
         assert "seed" not in model.user_settings
@@ -1030,6 +1047,60 @@ def test_build_payload_keeps_allowed_fields_for_known_models() -> None:
     )
 
     assert payload == {"prompt": "Generate a poster"}
+
+
+def test_build_payload_validates_generated_number_min_max() -> None:
+    with pytest.raises(ValueError, match="above maximum"):
+        build_payload("google_veo3", [], "Generate a video", {"duration": "9"})
+
+
+def test_build_payload_filters_unknown_and_internal_fields() -> None:
+    payload = build_payload(
+        "google_veo3",
+        [],
+        "Generate a video",
+        {"duration": "5", "seed": "123", "unknown": "ignored", "num_generations": "3"},
+    )
+
+    assert payload["duration"] == "5"
+    assert "seed" not in payload
+    assert "unknown" not in payload
+    assert "num_generations" not in payload
+
+
+def test_build_payload_validates_boolean_generated_settings() -> None:
+    MODEL_REGISTRY["boolean_test_model"] = GenerationModel(
+        key="boolean_test_model",
+        title="Boolean Test Model",
+        provider="google",
+        generation_type="text_to_image",
+        endpoint="https://api.wavespeed.ai/api/v3/google/boolean-test-model",
+        docs_url="https://wavespeed.ai/docs/docs-api/google/google-boolean-test-model",
+        description="Boolean test model",
+        max_images=0,
+        requires_prompt=True,
+        requires_image=False,
+        requires_video=False,
+        requires_audio=False,
+        outputs="image",
+        required_payload_fields=("prompt",),
+        allowed_payload_fields=("prompt", "enhance"),
+        user_settings={
+            "enhance": GenerationSetting(
+                key="enhance",
+                title="Enhance",
+                type="boolean",
+                default="false",
+                options=(SettingOption(value="false", label="Off"), SettingOption(value="true", label="On")),
+            )
+        },
+    )
+    try:
+        assert build_payload("boolean_test_model", [], "Generate", {"enhance": "true"})["enhance"] is True
+        with pytest.raises(ValueError, match="Invalid boolean value"):
+            build_payload("boolean_test_model", [], "Generate", {"enhance": "maybe"})
+    finally:
+        MODEL_REGISTRY.pop("boolean_test_model", None)
 
 
 def test_empty_negative_prompt_is_not_added_to_payload() -> None:
