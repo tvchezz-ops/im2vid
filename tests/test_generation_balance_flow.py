@@ -5,6 +5,7 @@ from __future__ import annotations
 import logging
 import os
 import asyncio
+import inspect
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -258,6 +259,11 @@ async def get_user_delivery_preference(session, user_id: int) -> bool:
 async def get_user_balance(session, user_id: int) -> int:
     result = await session.execute(select(User.balance).where(User.id == user_id))
     return int(result.scalar_one())
+
+
+async def get_generation_count(session, user_id: int) -> int:
+    result = await session.execute(select(GenerationRequest).where(GenerationRequest.user_id == user_id))
+    return len(result.scalars().all())
 
 
 async def get_generation_status(session, generation_id) -> GenerationRequestStatus:
@@ -1281,6 +1287,90 @@ def test_settings_screen_shows_generated_or_fallback_settings_without_media_fiel
     assert "Разрешение" in veo_text or "Режим" in veo_text or "Качество" in veo_text
     assert "The duration of the generated media" not in wan_text
 
+
+def test_describe_model_requirements_for_lipsync_audio_model() -> None:
+    text = generations.describe_model_requirements(MODEL_REGISTRY["kwaivgi_kling_lipsync_audio_to_video"], "ru")
+
+    assert "Видео с лицом" in text
+    assert "Аудиофайл" in text
+
+
+def test_describe_model_requirements_for_text_to_video_model() -> None:
+    text = generations.describe_model_requirements(MODEL_REGISTRY["google_veo3"], "ru")
+
+    assert "Текстовое описание" in text
+    assert "Изображение" not in text
+    assert "Видео" not in text
+    assert "Аудиофайл" not in text
+
+
+def test_describe_model_requirements_for_image_to_video_model() -> None:
+    text = generations.describe_model_requirements(MODEL_REGISTRY["alibaba_wan_2_6_image_to_video_flash"], "ru")
+
+    assert "Изображение" in text
+    assert "Текстовое описание" in text
+
+
+def test_describe_model_requirements_for_video_extend_model() -> None:
+    text = generations.describe_model_requirements(MODEL_REGISTRY["google_veo3_1_fast_video_extend"], "ru")
+
+    assert "Видео" in text
+    assert "Описание продолжения" in text
+
+
+def test_describe_model_requirements_translated_ru_and_en_keys() -> None:
+    model = MODEL_REGISTRY["alibaba_wan_2_7_reference_to_video"]
+
+    ru_text = generations.describe_model_requirements(model, "ru")
+    en_text = generations.describe_model_requirements(model, "en")
+
+    assert "📥 Требуется:" in ru_text
+    assert "Референсные изображения" in ru_text
+    assert "Текстовое описание" in ru_text
+    assert "📥 Required:" in en_text
+    assert "Reference images" in en_text
+    assert "Text description" in en_text
+
+
+def test_insufficient_balance_message_is_localized() -> None:
+    assert generations.build_insufficient_balance_message("ru") == (
+        "❌ Недостаточно кредитов для запуска генерации.\n\n"
+        "💳 Для продолжения пополните баланс:\n"
+        "Профиль → Пополнить баланс"
+    )
+    assert generations.build_insufficient_balance_message("en") == (
+        "❌ Not enough credits to start generation.\n\n"
+        "💳 To continue, top up your balance:\n"
+        "Profile → Add balance"
+    )
+
+
+def test_insufficient_balance_keyboard_contains_topup_and_profile_buttons() -> None:
+    keyboard = generations.build_insufficient_balance_keyboard("ru")
+
+    assert keyboard.inline_keyboard[0][0].text == "💳 Пополнить баланс"
+    assert keyboard.inline_keyboard[0][0].callback_data == "profile:topup"
+    assert keyboard.inline_keyboard[1][0].text == "👤 Профиль"
+    assert keyboard.inline_keyboard[1][0].callback_data == "profile:open"
+
+
+def test_generation_entrypoints_use_shared_insufficient_balance_helper() -> None:
+    prompt_source = inspect.getsource(generations.process_prompt)
+    confirm_source = inspect.getsource(generations.confirm_generation)
+
+    assert "answer_insufficient_balance" in prompt_source
+    assert "answer_insufficient_balance" in confirm_source
+    assert "errors.insufficient_balance_details" not in prompt_source
+    assert "errors.insufficient_balance_details" not in confirm_source
+
+
+def test_settings_screen_inserts_requirements_before_current_values() -> None:
+    model = MODEL_REGISTRY["alibaba_wan_2_6_image_to_video_flash"]
+
+    text = generations.build_settings_text(model, {}, "ru")
+
+    assert text.index("📥 Требуется:") < text.index("Текущие значения")
+
 @pytest.mark.asyncio
 async def test_process_generation_video_rejects_photo_for_video_flow() -> None:
     state = FakeState({"model_generation_type": "video_edit"})
@@ -1409,10 +1499,9 @@ async def test_process_prompt_insufficient_balance_returns_to_settings(session_f
         assert confirmation_opened is False
         assert state.state == GenerationStates.choosing_settings
         assert state.data.get("prompt") is None
-        assert message.answers[0] == "❌ Ошибка E006: недостаточно кредитов. Нужно 24, у вас 0."
-        assert message.answers[1] == "Измените количество генераций или пополните баланс."
-        assert message.answer_markups[1].keyboard[0][0].text == "🎨 Генерации"
-        assert message.answers[2].startswith("Настройки модели:")
+        assert message.answers == [generations.build_insufficient_balance_message("ru")]
+        assert message.answer_markups[0].inline_keyboard[0][0].callback_data == "profile:topup"
+        assert message.answer_markups[0].inline_keyboard[1][0].callback_data == "profile:open"
         assert any(
             isinstance(record.msg, dict)
             and record.msg.get("action") == "insufficient_balance"
@@ -1420,6 +1509,15 @@ async def test_process_prompt_insufficient_balance_returns_to_settings(session_f
             and record.msg.get("state") == GenerationStates.waiting_for_prompt.state
             and record.msg.get("model_key") == "alibaba_wan_2_6_text_to_image"
             and record.msg.get("total_cost") == 24
+            for record in caplog.records
+        )
+        assert any(
+            isinstance(record.msg, dict)
+            and record.msg.get("action") == "generation_insufficient_balance"
+            and record.msg.get("user_id") == 411
+            and record.msg.get("balance") == 0
+            and record.msg.get("required_balance") == 24
+            and record.msg.get("model_key") == "alibaba_wan_2_6_text_to_image"
             for record in caplog.records
         )
 
@@ -2235,17 +2333,20 @@ async def test_cleanup_generation_file_removes_multiple_paths(tmp_path) -> None:
 
 
 @pytest.mark.asyncio
-async def test_insufficient_balance_does_not_start_submit(session_factory, monkeypatch) -> None:
+async def test_insufficient_balance_does_not_start_submit(session_factory, monkeypatch, caplog) -> None:
     async with session_factory() as session:
         await create_user(session, user_id=401, balance=0)
 
         called = False
+        submit_called = False
 
         async def fake_poll_generation_result(**kwargs) -> None:
             nonlocal called
             called = True
 
         async def fake_submit_generation_request(**kwargs) -> str:
+            nonlocal submit_called
+            submit_called = True
             raise AssertionError("submit should not be called without enough balance")
 
         monkeypatch.setattr(generations, "poll_generation_result", fake_poll_generation_result)
@@ -2263,11 +2364,25 @@ async def test_insufficient_balance_does_not_start_submit(session_factory, monke
         )
         callback = FakeCallback(user_id=401)
 
-        await generations.confirm_generation(callback, state, session)
+        with caplog.at_level(logging.INFO):
+            await generations.confirm_generation(callback, state, session)
 
         assert called is False
-        assert callback.message.answers[-1] == "❌ Ошибка E006: недостаточно кредитов. Нужно 49, у вас 0."
+        assert submit_called is False
+        assert callback.message.answers[-1] == generations.build_insufficient_balance_message("ru")
+        assert callback.message.answer_markups[-1].inline_keyboard[0][0].callback_data == "profile:topup"
+        assert callback.message.answer_markups[-1].inline_keyboard[1][0].callback_data == "profile:open"
         assert await get_user_balance(session, 401) == 0
+        assert await get_generation_count(session, 401) == 0
+        assert any(
+            isinstance(record.msg, dict)
+            and record.msg.get("action") == "generation_insufficient_balance"
+            and record.msg.get("user_id") == 401
+            and record.msg.get("balance") == 0
+            and record.msg.get("required_balance") == 49
+            and record.msg.get("model_key") == "nano_banana"
+            for record in caplog.records
+        )
 
 
 def test_build_confirmation_text_shows_num_generations_and_total_cost() -> None:
@@ -3051,6 +3166,35 @@ async def test_send_generation_outputs_sends_png_as_photo_when_preference_disabl
 
 
 @pytest.mark.asyncio
+async def test_send_generation_outputs_loads_profile_preference_true_and_sends_png_as_document(session_factory, monkeypatch, tmp_path, caplog) -> None:
+    output_path = tmp_path / "imai-photo.png"
+    output_path.write_bytes(b"image")
+
+    async def fake_download_output_file_to_temp(output_url: str):
+        return str(output_path), "image/png", 5
+
+    async with session_factory() as session:
+        await create_user(session, user_id=503, balance=3)
+        await UserRepository(session).set_user_delivery_preference(503, True)
+
+    bot = FakeBot()
+    caplog.set_level(logging.INFO, logger="telegram_bot")
+    monkeypatch.setattr(generations, "download_output_file_to_temp", fake_download_output_file_to_temp)
+    monkeypatch.setattr(generations.db_manager, "session_factory", session_factory)
+
+    delivered = await generations.send_generation_outputs(bot, 503, ["https://example.com/output.png"], user_id=503)
+
+    assert delivered.delivered_successfully is True
+    assert bot.documents != []
+    assert bot.photos == []
+    assert bot.videos == []
+    delivery_logs = [record.msg for record in caplog.records if isinstance(record.msg, dict) and record.msg.get("action") == "generation_output_delivery"]
+    assert delivery_logs[-1]["send_results_as_files"] is True
+    assert delivery_logs[-1]["content_type"] == "image/png"
+    assert delivery_logs[-1]["delivery_method"] == "document"
+
+
+@pytest.mark.asyncio
 async def test_send_generation_outputs_sends_video_as_video_by_default(monkeypatch, tmp_path) -> None:
     output_path = tmp_path / "imai-video.mp4"
     output_path.write_bytes(b"video")
@@ -3092,6 +3236,83 @@ async def test_send_generation_outputs_sends_video_as_video_when_preference_disa
 
     assert delivered.delivered_successfully is True
     assert bot.videos != []
+    assert bot.documents == []
+
+
+@pytest.mark.asyncio
+async def test_send_generation_outputs_loads_profile_preference_true_and_sends_mp4_as_document(session_factory, monkeypatch, tmp_path, caplog) -> None:
+    output_path = tmp_path / "imai-video.mp4"
+    output_path.write_bytes(b"video")
+
+    async def fake_download_output_file_to_temp(output_url: str):
+        return str(output_path), "video/mp4", 5
+
+    async with session_factory() as session:
+        await create_user(session, user_id=504, balance=3)
+        await UserRepository(session).set_user_delivery_preference(504, True)
+
+    bot = FakeBot()
+    caplog.set_level(logging.INFO, logger="telegram_bot")
+    monkeypatch.setattr(generations, "download_output_file_to_temp", fake_download_output_file_to_temp)
+    monkeypatch.setattr(generations.db_manager, "session_factory", session_factory)
+
+    delivered = await generations.send_generation_outputs(bot, 504, ["https://example.com/output.mp4"], user_id=504)
+
+    assert delivered.delivered_successfully is True
+    assert bot.documents != []
+    assert bot.photos == []
+    assert bot.videos == []
+    delivery_logs = [record.msg for record in caplog.records if isinstance(record.msg, dict) and record.msg.get("action") == "generation_output_delivery"]
+    assert delivery_logs[-1]["send_results_as_files"] is True
+    assert delivery_logs[-1]["content_type"] == "video/mp4"
+    assert delivery_logs[-1]["delivery_method"] == "document"
+
+
+@pytest.mark.asyncio
+async def test_send_generation_outputs_loads_profile_preference_false_and_sends_png_as_photo(session_factory, monkeypatch, tmp_path) -> None:
+    output_path = tmp_path / "imai-photo.png"
+    output_path.write_bytes(b"image")
+
+    async def fake_download_output_file_to_temp(output_url: str):
+        return str(output_path), "image/png", 5
+
+    async with session_factory() as session:
+        await create_user(session, user_id=505, balance=3)
+        await UserRepository(session).set_user_delivery_preference(505, False)
+
+    bot = FakeBot()
+    monkeypatch.setattr(generations, "download_output_file_to_temp", fake_download_output_file_to_temp)
+    monkeypatch.setattr(generations.db_manager, "session_factory", session_factory)
+
+    delivered = await generations.send_generation_outputs(bot, 505, ["https://example.com/output.png"], user_id=505)
+
+    assert delivered.delivered_successfully is True
+    assert bot.photos != []
+    assert bot.documents == []
+    assert bot.videos == []
+
+
+@pytest.mark.asyncio
+async def test_send_generation_outputs_loads_profile_preference_false_and_sends_mp4_as_video(session_factory, monkeypatch, tmp_path) -> None:
+    output_path = tmp_path / "imai-video.mp4"
+    output_path.write_bytes(b"video")
+
+    async def fake_download_output_file_to_temp(output_url: str):
+        return str(output_path), "video/mp4", 5
+
+    async with session_factory() as session:
+        await create_user(session, user_id=506, balance=3)
+        await UserRepository(session).set_user_delivery_preference(506, False)
+
+    bot = FakeBot()
+    monkeypatch.setattr(generations, "download_output_file_to_temp", fake_download_output_file_to_temp)
+    monkeypatch.setattr(generations.db_manager, "session_factory", session_factory)
+
+    delivered = await generations.send_generation_outputs(bot, 506, ["https://example.com/output.mp4"], user_id=506)
+
+    assert delivered.delivered_successfully is True
+    assert bot.videos != []
+    assert bot.photos == []
     assert bot.documents == []
 
 

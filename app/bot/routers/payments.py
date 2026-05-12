@@ -46,7 +46,7 @@ async def _set_payment_screen(state: FSMContext | None, screen: str) -> None:
         await state.update_data(payment_screen=screen)
 
 
-@router.callback_query(lambda cb: cb.data == "profile:top_up_balance")
+@router.callback_query(lambda cb: cb.data in {"profile:top_up_balance", "profile:topup"})
 async def show_stars_top_up_menu(callback: CallbackQuery, state: FSMContext | None = None) -> None:
     """Показать меню выбора способа оплаты."""
     lang = get_user_language(getattr(callback.from_user, "language_code", None))

@@ -455,6 +455,16 @@ def build_generation_confirm_keyboard(lang: str = "en") -> InlineKeyboardMarkup:
     )
 
 
+def build_insufficient_balance_keyboard(lang: str = "en") -> InlineKeyboardMarkup:
+    """Inline-кнопки для сценария нехватки кредитов."""
+    return InlineKeyboardMarkup(
+        inline_keyboard=[
+            [InlineKeyboardButton(text=get_button_text("profile.top_up", lang), callback_data="profile:topup")],
+            [InlineKeyboardButton(text=get_button_text("main.profile", lang), callback_data="profile:open")],
+        ]
+    )
+
+
 def build_back_to_settings_keyboard(lang: str = "en") -> ReplyKeyboardMarkup:
     """Совместимость со старым именем reply keyboard возврата к настройкам."""
     return build_back_to_settings_reply_keyboard(lang)

@@ -22,6 +22,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.bot.keyboards import (
     build_back_to_settings_keyboard,
+    build_insufficient_balance_keyboard,
     build_media_upload_reply_keyboard,
     build_generation_confirm_keyboard,
     build_generation_sections_keyboard,
@@ -182,6 +183,10 @@ def format_user_error(code: str, message: str, lang: str = "en") -> str:
     return t("errors.formatted", lang, code=code, message=message)
 
 
+def build_insufficient_balance_message(lang: str = "en") -> str:
+    return t("generation.insufficient_balance_start", lang)
+
+
 @dataclass(frozen=True)
 class FlowTexts:
     initial_prompt: str
@@ -322,6 +327,44 @@ def format_generation_settings_localized(model: GenerationModel, user_settings: 
     )
 
 
+def _requirement_is_required(model: GenerationModel, input_kind: str) -> bool:
+    requirement = (model.input_requirements or {}).get(input_kind)
+    if not isinstance(requirement, dict):
+        return False
+    if bool(requirement.get("required")):
+        return True
+    payload_field = str(requirement.get("payload_field") or "")
+    return bool(payload_field and payload_field in set(model.required_payload_fields))
+
+
+def describe_model_requirements(model: GenerationModel, lang: str = "en") -> str:
+    """Describe required user inputs for the selected model."""
+    requirement_keys: list[str] = []
+    generation_type = model.generation_type
+
+    if _requirement_is_required(model, "video") or model.requires_video:
+        requirement_keys.append("requirements.video_with_face" if generation_type == "lipsync" else "requirements.video")
+    if _requirement_is_required(model, "images") or model.requires_image:
+        if generation_type == "reference_to_video":
+            requirement_keys.append("requirements.reference_images")
+        elif model.input_media_field == "images" or model.supports_multiple_images:
+            requirement_keys.append("requirements.images")
+        else:
+            requirement_keys.append("requirements.image")
+    if _requirement_is_required(model, "audio") or model.requires_audio:
+        requirement_keys.append("requirements.audio")
+    if _requirement_is_required(model, "prompt") or model.requires_prompt:
+        requirement_keys.append("requirements.continuation_prompt" if generation_type == "video_extend" else "requirements.prompt")
+    elif isinstance((model.input_requirements or {}).get("prompt"), dict):
+        requirement_keys.append("requirements.optional_prompt")
+
+    if not requirement_keys:
+        return ""
+    lines = [f"<b>{escape(t('requirements.title', lang))}</b>"]
+    lines.extend(f"- {escape(t(requirement_key, lang))}" for requirement_key in dict.fromkeys(requirement_keys))
+    return "\n".join(lines)
+
+
 def get_total_generation_cost(model: GenerationModel, user_settings: dict[str, Any]) -> int:
     return calculate_generation_cost_credits(
         model,
@@ -356,14 +399,18 @@ def format_settings_price_line(model: GenerationModel, user_settings: dict[str, 
 def build_settings_text(model: GenerationModel, user_settings: dict[str, Any], lang: str = "en") -> str:
     """Собрать экран настроек модели."""
     price_line = format_settings_price_line(model, user_settings, lang)
+    requirements_text = describe_model_requirements(model, lang)
+    requirements_block = f"{requirements_text}\n\n" if requirements_text else ""
     if not model.user_settings:
         return (
             f"{t('generation.settings_header', lang, model=escape(model.title))}\n\n"
+            f"{requirements_block}"
             f"{price_line}\n\n"
             f"{t('generation.settings_no_extra_full', lang)}"
         )
     return (
         f"{t('generation.settings_header', lang, model=escape(model.title))}\n\n"
+        f"{requirements_block}"
         f"{price_line}\n\n"
         f"{t('generation.settings_choose', lang)}\n\n"
         f"{t('generation.settings_current', lang, values=format_generation_settings_localized(model, user_settings, lang))}"
@@ -1598,6 +1645,47 @@ def log_balance_event(action: str, user_id: int, amount: int) -> None:
     )
 
 
+def log_generation_insufficient_balance(
+    *,
+    user_id: int,
+    balance: int,
+    required_balance: int,
+    model_key: str | None,
+) -> None:
+    logger.info(
+        {
+            "action": "generation_insufficient_balance",
+            "user_id": user_id,
+            "balance": balance,
+            "required_balance": required_balance,
+            "model_key": model_key,
+        }
+    )
+
+
+async def answer_insufficient_balance(
+    message: Message,
+    *,
+    lang: str,
+    user_id: int,
+    balance: int,
+    required_balance: int,
+    model_key: str | None,
+) -> None:
+    log_balance_event("insufficient_balance", user_id, required_balance)
+    log_generation_error(ErrorCode.E006_INSUFFICIENT_BALANCE, user_id=user_id, model_key=model_key, status="rejected")
+    log_generation_insufficient_balance(
+        user_id=user_id,
+        balance=balance,
+        required_balance=required_balance,
+        model_key=model_key,
+    )
+    await message.answer(
+        build_insufficient_balance_message(lang),
+        reply_markup=build_insufficient_balance_keyboard(lang),
+    )
+
+
 def log_media_group_event(action: str, message: Message, *, media_group_id: str, **extra: Any) -> None:
     logger.info(
         {
@@ -1801,9 +1889,11 @@ async def send_generation_outputs(
     last_error_code: Optional[str] = None
     last_error_message: Optional[str] = None
     r2_storage = R2StorageService()
-    send_results_as_files = delivery_preference if delivery_preference is not None else False
-    if delivery_preference is None and user_id is not None:
+    send_results_as_files = False
+    if user_id is not None:
         send_results_as_files = await get_user_send_results_as_files(user_id)
+    elif delivery_preference is not None:
+        send_results_as_files = delivery_preference
     lang = await get_user_keyboard_language(user_id)
     main_menu_keyboard = get_main_menu_keyboard(lang)
     for output_url in output_urls:
@@ -2250,13 +2340,16 @@ def log_generation_output_delivery(
     status: str,
 ) -> None:
     """Логировать только безопасные метаданные доставки результатов генерации."""
+    normalized_delivery_method = (
+        "document" if send_results_as_files and delivery_method in {"photo", "video", "audio"} else delivery_method
+    )
     logger.info(
         {
             "action": "generation_output_delivery",
             "user_id": user_id,
             "send_results_as_files": send_results_as_files,
             "content_type": normalize_content_type(content_type),
-            "delivery_method": delivery_method,
+            "delivery_method": normalized_delivery_method,
             "file_size": file_size_bytes,
             "status": status,
         }
@@ -3938,7 +4031,6 @@ async def process_prompt(
         user_settings = get_model_state_settings(state_data, model_key)
         total_cost = get_total_generation_cost(model, user_settings)
         if not await user_repo.has_enough_balance(user.id, total_cost):
-            log_generation_error(ErrorCode.E006_INSUFFICIENT_BALANCE, user_id=user.id, model_key=model_key, status="rejected")
             log_generation_diagnostic(
                 action="insufficient_balance",
                 user_id=user.id,
@@ -3950,18 +4042,14 @@ async def process_prompt(
             )
             await state.update_data(prompt=None, input_audio_or_text=None)
             await state.set_state(GenerationStates.choosing_settings)
-            await message.answer(
-                format_user_error(
-                    ErrorCode.E006_INSUFFICIENT_BALANCE,
-                    t("errors.insufficient_balance_details", lang, cost=total_cost, balance=user.balance),
-                    lang,
-                ),
+            await answer_insufficient_balance(
+                message,
+                lang=lang,
+                user_id=user.id,
+                balance=user.balance,
+                required_balance=total_cost,
+                model_key=model_key,
             )
-            await message.answer(
-                t("generation.adjust_or_top_up", lang),
-                reply_markup=get_main_menu_keyboard(lang),
-            )
-            await render_settings_screen_message(message, state, edit=False)
             return
 
         await state.update_data(prompt=prompt, input_audio_or_text=input_audio_or_text)
@@ -4079,8 +4167,6 @@ async def confirm_generation(callback: CallbackQuery, state: FSMContext, session
         single_generation_cost = allocated_generation_costs[0]
 
         if user.balance < total_cost:
-            log_balance_event("insufficient_balance", user.id, total_cost)
-            log_generation_error(ErrorCode.E006_INSUFFICIENT_BALANCE, user_id=user.id, model_key=model_key, status="rejected")
             log_generation_diagnostic(
                 action="insufficient_balance",
                 user_id=user.id,
@@ -4090,13 +4176,13 @@ async def confirm_generation(callback: CallbackQuery, state: FSMContext, session
                 prompt=str(prompt or ""),
                 total_cost=total_cost,
             )
-            await callback.message.answer(
-                format_user_error(
-                    ErrorCode.E006_INSUFFICIENT_BALANCE,
-                    t("errors.insufficient_balance_details", lang, cost=total_cost, balance=user.balance),
-                    lang,
-                ),
-                reply_markup=get_main_menu_keyboard(lang),
+            await answer_insufficient_balance(
+                callback.message,
+                lang=lang,
+                user_id=user.id,
+                balance=user.balance,
+                required_balance=total_cost,
+                model_key=model_key,
             )
             await reset_generation_state(state)
             await callback.answer()
@@ -4140,8 +4226,6 @@ async def confirm_generation(callback: CallbackQuery, state: FSMContext, session
         payload = build_payload(model_key, media_urls, prompt, payload_user_settings)
 
         if not await user_repo.decrease_balance(user.id, total_cost):
-            log_balance_event("insufficient_balance", user.id, total_cost)
-            log_generation_error(ErrorCode.E006_INSUFFICIENT_BALANCE, user_id=user.id, model_key=model_key, status="rejected")
             log_generation_diagnostic(
                 action="insufficient_balance",
                 user_id=user.id,
@@ -4151,13 +4235,13 @@ async def confirm_generation(callback: CallbackQuery, state: FSMContext, session
                 prompt=str(prompt or ""),
                 total_cost=total_cost,
             )
-            await callback.message.answer(
-                format_user_error(
-                    ErrorCode.E006_INSUFFICIENT_BALANCE,
-                    t("errors.insufficient_balance_details", lang, cost=total_cost, balance=user.balance),
-                    lang,
-                ),
-                reply_markup=get_main_menu_keyboard(lang),
+            await answer_insufficient_balance(
+                callback.message,
+                lang=lang,
+                user_id=user.id,
+                balance=user.balance,
+                required_balance=total_cost,
+                model_key=model_key,
             )
             await reset_generation_state(state)
             await callback.answer()

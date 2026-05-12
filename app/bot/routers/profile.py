@@ -79,6 +79,25 @@ async def back_to_menu(callback: CallbackQuery):
     await callback.answer()
 
 
+@router.callback_query(lambda cb: cb.data == "profile:open")
+async def open_profile_callback(callback: CallbackQuery, session: AsyncSession):
+    """Открыть профиль из inline-кнопок."""
+    user_repo = UserRepository(session)
+    user = await user_repo.get_or_create_user_from_telegram(callback.from_user)
+    actor_lang = get_user_language(getattr(callback.from_user, "language_code", None))
+    if user is None:
+        await callback.answer(t("profile.user_not_found", actor_lang), show_alert=True)
+        return
+    lang = get_user_language(user.language_code)
+    total_spent_credits = await user_repo.get_total_spent_credits(user.id)
+    await callback.message.edit_text(
+        build_profile_text(user, total_spent_credits, lang),
+        reply_markup=get_profile_keyboard(send_results_as_files=user.send_results_as_files, lang=lang),
+        parse_mode="HTML",
+    )
+    await callback.answer()
+
+
 @router.callback_query(lambda cb: cb.data == "profile:toggle_delivery_mode")
 async def toggle_delivery_mode(callback: CallbackQuery, session: AsyncSession):
     """Переключить способ отправки результатов и обновить экран профиля."""
