@@ -25,9 +25,11 @@ from app.services.generation_service import (
     build_model_registry,
     build_payload,
     calculate_generation_cost_credits,
+    calculate_generation_price_quote,
     calculate_generation_price_usd,
     create_wavespeed_model_from_docs_url,
     get_generation_model,
+    get_model_num_generations,
     is_contract_complete,
     GenerationModel,
     GenerationSetting,
@@ -313,7 +315,9 @@ def test_calculate_generation_cost_multiplies_num_generations() -> None:
     model = get_generation_model("nano_banana")
 
     assert calculate_generation_price_usd(model, get_default_settings(model.key), num_generations=3) == Decimal("0.630")
-    assert calculate_generation_cost_credits(model, get_default_settings(model.key), num_generations=3) == 49
+    assert calculate_generation_cost_credits(model, get_default_settings(model.key), num_generations=3) == 51
+    assert calculate_generation_cost_credits(model, get_default_settings(model.key), num_generations=10) == 170
+    assert calculate_generation_price_quote(model, get_default_settings(model.key), num_generations=10)[1] == 170
 
 
 def test_calculate_generation_cost_ceil_credits() -> None:
@@ -394,6 +398,7 @@ def test_all_enabled_models_have_num_generations_setting() -> None:
     for model in list_generation_models():
         assert "num_generations" in model.user_settings
         assert model.user_settings["num_generations"].default == "1"
+        assert [option.value for option in model.user_settings["num_generations"].options] == [str(value) for value in range(1, 11)]
 
     assert get_default_settings("nano_banana")["num_generations"] == "1"
 
@@ -411,12 +416,17 @@ def test_build_payload_does_not_include_internal_num_generations_setting() -> No
     assert "num_generations" not in payload
 
 
-def test_build_payload_clamps_internal_num_generations_setting() -> None:
+def test_build_payload_accepts_internal_num_generations_up_to_ten() -> None:
+    model = get_generation_model("google_veo3")
+
+    assert get_model_num_generations(model, {"num_generations": "10"}) == 10
+    assert get_model_num_generations(model, {"num_generations": "11"}) == 10
+
     payload = build_payload(
         "google_veo3",
         [],
         "Create a short atmospheric video",
-        {"num_generations": "9", "duration": "8", "resolution": "720p", "aspect_ratio": "16:9"},
+        {"num_generations": "10", "duration": "8", "resolution": "720p", "aspect_ratio": "16:9"},
     )
 
     assert "num_generations" not in payload

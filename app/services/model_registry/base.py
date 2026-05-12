@@ -1019,8 +1019,8 @@ def _select_setting(
     )
 
 
-def _build_num_generations_setting(max_generations: int = 4) -> GenerationSetting:
-    capped_limit = max(1, min(4, max_generations))
+def _build_num_generations_setting(max_generations: int = 10) -> GenerationSetting:
+    capped_limit = max(1, min(10, max_generations))
     values = tuple(str(value) for value in range(1, capped_limit + 1))
     return _select_setting(
         "num_generations",

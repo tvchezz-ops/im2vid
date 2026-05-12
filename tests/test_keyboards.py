@@ -422,6 +422,27 @@ def test_build_setting_options_keyboard_uses_setting_key_and_option_index() -> N
     assert keyboard.inline_keyboard[-1][0].callback_data == "gen:back:settings"
 
 
+def test_build_setting_options_keyboard_shows_num_generations_in_two_columns() -> None:
+    model = get_generation_model("nano_banana")
+
+    keyboard = build_setting_options_keyboard(model, "num_generations", "10")
+
+    option_rows = keyboard.inline_keyboard[:-1]
+    assert [[button.text for button in row] for row in option_rows] == [
+        ["1", "2"],
+        ["3", "4"],
+        ["5", "6"],
+        ["7", "8"],
+        ["9", "✅ 10"],
+    ]
+    assert keyboard.inline_keyboard[-1][0].callback_data == "gen:back:settings"
+    assert all(
+        len((button.callback_data or "").encode("utf-8")) < 64
+        for row in keyboard.inline_keyboard
+        for button in row
+    )
+
+
 def test_build_generation_confirm_keyboard_uses_new_callbacks() -> None:
     keyboard = build_generation_confirm_keyboard()
 

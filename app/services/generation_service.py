@@ -258,7 +258,17 @@ def calculate_generation_cost_credits(
     user_settings: Optional[Mapping[str, Any]],
     num_generations: int = 1,
 ) -> int:
-    _, credits, context = _calculate_generation_price_details(model, user_settings, num_generations)
+    requested_generations = max(1, _get_int(num_generations))
+    if requested_generations > 1:
+        _, single_credits, single_context = _calculate_generation_price_details(model, user_settings, 1)
+        _, _, context = _calculate_generation_price_details(model, user_settings, requested_generations)
+        credits = single_credits * requested_generations
+        context["single_generation_credits"] = single_credits
+        context["final_credits"] = credits
+        logger.info(single_context)
+        logger.info(context)
+        return credits
+    _, credits, context = _calculate_generation_price_details(model, user_settings, 1)
     logger.info(context)
     return credits
 
@@ -268,7 +278,13 @@ def calculate_generation_price_quote(
     user_settings: Optional[Mapping[str, Any]],
     num_generations: int = 1,
 ) -> tuple[Decimal, int]:
-    price, credits, context = _calculate_generation_price_details(model, user_settings, num_generations)
+    requested_generations = max(1, _get_int(num_generations))
+    price, credits, context = _calculate_generation_price_details(model, user_settings, requested_generations)
+    if requested_generations > 1:
+        _, single_credits, _ = _calculate_generation_price_details(model, user_settings, 1)
+        credits = single_credits * requested_generations
+        context["single_generation_credits"] = single_credits
+        context["final_credits"] = credits
     logger.info(context)
     return price, credits
 
@@ -279,10 +295,8 @@ def allocate_generation_cost_credits(
     num_generations: int,
 ) -> list[int]:
     requested_generations = max(1, _get_int(num_generations))
-    total_cost = calculate_generation_cost_credits(model, user_settings, requested_generations)
-    base_cost = total_cost // requested_generations
-    remainder = total_cost % requested_generations
-    return [base_cost + (1 if index < remainder else 0) for index in range(requested_generations)]
+    single_cost = calculate_generation_cost_credits(model, user_settings, 1)
+    return [single_cost for _ in range(requested_generations)]
 
 
 def _estimate_settings_for_cost(model: GenerationModel, *, maximize: bool) -> dict[str, Any]:
@@ -477,7 +491,7 @@ def validate_model_settings(
                 raise ValueError(
                     f"Invalid value '{raw_value}' for setting '{setting_key}' in model '{model.key}'"
                 ) from exc
-            validated_settings[setting_key] = str(min(max(requested_generations, 1), 4))
+            validated_settings[setting_key] = str(min(max(requested_generations, 1), 10))
             continue
         if setting.type == "number":
             validated_settings[setting_key] = _validate_number_setting(model, setting, raw_value)
@@ -554,7 +568,7 @@ def get_model_num_generations(model: GenerationModel, user_settings: Optional[Ma
         requested_generations = int(str(raw_value).strip())
     except (TypeError, ValueError):
         requested_generations = 1
-    return min(max(requested_generations, 1), 4)
+    return min(max(requested_generations, 1), 10)
 
 
 def _assert_required_payload_fields(

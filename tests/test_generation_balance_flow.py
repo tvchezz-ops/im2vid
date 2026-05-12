@@ -394,7 +394,7 @@ async def test_confirm_generation_allows_four_generations_with_existing_active_r
         assert callback.message.answers[-1] == "Генерация запущена в фоне. Результат придёт сюда автоматически."
         assert len(submit_calls) == 4
         assert len(batch_calls["generation_predictions"]) == 4
-        assert await get_user_balance(session, 422) == 35
+        assert await get_user_balance(session, 422) == 32
         all_answers = [*menu_message.answers, *callback.message.answers]
         removed_warning_fragment = "Можно запускать" + " не больше"
         assert not any(removed_warning_fragment in answer for answer in all_answers)
@@ -2379,7 +2379,7 @@ async def test_insufficient_balance_does_not_start_submit(session_factory, monke
             and record.msg.get("action") == "generation_insufficient_balance"
             and record.msg.get("user_id") == 401
             and record.msg.get("balance") == 0
-            and record.msg.get("required_balance") == 49
+            and record.msg.get("required_balance") == 51
             and record.msg.get("model_key") == "nano_banana"
             for record in caplog.records
         )
@@ -2396,8 +2396,8 @@ def test_build_confirmation_text_shows_num_generations_and_total_cost() -> None:
     )
 
     assert "📦 Generation count: <code>3</code>" in text
-    assert "💰 Cost: 49 credits" in text
-    assert "💳 Balance after launch: <code>51</code>" in text
+    assert "💰 Cost: 51 credits" in text
+    assert "💳 Balance after launch: <code>49</code>" in text
 
 
 def test_build_settings_text_shows_price_and_recalculates_duration() -> None:
@@ -2466,18 +2466,18 @@ async def test_confirm_generation_debits_total_cost_and_persists_num_generations
         generation_requests = result.scalars().all()
 
         assert len(generation_requests) == 3
-        assert sorted(generation.cost for generation in generation_requests) == [16, 16, 17]
-        assert sum(generation.cost for generation in generation_requests) == 49
+        assert sorted(generation.cost for generation in generation_requests) == [17, 17, 17]
+        assert sum(generation.cost for generation in generation_requests) == 51
         assert all(generation.settings["num_generations"] == "3" for generation in generation_requests)
-        assert await get_user_balance(session, 451) == 51
+        assert await get_user_balance(session, 451) == 49
         assert len(captured["generation_predictions"]) == 3
         assert len(captured["submit_calls"]) == 3
 
 
 @pytest.mark.asyncio
-async def test_num_generations_four_starts_four_submit_requests(session_factory, monkeypatch, tmp_path) -> None:
+async def test_num_generations_ten_starts_ten_submit_requests(session_factory, monkeypatch, tmp_path) -> None:
     async with session_factory() as session:
-        await create_user(session, user_id=452, balance=100)
+        await create_user(session, user_id=452, balance=200)
 
         temp_input_path = tmp_path / "input.png"
         temp_input_path.write_bytes(b"input")
@@ -2507,9 +2507,9 @@ async def test_num_generations_four_starts_four_submit_requests(session_factory,
                 "model_key": "nano_banana",
                 "model_title": "Nano Banana",
                 "model_endpoint": "/api/v3/nano-banana",
-                "prompt": "Generate three variants",
+                "prompt": "Generate ten variants",
                 "input_image_file_id": "telegram-file-id",
-                "user_settings": {"aspect_ratio": "1:1", "resolution": "4k", "output_format": "png", "num_generations": "4"},
+                "user_settings": {"aspect_ratio": "1:1", "resolution": "4k", "output_format": "png", "num_generations": "10"},
             }
         )
         callback = FakeCallback(user_id=452)
@@ -2517,8 +2517,10 @@ async def test_num_generations_four_starts_four_submit_requests(session_factory,
         await generations.confirm_generation(callback, state, session)
         await await_background_generation_tasks()
 
-        assert len(batch_calls["generation_predictions"]) == 4
-        assert len(batch_calls["submit_calls"]) == 4
+        assert len(batch_calls["generation_predictions"]) == 10
+        assert len(batch_calls["submit_calls"]) == 10
+        assert batch_calls["generation_costs"] == {generation_id: 17 for generation_id, _ in batch_calls["generation_predictions"]}
+        assert await get_user_balance(session, 452) == 30
         assert callback.message.answers[-1] == "Генерация запущена в фоне. Результат придёт сюда автоматически."
 
 
@@ -2531,8 +2533,12 @@ def test_parallel_generation_limit_artifacts_are_absent() -> None:
 
     removed_warning = "Можно запускать" + " не больше 3 генераций"
     removed_action = "parallel_generation_" + "limit_reached"
+    removed_asyncio_semaphore = "asyncio." + "Sem" + "aphore" + "(" + "4)"
+    removed_semaphore = "Sem" + "aphore" + "(" + "4)"
     assert removed_warning not in source_text
     assert removed_action not in source_text
+    assert removed_asyncio_semaphore not in source_text
+    assert removed_semaphore not in source_text
 
 
 @pytest.mark.asyncio
@@ -2541,20 +2547,20 @@ async def test_batch_failure_refunds_only_one_credit_and_cleans_up_after_all_tas
     monkeypatch.setattr(generations.db_manager, "session_factory", session_maker)
 
     async with session_maker() as session:
-        await create_user(session, user_id=460, balance=10)
+        await create_user(session, user_id=460, balance=170)
         generation_ids = []
-        for _ in range(4):
+        for _ in range(10):
             generation = await GenerationRepository(session).create_generation_request(
                 user_id=460,
                 model_key="nano_banana",
                 model_endpoint="/api/v3/nano-banana",
                 prompt="Prompt",
-                settings={"num_generations": "4"},
+                settings={"num_generations": "10"},
                 status="created",
-                cost=1,
+                cost=17,
             )
             generation_ids.append(generation.id)
-        await UserRepository(session).decrease_balance(460, 4)
+        await UserRepository(session).decrease_balance(460, 170)
 
     temp_input_path = tmp_path / "batch-input.png"
     temp_input_path.write_bytes(b"input")
@@ -2567,7 +2573,7 @@ async def test_batch_failure_refunds_only_one_credit_and_cleans_up_after_all_tas
 
     class MixedWavespeedService:
         async def poll_until_complete(self, prediction_id: str, cancel_event=None, timeout_seconds=600, interval=60, **kwargs):
-            if prediction_map[prediction_id] == 1:
+            if prediction_map[prediction_id] in {1, 4, 8}:
                 raise WavespeedFailedError("failed")
             return SimpleNamespace(raw_response={"nsfw_flags": None}, outputs=[f"https://example.com/{prediction_id}.jpg"])
 
@@ -2591,16 +2597,16 @@ async def test_batch_failure_refunds_only_one_credit_and_cleans_up_after_all_tas
         chat_id=460,
         generation_predictions=generation_predictions,
         model_key="nano_banana",
-        cost=1,
+        cost=17,
         temp_input_path=str(temp_input_path),
     )
 
     async with session_maker() as session:
-        assert await get_user_balance(session, 460) == 7
+        assert await get_user_balance(session, 460) == 51
 
-    assert len(delivery_calls) == 3
+    assert len(delivery_calls) == 7
     assert temp_input_path.exists() is False
-    assert bot.messages.count("❌ Error E007: one of the generations failed. 1 credit was refunded.") == 1
+    assert bot.messages.count("❌ Error E007: one of the generations failed. Its generation cost was refunded.") == 3
 
 
 @pytest.mark.asyncio

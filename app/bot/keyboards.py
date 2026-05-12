@@ -431,16 +431,19 @@ def build_setting_options_keyboard(model: Any, setting_key: str, current_value: 
     """Построить клавиатуру вариантов значения настройки."""
     setting = model.user_settings[setting_key]
     rows = []
+    option_buttons = []
     for option_index, (value, label) in enumerate(_get_setting_options(setting.options)):
         marker = "✅ " if value == current_value else ""
-        rows.append(
-            [
-                InlineKeyboardButton(
-                    text=f"{marker}{label}",
-                    callback_data=validate_callback_length(f"gen:set:{setting_key}:{option_index}"),
-                )
-            ]
+        option_buttons.append(
+            InlineKeyboardButton(
+                text=f"{marker}{label}",
+                callback_data=validate_callback_length(f"gen:set:{setting_key}:{option_index}"),
+            )
         )
+    if setting_key == "num_generations":
+        rows.extend(option_buttons[index:index + 2] for index in range(0, len(option_buttons), 2))
+    else:
+        rows.extend([button] for button in option_buttons)
     rows.append([InlineKeyboardButton(text=get_button_text("common.back_to_settings", lang), callback_data="gen:back:settings")])
     return InlineKeyboardMarkup(inline_keyboard=rows)
 

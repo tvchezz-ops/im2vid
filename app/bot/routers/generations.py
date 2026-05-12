@@ -2954,22 +2954,19 @@ async def poll_generation_results_batch(
     temp_input_path: Optional[str] | list[str],
     generation_costs: Optional[Mapping[Any, int]] = None,
 ) -> None:
-    semaphore = asyncio.Semaphore(4)
-
     async def _run_child(generation_request_id, prediction_id: str) -> None:
-        async with semaphore:
-            await _run_single_generation_request(
-                bot=bot,
-                user_id=user_id,
-                chat_id=chat_id,
-                generation_request_id=generation_request_id,
-                prediction_id=prediction_id,
-                model_key=model_key,
-                cost=(generation_costs or {}).get(generation_request_id, cost),
-                temp_input_path=None,
-                cleanup_inputs=False,
-                use_partial_failure_message=True,
-            )
+        await _run_single_generation_request(
+            bot=bot,
+            user_id=user_id,
+            chat_id=chat_id,
+            generation_request_id=generation_request_id,
+            prediction_id=prediction_id,
+            model_key=model_key,
+            cost=(generation_costs or {}).get(generation_request_id, cost),
+            temp_input_path=None,
+            cleanup_inputs=False,
+            use_partial_failure_message=True,
+        )
 
     try:
         results = await asyncio.gather(
