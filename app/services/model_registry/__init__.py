@@ -18,6 +18,7 @@ from .base import (
     infer_generation_type_from_slug,
     infer_provider_from_url_or_slug,
     humanize_model_title,
+    is_contract_complete,
     normalize_model_key,
     normalize_generation_type,
 )
@@ -91,6 +92,7 @@ __all__ = [
     "infer_generation_type_from_slug",
     "infer_provider_from_url_or_slug",
     "humanize_model_title",
+    "is_contract_complete",
     "list_generation_models",
     "normalize_model_key",
     "normalize_generation_type",

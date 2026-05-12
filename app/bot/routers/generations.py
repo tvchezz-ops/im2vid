@@ -3291,7 +3291,7 @@ async def process_text_setting_value(message: Message, state: FSMContext):
     trial_settings[str(setting_key)] = value
     try:
         validate_model_settings(model_key, trial_settings)
-    except ValueError:
+    except ValueError as exc:
         await message.answer(format_user_error(ErrorCode.E001_INVALID_INPUT_TYPE, t("generation.invalid_value", lang), lang))
         return
     user_settings[str(setting_key)] = value
@@ -4078,7 +4078,7 @@ async def confirm_generation(callback: CallbackQuery, state: FSMContext, session
         allocated_generation_costs = allocate_generation_cost_credits(model, user_settings, num_generations)
         single_generation_cost = allocated_generation_costs[0]
 
-        if not await user_repo.decrease_balance(user.id, total_cost):
+        if user.balance < total_cost:
             log_balance_event("insufficient_balance", user.id, total_cost)
             log_generation_error(ErrorCode.E006_INSUFFICIENT_BALANCE, user_id=user.id, model_key=model_key, status="rejected")
             log_generation_diagnostic(
@@ -4101,8 +4101,6 @@ async def confirm_generation(callback: CallbackQuery, state: FSMContext, session
             await reset_generation_state(state)
             await callback.answer()
             return
-        debited_balance = True
-        log_balance_event("balance_debited", user.id, total_cost)
 
         media_urls: list[str] = []
         temp_input_paths: list[str] = []
@@ -4140,6 +4138,32 @@ async def confirm_generation(callback: CallbackQuery, state: FSMContext, session
         else:
             temp_input_path = temp_input_paths or None
         payload = build_payload(model_key, media_urls, prompt, payload_user_settings)
+
+        if not await user_repo.decrease_balance(user.id, total_cost):
+            log_balance_event("insufficient_balance", user.id, total_cost)
+            log_generation_error(ErrorCode.E006_INSUFFICIENT_BALANCE, user_id=user.id, model_key=model_key, status="rejected")
+            log_generation_diagnostic(
+                action="insufficient_balance",
+                user_id=user.id,
+                state_value=await state.get_state(),
+                state_data=state_data,
+                incoming_text_type=get_incoming_text_type(is_callback=True),
+                prompt=str(prompt or ""),
+                total_cost=total_cost,
+            )
+            await callback.message.answer(
+                format_user_error(
+                    ErrorCode.E006_INSUFFICIENT_BALANCE,
+                    t("errors.insufficient_balance_details", lang, cost=total_cost, balance=user.balance),
+                    lang,
+                ),
+                reply_markup=get_main_menu_keyboard(lang),
+            )
+            await reset_generation_state(state)
+            await callback.answer()
+            return
+        debited_balance = True
+        log_balance_event("balance_debited", user.id, total_cost)
 
         generation_costs_by_id: dict[Any, int] = {}
         for generation_cost in allocated_generation_costs:
@@ -4291,8 +4315,16 @@ async def confirm_generation(callback: CallbackQuery, state: FSMContext, session
             except Exception:
                 logger.exception("Error while refunding balance after invalid payload")
         await state.clear()
+        if str(exc) == "missing_docs_contract":
+            message_text = format_user_error(
+                ErrorCode.E011_INVALID_MODEL_SETTINGS,
+                t("errors.model_contract_unavailable", lang),
+                lang,
+            )
+        else:
+            message_text = format_user_error(ErrorCode.E011_INVALID_MODEL_SETTINGS, t("errors.invalid_model_settings", lang), lang)
         await callback.message.answer(
-            format_user_error(ErrorCode.E011_INVALID_MODEL_SETTINGS, t("errors.invalid_model_settings", lang), lang),
+            message_text,
             reply_markup=get_main_menu_keyboard(lang),
         )
         await callback.answer()

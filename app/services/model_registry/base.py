@@ -63,12 +63,14 @@ class GenerationModel:
     warning: str = ""
     required_payload_fields: tuple[str, ...] = ()
     allowed_payload_fields: tuple[str, ...] = ()
+    payload_mapping: dict[str, str] = field(default_factory=dict)
     input_requirements: dict[str, Any] = field(default_factory=dict)
     input_schema: dict[str, Any] = field(default_factory=dict)
     user_settings: dict[str, GenerationSetting] = field(default_factory=dict)
     system_settings: dict[str, Any] = field(default_factory=dict)
     base_wavespeed_price_usd: Decimal = Decimal("0.05")
     pricing_rules: dict[str, Any] | None = None
+    hidden_reason: str = ""
 
     @property
     def wavespeed_price_usd(self) -> Decimal:
@@ -160,16 +162,25 @@ MEDIA_INPUT_FIELDS = frozenset(
         "video",
         "video_url",
         "input_video",
+        "videos",
+        "video_urls",
         "audio",
         "audio_url",
         "input_audio",
         "first_frame",
         "last_frame",
+        "first_image",
+        "last_image",
+        "start_image",
+        "end_image",
         "reference_image",
         "reference_images",
+        "reference_url",
+        "reference_urls",
         "face_image",
         "source_image",
         "target_image",
+        "element_refer_list",
     }
 )
 
@@ -403,6 +414,105 @@ def _is_audio_to_video_prompt_required(slug_text: str) -> bool:
     return any(marker in slug_text for marker in ("prompt", "text", "t2v"))
 
 
+def apply_docs_input_contract(model: GenerationModel) -> GenerationModel:
+    """Derive runtime flow flags from generated docs input_requirements."""
+    requirements = build_input_requirements(model)
+    required_payload_fields = tuple(str(field_name) for field_name in model.required_payload_fields)
+
+    def is_required(input_kind: str) -> bool:
+        requirement = requirements.get(input_kind)
+        if not isinstance(requirement, Mapping):
+            return False
+        payload_field = str(requirement.get("payload_field") or "")
+        return bool(requirement.get("required")) or payload_field in required_payload_fields
+
+    image_requirement = requirements.get("images") if isinstance(requirements.get("images"), Mapping) else {}
+    video_requirement = requirements.get("video") if isinstance(requirements.get("video"), Mapping) else {}
+    audio_requirement = requirements.get("audio") if isinstance(requirements.get("audio"), Mapping) else {}
+
+    requires_prompt = is_required("prompt")
+    requires_image = is_required("images")
+    requires_video = is_required("video")
+    requires_audio = is_required("audio")
+    generation_type = normalize_generation_type(model.generation_type)
+
+    if generation_type in {"image_to_video", "image_edit", "image_to_image", "reference_to_video"} and image_requirement:
+        requires_image = True
+        image_requirement = {**dict(image_requirement), "required": True}
+        requirements["images"] = image_requirement
+    if generation_type in {"video_edit", "video_extend", "video_to_audio"} and video_requirement:
+        requires_video = True
+        video_requirement = {**dict(video_requirement), "required": True}
+        requirements["video"] = video_requirement
+    if generation_type in {"text_to_image", "text_to_video"}:
+        requires_prompt = True
+
+    input_media_field: str | None = None
+    min_images = int(image_requirement.get("min") or (1 if requires_image else model.min_images or 0)) if image_requirement else model.min_images
+    max_images = int(image_requirement.get("max") or model.max_images or (1 if requires_image else 0)) if image_requirement else model.max_images
+    supports_multiple_images = bool(model.supports_multiple_images)
+    if image_requirement and requires_image:
+        image_payload_field = str(image_requirement.get("payload_field") or "image")
+        supports_multiple_images = image_payload_field in {"images", "image_urls", "input_images", "reference_images", "reference_urls", "element_refer_list"}
+        if not supports_multiple_images:
+            max_images = 1
+        input_media_field = "images" if supports_multiple_images else "image"
+    if video_requirement and requires_video:
+        input_media_field = "video"
+
+    if requires_image and generation_type in {"text_to_image", "text_to_video"}:
+        generation_type = "image_edit" if model.outputs == "image" else "image_to_video"
+    if requires_video and generation_type in {"text_to_image", "text_to_video"}:
+        generation_type = "video_edit" if model.outputs == "video" else generation_type
+    if requires_video and requires_audio and generation_type != "lipsync":
+        generation_type = "lipsync"
+
+    allowed_fields = list(model.allowed_payload_fields)
+    for field_name in model.system_settings:
+        if field_name not in allowed_fields:
+            allowed_fields.append(field_name)
+    for requirement in (image_requirement, video_requirement, audio_requirement, requirements.get("prompt")):
+        if isinstance(requirement, Mapping) and requirement.get("payload_field"):
+            payload_field = str(requirement["payload_field"])
+            if payload_field not in allowed_fields:
+                allowed_fields.append(payload_field)
+
+    is_enabled = model.is_enabled
+    warning = model.warning
+    hidden_reason = model.hidden_reason
+    if requires_image and requires_video and not requires_audio:
+        is_enabled = False
+        warning = warning or "Model requires multiple media input types not supported by the bot flow"
+        hidden_reason = hidden_reason or "missing_docs_contract"
+    if generation_type in {"image_to_video", "image_edit", "image_to_image", "reference_to_video"} and not requires_image:
+        is_enabled = False
+        warning = warning or "Model image input contract is missing in docs"
+        hidden_reason = hidden_reason or "missing_docs_contract"
+    if generation_type in {"video_edit", "video_extend", "video_to_audio"} and not requires_video:
+        is_enabled = False
+        warning = warning or "Model video input contract is missing in docs"
+        hidden_reason = hidden_reason or "missing_docs_contract"
+
+    return replace(
+        model,
+        generation_type=generation_type,
+        requires_prompt=requires_prompt,
+        requires_image=requires_image,
+        requires_video=requires_video,
+        requires_audio=requires_audio,
+        input_media_field=input_media_field,
+        min_images=min_images,
+        max_images=max_images,
+        supports_multiple_images=supports_multiple_images,
+        is_enabled=is_enabled,
+        warning=warning,
+        hidden_reason=hidden_reason,
+        allowed_payload_fields=tuple(dict.fromkeys(allowed_fields)),
+        payload_mapping=build_payload_mapping(model),
+        input_requirements=requirements,
+    )
+
+
 def apply_deterministic_input_contract(model: GenerationModel) -> GenerationModel:
     """Enforce input requirements from generation_type/slug so docs coverage gaps stay usable."""
     slug_text = _model_slug_text(model)
@@ -500,6 +610,15 @@ def apply_deterministic_input_contract(model: GenerationModel) -> GenerationMode
     for field_name in required_fields:
         if field_name not in allowed_fields:
             allowed_fields.append(field_name)
+    payload_mapping = dict(model.payload_mapping or {})
+    if requires_prompt:
+        payload_mapping.setdefault("prompt", "prompt")
+    if requires_image and input_media_field:
+        payload_mapping.setdefault("images", input_media_field)
+    if requires_video:
+        payload_mapping.setdefault("video", "video")
+    if requires_audio:
+        payload_mapping.setdefault("audio", "audio")
 
     normalized_model = replace(
         model,
@@ -517,6 +636,7 @@ def apply_deterministic_input_contract(model: GenerationModel) -> GenerationMode
         warning=warning,
         required_payload_fields=tuple(dict.fromkeys(required_fields)),
         allowed_payload_fields=tuple(dict.fromkeys(allowed_fields)),
+        payload_mapping=payload_mapping,
     )
     return replace(normalized_model, input_requirements=build_input_requirements(normalized_model))
 
@@ -627,11 +747,16 @@ def build_model_registry(models: tuple[GenerationModel, ...]) -> dict[str, Gener
         generation_type = normalize_generation_type(generation_type)
         if generation_type != model.generation_type:
             model = replace(model, generation_type=generation_type)
-        model = apply_deterministic_input_contract(model)
+        if model.input_requirements and model.required_payload_fields and model.allowed_payload_fields:
+            model = apply_docs_input_contract(model)
+        else:
+            model = apply_deterministic_input_contract(model)
         if not model.required_payload_fields:
             model = replace(model, required_payload_fields=get_default_required_payload_fields(model))
         if not model.allowed_payload_fields:
             model = replace(model, allowed_payload_fields=get_default_allowed_payload_fields(model))
+        if not model.payload_mapping:
+            model = replace(model, payload_mapping=build_payload_mapping(model))
         if not model.input_schema:
             model = replace(model, input_schema=build_input_schema(model))
         media_user_settings = sorted(set(model.user_settings) & MEDIA_INPUT_FIELDS)
@@ -653,6 +778,7 @@ def build_model_registry(models: tuple[GenerationModel, ...]) -> dict[str, Gener
             )
             model = replace(model, input_schema=build_input_schema(model))
         model = apply_fallback_user_settings(model, allowed_was_missing=allowed_was_missing)
+        model = replace(model, payload_mapping=build_payload_mapping(model))
         model = replace(model, input_schema=build_input_schema(model))
         if model.provider not in PROVIDERS:
             raise ValueError(f"Unsupported provider '{model.provider}' for model '{model.key}'")
@@ -662,6 +788,13 @@ def build_model_registry(models: tuple[GenerationModel, ...]) -> dict[str, Gener
             )
         if model.outputs not in {"image", "video"}:
             raise ValueError(f"Unsupported outputs '{model.outputs}' for model '{model.key}'")
+        if model.is_enabled and not is_contract_complete(model):
+            model = replace(
+                model,
+                is_enabled=False,
+                warning=model.warning or "Model contract is incomplete",
+                hidden_reason=model.hidden_reason or "missing_docs_contract",
+            )
         if not model.is_enabled and not model.warning:
             model = replace(model, warning="Model is disabled")
         if model.key in registry:
@@ -813,8 +946,10 @@ def apply_generated_model_params(
             "required_fields": "required_payload_fields",
             "required_payload_fields": "required_payload_fields",
             "allowed_payload_fields": "allowed_payload_fields",
+            "payload_mapping": "payload_mapping",
             "pricing_rules": "pricing_rules",
             "docs_url": "docs_url",
+            "endpoint": "endpoint",
             "input_media_field": "input_media_field",
             "input_requirements": "input_requirements",
             "min_images": "min_images",
@@ -825,6 +960,9 @@ def apply_generated_model_params(
             "requires_video": "requires_video",
             "requires_audio": "requires_audio",
             "outputs": "outputs",
+            "is_enabled": "is_enabled",
+            "hidden_reason": "hidden_reason",
+            "warning": "warning",
         }
         for source_key, model_field in field_map.items():
             if source_key in generated:
@@ -839,6 +977,8 @@ def apply_generated_model_params(
                     elif not isinstance(prompt_requirement, Mapping):
                         input_requirements["prompt"] = {"required": bool(model.requires_prompt), "payload_field": "prompt"}
                     replace_kwargs[model_field] = input_requirements
+                elif model_field == "payload_mapping" and isinstance(raw_value, Mapping):
+                    replace_kwargs[model_field] = {str(key): str(value) for key, value in raw_value.items() if value}
                 else:
                     replace_kwargs[model_field] = raw_value
         if "base_wavespeed_price_usd" in generated:
@@ -1056,6 +1196,7 @@ def _model(
     warning: str = "",
     required_payload_fields: tuple[str, ...] = (),
     allowed_payload_fields: tuple[str, ...] = (),
+    payload_mapping: Optional[dict[str, str]] = None,
     input_schema: Optional[dict[str, Any]] = None,
     input_requirements: Optional[dict[str, Any]] = None,
     user_settings: Optional[dict[str, GenerationSetting]] = None,
@@ -1097,6 +1238,7 @@ def _model(
         warning=warning,
         required_payload_fields=required_payload_fields,
         allowed_payload_fields=allowed_payload_fields,
+        payload_mapping=payload_mapping or {},
         input_requirements=input_requirements or {},
         input_schema=input_schema or {},
         user_settings=normalized_user_settings,
@@ -1306,6 +1448,64 @@ def get_default_required_payload_fields(model: GenerationModel) -> tuple[str, ..
     return model.required_fields
 
 
+def build_payload_mapping(model: GenerationModel) -> dict[str, str]:
+    """Build logical input to provider payload field mapping."""
+    mapping = dict(model.payload_mapping or {})
+    prompt_requirement = (model.input_requirements or {}).get("prompt")
+    if isinstance(prompt_requirement, Mapping) and prompt_requirement.get("payload_field"):
+        mapping["prompt"] = str(prompt_requirement["payload_field"])
+    elif model.requires_prompt:
+        mapping.setdefault("prompt", "prompt")
+
+    image_requirement = (model.input_requirements or {}).get("images")
+    if isinstance(image_requirement, Mapping) and image_requirement.get("payload_field"):
+        mapping["images"] = str(image_requirement["payload_field"])
+    elif model.input_media_field in {"image", "images"} or model.requires_image:
+        mapping.setdefault("images", model.input_media_field or "image")
+
+    video_requirement = (model.input_requirements or {}).get("video")
+    if isinstance(video_requirement, Mapping) and video_requirement.get("payload_field"):
+        mapping["video"] = str(video_requirement["payload_field"])
+    elif model.requires_video or model.input_media_field == "video":
+        mapping.setdefault("video", "video")
+
+    audio_requirement = (model.input_requirements or {}).get("audio")
+    if isinstance(audio_requirement, Mapping) and audio_requirement.get("payload_field"):
+        mapping["audio"] = str(audio_requirement["payload_field"])
+    elif model.requires_audio:
+        mapping.setdefault("audio", "audio")
+    return mapping
+
+
+def is_contract_complete(model: GenerationModel) -> bool:
+    """Return whether a model has enough docs-derived metadata to submit safely."""
+    if not model.endpoint or not model.required_payload_fields or not model.allowed_payload_fields:
+        return False
+    mapping = build_payload_mapping(model)
+    if not mapping:
+        return False
+    requirements = build_input_requirements(model)
+    if not isinstance(requirements.get("prompt"), Mapping):
+        return False
+    allowed_fields = set(model.allowed_payload_fields)
+    source_fields = set(model.user_settings) | set(model.system_settings) | set(mapping.values())
+    for field_name in model.required_payload_fields:
+        if field_name in {"image_or_video", "text_or_audio"}:
+            continue
+        if field_name not in allowed_fields:
+            return False
+        if field_name not in source_fields:
+            return False
+    for input_kind in ("prompt", "images", "video", "audio"):
+        requirement = requirements.get(input_kind)
+        if not isinstance(requirement, Mapping) or not requirement.get("required"):
+            continue
+        payload_field = str(requirement.get("payload_field") or mapping.get(input_kind) or "")
+        if not payload_field or payload_field not in allowed_fields:
+            return False
+    return True
+
+
 def build_input_requirements(model: GenerationModel) -> dict[str, Any]:
     """Build declarative user input requirements separate from API settings."""
     if model.input_requirements:
@@ -1315,26 +1515,34 @@ def build_input_requirements(model: GenerationModel) -> dict[str, Any]:
             requirements["prompt"] = {"required": prompt_requirement, "payload_field": "prompt"}
         elif not isinstance(prompt_requirement, Mapping):
             requirements["prompt"] = {"required": bool(model.requires_prompt), "payload_field": "prompt"}
+        mapping = dict(model.payload_mapping or {})
+        for input_kind, requirement in list(requirements.items()):
+            if isinstance(requirement, Mapping):
+                normalized_requirement = dict(requirement)
+                if not normalized_requirement.get("payload_field") and input_kind in mapping:
+                    normalized_requirement["payload_field"] = mapping[input_kind]
+                requirements[input_kind] = normalized_requirement
         return requirements
 
-    requirements: dict[str, Any] = {"prompt": {"required": bool(model.requires_prompt), "payload_field": "prompt"}}
+    mapping = dict(model.payload_mapping or {})
+    requirements: dict[str, Any] = {"prompt": {"required": bool(model.requires_prompt), "payload_field": mapping.get("prompt", "prompt")}}
     if model.input_media_field in {"image", "images"} or model.requires_image:
         payload_field = model.input_media_field or ("images" if model.supports_multiple_images else "image")
         requirements["images"] = {
             "required": bool(model.requires_image),
             "min": model.min_images,
             "max": model.max_images,
-            "payload_field": payload_field,
+            "payload_field": mapping.get("images", payload_field),
         }
     if model.input_media_field == "video" or model.requires_video:
         requirements["video"] = {
             "required": bool(model.requires_video),
-            "payload_field": "video",
+            "payload_field": mapping.get("video", "video"),
         }
     if model.requires_audio:
         requirements["audio"] = {
             "required": True,
-            "payload_field": "audio",
+            "payload_field": mapping.get("audio", "audio"),
         }
     return requirements
 
@@ -1348,6 +1556,7 @@ def build_input_schema(model: GenerationModel) -> dict[str, Any]:
         "supports_multiple_images": model.supports_multiple_images,
         "required_payload_fields": list(model.required_payload_fields),
         "allowed_payload_fields": list(model.allowed_payload_fields),
+        "payload_mapping": build_payload_mapping(model),
         "input_requirements": build_input_requirements(model),
         "user_settings": {
             setting_key: {

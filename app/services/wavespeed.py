@@ -121,6 +121,20 @@ def _sanitize_debug_value(value: Any) -> Optional[str]:
     return sanitize_external_error_message(str(value))
 
 
+def _sanitize_response_summary(value: Any) -> Any:
+    if isinstance(value, dict):
+        return {
+            str(key): _sanitize_response_summary(child_value)
+            for key, child_value in value.items()
+            if str(key).lower() in {"code", "message", "error", "status", "detail", "details"}
+        }
+    if isinstance(value, list):
+        return [_sanitize_response_summary(item) for item in value[:5]]
+    if value is None or isinstance(value, (int, float, bool)):
+        return value
+    return sanitize_external_error_message(str(value))
+
+
 def has_nsfw_contents(raw_response: Dict[str, Any]) -> bool:
     """Определить наличие NSFW-флага в ответе Wavespeed."""
     nsfw_value = raw_response.get("has_nsfw_contents")
@@ -238,6 +252,19 @@ class WavespeedService:
             response.raise_for_status()
         except httpx.HTTPStatusError as exc:
             error_payload = self._safe_json(response)
+            if response.status_code in {400, 422}:
+                logger.warning(
+                    {
+                        "action": "wavespeed_submit_contract_error",
+                        "status_code": response.status_code,
+                        "model_key": model_key,
+                        "endpoint": model.endpoint,
+                        "payload_keys": sorted(payload),
+                        "required_fields": list(model.required_payload_fields),
+                        "allowed_payload_fields": list(model.allowed_payload_fields),
+                        "response_body": _sanitize_response_summary(error_payload),
+                    }
+                )
             self._log_api_event(
                 action="wavespeed_submit_error",
                 prediction_id=extract_prediction_id(error_payload),

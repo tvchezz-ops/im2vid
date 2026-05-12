@@ -396,6 +396,42 @@ async def test_confirm_generation_allows_four_generations_with_existing_active_r
 
 
 @pytest.mark.asyncio
+async def test_submit_failure_refunds_debited_credits(session_factory, monkeypatch, tmp_path) -> None:
+    class FakeTelegramFilesService:
+        def __init__(self, bot):
+            self.bot = bot
+
+        async def download_temp_file_and_get_public_url(self, file_id: str):
+            return SimpleNamespace(local_path=tmp_path / "input.png", public_url="https://example.com/input.png")
+
+    async def fake_submit_generation_request(**kwargs) -> str:
+        raise WavespeedFailedError("bad request")
+
+    monkeypatch.setattr(generations, "TelegramFilesService", FakeTelegramFilesService)
+    monkeypatch.setattr(generations, "submit_generation_request", fake_submit_generation_request)
+
+    async with session_factory() as session:
+        await create_user(session, user_id=423, balance=100)
+        state = FakeState(
+            {
+                "model_key": "nano_banana",
+                "model_title": "Nano Banana",
+                "model_endpoint": "/api/v3/nano-banana",
+                "prompt": "Make the image brighter and keep the subject intact",
+                "input_image_file_id": "telegram-file-id",
+                "user_settings": {"aspect_ratio": "1:1", "resolution": "4k", "output_format": "png", "num_generations": "1"},
+            }
+        )
+        callback = FakeCallback(user_id=423)
+
+        await generations.confirm_generation(callback, state, session)
+
+        assert await get_user_balance(session, 423) == 100
+        assert state.state is None
+        assert any("не удалось запустить генерацию" in answer for answer in callback.message.answers)
+
+
+@pytest.mark.asyncio
 async def test_choose_generation_section_shows_models_for_type() -> None:
     state = FakeState()
     message = FakeMessage(chat_id=402)
@@ -625,7 +661,7 @@ async def test_continue_after_settings_for_multi_image_model_goes_to_images_step
     assert state.state == GenerationStates.waiting_for_images
     assert message.edits[-1] == (
         "Отправьте изображения для модели Google Nano Banana Pro Edit Ultra.\n"
-        "Можно загрузить от 1 до 14 файлов.\n"
+        "Можно загрузить от 1 до 10 файлов.\n"
         "После загрузки нажмите ✅ Продолжить."
     )
 
@@ -671,14 +707,14 @@ async def test_process_generation_images_appends_uploaded_media(monkeypatch) -> 
     assert state.data["input_media_paths"] == ["/tmp/photo-file-id.png"]
     assert state.data["input_media_file_ids"] == ["photo-file-id"]
     assert state.data["input_media_items"][0]["public_url"] == "https://example.com/photo-file-id.png"
-    assert "Загружено 1 из 14." in message.answers[-1]
+    assert "Загружено 1 из 10." in message.answers[-1]
 
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
     ("model_key", "model_title", "max_images_text"),
     [
-        ("nano_banana", "Google Nano Banana Pro Edit Ultra", "1 из 14"),
+        ("nano_banana", "Google Nano Banana Pro Edit Ultra", "1 из 10"),
         ("seedream", "Bytedance Seedream V4.5 Edit", "1 из 10"),
     ],
 )
@@ -1242,7 +1278,7 @@ def test_settings_screen_shows_generated_or_fallback_settings_without_media_fiel
     assert "Audio:" not in kling_text
     assert "Аудио:" not in kling_text
     assert "Длительность" in wan_text or "Разрешение" in wan_text
-    assert "Режим" in veo_text or "Качество" in veo_text
+    assert "Разрешение" in veo_text or "Режим" in veo_text or "Качество" in veo_text
     assert "The duration of the generated media" not in wan_text
 
 @pytest.mark.asyncio
@@ -1662,8 +1698,6 @@ async def test_confirm_generation_reuses_uploaded_multi_image_items(session_fact
                 "aspect_ratio": "1:1",
                 "resolution": "4k",
                 "output_format": "png",
-                "enable_sync_mode": False,
-                "enable_base64_output": False,
             }
             assert captured["prediction_id"] == "pred-102"
             assert captured["temp_input_path"] == [str(first_path), str(second_path)]

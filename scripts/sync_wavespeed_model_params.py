@@ -3,9 +3,12 @@
 from __future__ import annotations
 
 import argparse
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime, timezone
+import html
 from pathlib import Path
 from pprint import pformat
+import re
 import ssl
 import sys
 from typing import Any
@@ -17,7 +20,7 @@ if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
 from app.services.model_docs_parser import ModelDocsField, parse_model_docs
-from app.services.model_registry import list_generation_models
+from app.services.model_registry import ALL_GENERATION_MODELS, apply_generated_model_params, build_model_registry, is_contract_complete, normalize_model_key
 from app.services.model_registry.generated_params import GENERATED_MODEL_PARAMS
 
 
@@ -43,18 +46,48 @@ MEDIA_INPUT_FIELDS = {
     "video",
     "video_url",
     "input_video",
+    "videos",
+    "video_urls",
     "audio",
     "audio_url",
     "input_audio",
     "first_frame",
     "last_frame",
+    "first_image",
+    "last_image",
+    "start_image",
+    "end_image",
     "reference_image",
     "reference_images",
+    "reference_url",
+    "reference_urls",
     "face_image",
     "source_image",
     "target_image",
+    "element_refer_list",
 }
 REQUIRED_MEDIA_FIELDS = {"prompt", "text", "image_or_video", "text_or_audio", *MEDIA_INPUT_FIELDS}
+USER_SETTING_ALLOWLIST = {
+    "duration",
+    "resolution",
+    "size",
+    "aspect_ratio",
+    "quality",
+    "mode",
+    "negative_prompt",
+    "strength",
+    "guidance_scale",
+    "guidance",
+    "fps",
+    "motion_strength",
+    "camera_control",
+    "output_format",
+    "watermark",
+    "style",
+    "shot_type",
+    "enable_audio",
+}
+ENDPOINT_RE = re.compile(r'https://api\.wavespeed\.ai/api/v3/[^"\s\\<&]+')
 
 
 def fetch_docs(url: str) -> str:
@@ -97,7 +130,32 @@ def _is_user_visible_field(field: ModelDocsField) -> bool:
         return False
     if field.name in REQUIRED_MEDIA_FIELDS:
         return False
-    return True
+    return field.name in USER_SETTING_ALLOWLIST
+
+
+def _extract_endpoint(page_content: str, fallback_endpoint: str) -> str:
+    match = ENDPOINT_RE.search(html.unescape(page_content or ""))
+    if match:
+        return match.group(0).rstrip("'")
+    return fallback_endpoint
+
+
+def _endpoint_matches_model(endpoint: str, model_key: str) -> bool:
+    endpoint_key = normalize_model_key(endpoint.rstrip("/").rsplit("/api/v3/", 1)[-1])
+    return endpoint_key.endswith(model_key) or model_key.endswith(endpoint_key)
+
+
+def _extract_file_types(description: str) -> list[str]:
+    return sorted(set(re.findall(r"\.(?:mp3|wav|m4a|aac|mp4|mov|webm|avi|mkv|m4v|jpg|jpeg|png|webp)", description or "", flags=re.IGNORECASE)))
+
+
+def _build_payload_mapping(input_requirements: dict[str, Any]) -> dict[str, str]:
+    mapping: dict[str, str] = {}
+    for input_kind in ("prompt", "images", "video", "audio"):
+        requirement = input_requirements.get(input_kind)
+        if isinstance(requirement, dict) and requirement.get("payload_field"):
+            mapping[input_kind] = str(requirement["payload_field"])
+    return mapping
 
 
 def _first_present_field(fields: list[ModelDocsField], candidates: tuple[str, ...]) -> str | None:
@@ -125,26 +183,34 @@ def _build_input_requirements(model: Any, fields: list[ModelDocsField]) -> dict[
             "image_urls",
             "input_images",
             "reference_images",
+            "reference_urls",
             "image",
             "image_url",
             "input_image",
             "reference_image",
+            "reference_url",
             "first_frame",
+            "first_image",
+            "start_image",
+            "last_frame",
+            "last_image",
+            "end_image",
             "face_image",
             "source_image",
             "target_image",
+            "element_refer_list",
         ),
     )
     if image_field:
-        is_multi = image_field in {"images", "image_urls", "input_images", "reference_images"}
+        is_multi = image_field in {"images", "image_urls", "input_images", "reference_images", "reference_urls", "element_refer_list"}
         requirements["images"] = {
             "required": image_field in required_names,
             "min": int(getattr(model, "min_images", 0) or (1 if image_field in required_names else 0)),
-            "max": int(getattr(model, "max_images", 0) or (10 if is_multi else 1)),
+            "max": int((getattr(model, "max_images", 0) if is_multi else 0) or (10 if is_multi else 1)),
             "payload_field": image_field,
         }
 
-    video_field = _first_present_field(fields, ("video", "video_url", "input_video"))
+    video_field = _first_present_field(fields, ("video", "video_url", "input_video", "videos", "video_urls"))
     if video_field:
         requirements["video"] = {"required": video_field in required_names, "payload_field": video_field}
 
@@ -154,6 +220,9 @@ def _build_input_requirements(model: Any, fields: list[ModelDocsField]) -> dict[
         description = (field_by_name[audio_field].description or "").lower()
         if "5mb" in description or "5 mb" in description:
             requirement["max_size_mb"] = 5
+        file_types = _extract_file_types(description)
+        if file_types:
+            requirement["file_types"] = file_types
         requirements["audio"] = requirement
     return requirements
 
@@ -162,6 +231,8 @@ def _generated_entry(model: Any, page_content: str, synced_at: str) -> dict[str,
     existing_entry = dict(GENERATED_MODEL_PARAMS.get(model.key, {}))
     schema = parse_model_docs(page_content)
     fields = list(schema.fields)
+    if not fields:
+        raise ValueError("no request fields parsed from docs")
     required_fields: list[str] = []
     allowed_fields: list[str] = []
     user_settings: dict[str, dict[str, Any]] = {}
@@ -185,6 +256,10 @@ def _generated_entry(model: Any, page_content: str, synced_at: str) -> dict[str,
     if not allowed_fields:
         allowed_fields = list(model.allowed_payload_fields)
     input_requirements = _build_input_requirements(model, fields)
+    payload_mapping = _build_payload_mapping(input_requirements)
+    endpoint = _extract_endpoint(page_content, model.endpoint)
+    if not _endpoint_matches_model(endpoint, model.key):
+        endpoint = model.endpoint
 
     preserved_keys = {
         key: existing_entry[key]
@@ -205,13 +280,26 @@ def _generated_entry(model: Any, page_content: str, synced_at: str) -> dict[str,
     }
     return {
         **preserved_keys,
+        "endpoint": endpoint,
         "allowed_payload_fields": sorted(dict.fromkeys(allowed_fields)),
         "docs_url": model.docs_url,
         "last_synced_at": synced_at,
+        "payload_mapping": payload_mapping,
         "required_fields": sorted(dict.fromkeys(required_fields)),
         "input_requirements": input_requirements,
         "system_settings": dict(sorted(system_settings.items())),
         "user_settings": dict(sorted(user_settings.items())),
+    }
+
+
+def _disabled_entry(model: Any, synced_at: str, reason: str) -> dict[str, Any]:
+    return {
+        "docs_url": model.docs_url,
+        "endpoint": model.endpoint,
+        "hidden_reason": reason,
+        "is_enabled": False,
+        "last_synced_at": synced_at,
+        "warning": "Model disabled because docs contract could not be parsed",
     }
 
 
@@ -239,8 +327,10 @@ def render_generated_params(entries: dict[str, dict[str, Any]]) -> str:
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Sync Wavespeed docs request parameters into generated_params.py")
+    parser.add_argument("--all", action="store_true", help="Sync every enabled base model with docs_url.")
     parser.add_argument("--only", action="append", default=[], help="Model key to sync. Can be repeated or comma-separated.")
     parser.add_argument("--debug", action="store_true", help="Print extraction details for synced models.")
+    parser.add_argument("--workers", type=int, default=12, help="Maximum concurrent docs fetches for --all sync.")
     parser.add_argument("--fail-under-coverage", type=float, default=0.6, help="Fail if docs params coverage is below this ratio.")
     parser.add_argument("--allow-low-coverage", action="store_true", help="Do not fail when docs params coverage is below threshold.")
     return parser.parse_args()
@@ -253,6 +343,17 @@ def _selected_model_keys(raw_values: list[str]) -> set[str]:
     return keys
 
 
+def _sync_one_model(model: Any, synced_at: str) -> tuple[Any, dict[str, Any], set[str], list[str], Exception | None]:
+    try:
+        page_content = fetch_docs(model.docs_url)
+        entry = _generated_entry(model, page_content, synced_at)
+        parsed_fields = {field.name for field in parse_model_docs(page_content).fields}
+        skipped_internal_fields = sorted(parsed_fields & INTERNAL_FIELDS)
+        return model, entry, parsed_fields, skipped_internal_fields, None
+    except Exception as exc:
+        return model, _disabled_entry(model, synced_at, "missing_docs_contract"), set(), [], exc
+
+
 def main() -> None:
     args = parse_args()
     selected_keys = _selected_model_keys(args.only)
@@ -261,9 +362,10 @@ def main() -> None:
     failed_extractions: list[str] = []
     parsed_successfully: set[str] = set()
     docs_params_keys: set[str] = set()
+    base_models = [model for model in ALL_GENERATION_MODELS if model.is_enabled]
     models = [
         model
-        for model in sorted(list_generation_models(), key=lambda item: item.key)
+        for model in sorted(base_models, key=lambda item: item.key)
         if not selected_keys or model.key in selected_keys
     ]
     missing_keys = selected_keys - {model.key for model in models}
@@ -271,28 +373,32 @@ def main() -> None:
         print(f"WARN: unknown model key requested: {missing_key}", file=sys.stderr)
         failed_extractions.append(missing_key)
 
-    for model in models:
-        if not model.docs_url:
-            continue
-        print(f"Fetching {model.key}: {model.docs_url}")
-        try:
-            page_content = fetch_docs(model.docs_url)
-            entry = _generated_entry(model, page_content, synced_at)
-            parsed_fields = {field.name for field in parse_model_docs(page_content).fields}
-            skipped_internal_fields = sorted(parsed_fields & INTERNAL_FIELDS)
-            if not entry.get("user_settings") and not entry.get("input_requirements"):
-                print(f"WARN: no_docs_params_extracted model_key={model.key}", file=sys.stderr)
-                failed_extractions.append(model.key)
+    docs_models = [model for model in models if model.docs_url]
+    workers = max(1, min(int(args.workers), len(docs_models) or 1))
+    with ThreadPoolExecutor(max_workers=workers) as executor:
+        future_by_key = {
+            executor.submit(_sync_one_model, model, synced_at): model.key
+            for model in docs_models
+        }
+        for future in as_completed(future_by_key):
+            model, entry, parsed_fields, skipped_internal_fields, exc = future.result()
+            if exc is None:
+                print(f"Parsed {model.key}: {model.docs_url}")
+                if not entry.get("user_settings") and not entry.get("input_requirements"):
+                    print(f"WARN: no_docs_params_extracted model_key={model.key}", file=sys.stderr)
+                    failed_extractions.append(model.key)
+                    entry = _disabled_entry(model, synced_at, "missing_docs_contract")
+                else:
+                    parsed_successfully.add(model.key)
+                if len(dict(entry.get("user_settings", {}))) > 0:
+                    docs_params_keys.add(model.key)
+                entries[model.key] = entry
+                if args.debug:
+                    _debug_entry(model, entry, skipped_internal_fields)
             else:
-                parsed_successfully.add(model.key)
-            if len(dict(entry.get("user_settings", {}))) > 0:
-                docs_params_keys.add(model.key)
-            entries[model.key] = entry
-            if args.debug:
-                _debug_entry(model, entry, skipped_internal_fields)
-        except Exception as exc:
-            print(f"WARN: failed to sync {model.key}: {exc}", file=sys.stderr)
-            failed_extractions.append(model.key)
+                print(f"WARN: failed to sync {model.key}: {exc}", file=sys.stderr)
+                failed_extractions.append(model.key)
+                entries[model.key] = entry
 
     OUTPUT_PATH.write_text(render_generated_params(entries), encoding="utf-8")
     print(f"Wrote {OUTPUT_PATH.relative_to(ROOT)} with {len(entries)} model entries")
@@ -301,14 +407,27 @@ def main() -> None:
     models_with_more_than_one_user_setting = sum(1 for entry in synced_entries if len(dict(entry.get("user_settings", {}))) > 1)
     models_with_only_fallback = total_models - len(docs_params_keys)
     coverage = (len(docs_params_keys) / total_models) if total_models else 1.0
+    synced_model_keys = {model.key for model in models}
+    synced_base_models = tuple(model for model in ALL_GENERATION_MODELS if model.key in synced_model_keys)
+    synced_registry = build_model_registry(apply_generated_model_params(synced_base_models, entries))
+    full_contract_count = sum(1 for model in synced_registry.values() if model.is_enabled and is_contract_complete(model))
+    disabled_contract_count = sum(
+        1
+        for entry in synced_entries
+        if entry.get("is_enabled") is False and entry.get("hidden_reason") == "missing_docs_contract"
+    )
     print(f"Total models: {total_models}")
     print(f"Models parsed successfully: {len(parsed_successfully)}")
+    print(f"Parsed ok: {len(parsed_successfully)}")
+    print(f"Parsed failed: {len(failed_extractions)}")
+    print(f"Models with full contract: {full_contract_count}")
+    print(f"Models disabled because contract missing: {disabled_contract_count}")
     print(f"Models with >1 user setting: {models_with_more_than_one_user_setting}")
     print(f"Models with only fallback: {models_with_only_fallback}")
     print(f"Failed docs: {len(failed_extractions)}")
     print(f"Sample failed keys: {', '.join(failed_extractions[:20])}")
     print(f"Docs params coverage: {coverage:.3f}")
-    if failed_extractions:
+    if failed_extractions and not args.allow_low_coverage:
         raise SystemExit(1)
     if not args.allow_low_coverage and coverage < args.fail_under_coverage:
         print(

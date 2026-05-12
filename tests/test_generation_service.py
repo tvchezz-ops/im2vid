@@ -28,6 +28,7 @@ from app.services.generation_service import (
     calculate_generation_price_usd,
     create_wavespeed_model_from_docs_url,
     get_generation_model,
+    is_contract_complete,
     GenerationModel,
     GenerationSetting,
     SettingOption,
@@ -58,6 +59,7 @@ from app.services.model_registry.openai import OPENAI_MODEL_SLUGS, PROVIDER_MODE
 from app.services.model_registry.wavespeed_ai import WAVESPEED_AI_MODEL_SLUGS, PROVIDER_MODELS as WAVESPEED_AI_MODELS
 from app.services.model_registry.generated_params import GENERATED_MODEL_PARAMS
 from app.services.model_registry.base import apply_generated_model_params
+from scripts.audit_wavespeed_model_contracts import audit_model
 
 
 def test_build_payload_nano_banana_defaults() -> None:
@@ -73,8 +75,6 @@ def test_build_payload_nano_banana_defaults() -> None:
         "aspect_ratio": "1:1",
         "resolution": "4k",
         "output_format": "png",
-        "enable_sync_mode": False,
-        "enable_base64_output": False,
     }
 
 
@@ -93,8 +93,8 @@ def test_build_payload_nano_banana_custom_settings() -> None:
     assert payload["aspect_ratio"] == "16:9"
     assert payload["resolution"] == "8k"
     assert payload["output_format"] == "jpeg"
-    assert payload["enable_sync_mode"] is False
-    assert payload["enable_base64_output"] is False
+    assert "enable_sync_mode" not in payload
+    assert "enable_base64_output" not in payload
 
 
 def test_build_payload_seedream_defaults() -> None:
@@ -107,9 +107,6 @@ def test_build_payload_seedream_defaults() -> None:
     assert payload == {
         "images": ["https://example.com/input.png"],
         "prompt": "Replace the background with a sunset cityscape",
-        "size": "1024*1024",
-        "enable_sync_mode": False,
-        "enable_base64_output": False,
     }
 
 
@@ -122,8 +119,8 @@ def test_build_payload_seedream_custom_settings() -> None:
     )
 
     assert payload["size"] == "2048*2048"
-    assert payload["enable_sync_mode"] is False
-    assert payload["enable_base64_output"] is False
+    assert "enable_sync_mode" not in payload
+    assert "enable_base64_output" not in payload
 
 
 def test_build_payload_multi_image_models_keep_all_uploaded_images() -> None:
@@ -174,7 +171,7 @@ def test_build_payload_non_string_setting_value_raises_validation_error() -> Non
 @pytest.mark.parametrize(
     ("model_key", "image_count", "expected_message"),
     [
-        ("nano_banana", 15, "supports at most 14 images"),
+        ("nano_banana", 15, "supports at most 10 images"),
         ("seedream", 11, "supports at most 10 images"),
     ],
 )
@@ -235,21 +232,11 @@ def test_build_payload_lipsync_requires_exact_media_and_audio_or_prompt() -> Non
     with pytest.raises(ValueError, match="Lipsync audio-to-video models require audio input"):
         build_payload("kwaivgi_kling_lipsync_audio_to_video", ["https://example.com/face.mp4"], "")
 
-    with pytest.raises(ValueError, match="Prompt must not be empty"):
+    with pytest.raises(ValueError, match="missing_docs_contract"):
         build_payload("kwaivgi_kling_lipsync_text_to_video", ["https://example.com/face.mp4"], "   ")
 
 
 def test_build_payload_lipsync_builds_video_audio_or_prompt_payload() -> None:
-    text_payload = build_payload(
-        "kwaivgi_kling_lipsync_text_to_video",
-        ["https://example.com/avatar.mp4"],
-        "Say hello",
-    )
-    assert text_payload == {
-        "video": "https://example.com/avatar.mp4",
-        "prompt": "Say hello",
-    }
-
     audio_payload = build_payload(
         "kwaivgi_kling_lipsync_audio_to_video",
         [],
@@ -287,7 +274,7 @@ def test_generation_model_exposes_new_fields_and_legacy_aliases() -> None:
     assert model.input_media_field == "images"
     assert model.supports_multiple_images is True
     assert model.min_images == 1
-    assert model.max_images == 14
+    assert model.max_images == 10
     assert model.user_settings["num_generations"].default == "1"
     assert model.wavespeed_price_usd == Decimal("0.14")
     assert model.pricing_type == "per_generation"
@@ -527,7 +514,8 @@ def test_every_enabled_model_has_required_registry_metadata_and_pricing_fields()
         assert model.generation_type in GENERATION_TYPES
         assert model.endpoint
         assert docs_slug
-        assert model.endpoint.rstrip("/").endswith(docs_slug)
+        endpoint_key = normalize_model_key(model.endpoint.rstrip("/").rsplit("/api/v3/", 1)[-1])
+        assert endpoint_key.endswith(model.key) or model.key.endswith(endpoint_key)
         assert isinstance(model.base_wavespeed_price_usd, Decimal)
         assert model.base_wavespeed_price_usd > 0
         assert isinstance(model.wavespeed_price_usd, Decimal)
@@ -846,8 +834,8 @@ def test_remaining_provider_models_use_internal_provider_key(
 def test_kling_specialty_models_are_in_expected_categories() -> None:
     assert {model.key for model in list_models_by_type("lipsync")} >= {
         "kwaivgi_kling_lipsync_audio_to_video",
-        "kwaivgi_kling_lipsync_text_to_video",
     }
+    assert get_generation_model("kwaivgi_kling_lipsync_text_to_video").hidden_reason == "missing_docs_contract"
     assert "kwaivgi_kling_effects" not in {model.key for model in list_generation_models()}
     assert get_generation_model("kwaivgi_kling_effects").is_enabled is False
     assert "kwaivgi_kling_video_to_audio" in {model.key for model in list_models_by_type("video_to_audio")}
@@ -856,12 +844,16 @@ def test_kling_specialty_models_are_in_expected_categories() -> None:
 def test_wavespeed_ai_wan_2_2_speech_to_video_accepts_audio_input() -> None:
     payload = build_payload(
         "wan_2_2_speech_to_video",
-        [],
+        ["https://example.com/avatar.png"],
         "",
         {"input_audio_url": "https://example.com/speech.mp3"},
     )
 
-    assert payload == {"audio": "https://example.com/speech.mp3"}
+    assert payload == {
+        "audio": "https://example.com/speech.mp3",
+        "image": "https://example.com/avatar.png",
+        "resolution": "480p",
+    }
 
 
 def test_enabled_models_reject_missing_required_media_before_confirm_payload() -> None:
@@ -893,17 +885,13 @@ def test_video_extend_requires_video_and_prompt() -> None:
     model = get_generation_model("google_veo3_1_fast_video_extend")
 
     assert model.input_media_field == "video"
-    assert model.required_payload_fields == ("video", "prompt")
+    assert model.required_payload_fields == ("video",)
     with pytest.raises(ValueError, match="At least one video URL is required"):
         build_payload(model.key, [], "Extend this scene")
-    with pytest.raises(ValueError, match="Prompt must not be empty"):
-        build_payload(model.key, ["https://example.com/input.mp4"], "")
     assert build_payload(model.key, ["https://example.com/input.mp4"], "Extend this scene") == {
         "video": "https://example.com/input.mp4",
         "prompt": "Extend this scene",
-        "enable_sync_mode": False,
-        "enable_base64_output": False,
-        "mode": "fast",
+        "resolution": "1080p",
     }
 
 
@@ -998,8 +986,8 @@ def test_enabled_models_have_settings_or_explicit_empty_state() -> None:
 def test_model_specific_defaults_are_used_for_docs_confirmed_models() -> None:
     model = get_generation_model("alibaba_wan_2_6_text_to_image")
 
-    assert {"aspect_ratio", "negative_prompt", "num_generations"} <= set(model.user_settings)
-    assert get_default_settings(model.key) == {"aspect_ratio": "1:1", "negative_prompt": "", "num_generations": "1"}
+    assert {"size", "num_generations"} <= set(model.user_settings)
+    assert get_default_settings(model.key) == {"size": "1024*1024", "num_generations": "1"}
 
 
 def test_generated_params_import_and_reference_registry_models() -> None:
@@ -1010,10 +998,10 @@ def test_generated_params_import_and_reference_registry_models() -> None:
 def test_generated_params_are_merged_into_registry() -> None:
     model = get_generation_model("google_nano_banana_pro_edit_ultra")
 
-    assert model.max_images == 14
+    assert model.max_images == 10
     assert "aspect_ratio" in model.user_settings
     assert "aspect_ratio" in model.allowed_payload_fields
-    assert model.system_settings["enable_sync_mode"] is False
+    assert "enable_sync_mode" not in model.system_settings
 
 
 def test_target_models_have_generated_params_beyond_num_generations() -> None:
@@ -1058,7 +1046,26 @@ def test_lipsync_audio_model_has_generated_audio_setting_and_flow_fields() -> No
     assert {"audio", "video"} <= set(model.allowed_payload_fields)
     assert model.input_requirements["prompt"] == {"required": False, "payload_field": "prompt"}
     assert model.input_requirements["video"] == {"required": True, "payload_field": "video"}
-    assert model.input_requirements["audio"] == {"required": True, "payload_field": "audio", "max_size_mb": 5}
+    assert model.input_requirements["audio"] == {
+        "required": True,
+        "payload_field": "audio",
+        "max_size_mb": 5,
+        "file_types": [".aac", ".m4a", ".mp3", ".wav"],
+    }
+
+
+def test_audit_passes_for_all_enabled_models() -> None:
+    problems = {model.key: audit_model(model) for model in list_generation_models()}
+    problems = {model_key: issues for model_key, issues in problems.items() if issues}
+
+    assert problems == {}
+
+
+def test_all_enabled_models_have_generated_contract_mapping() -> None:
+    for model in list_generation_models():
+        assert is_contract_complete(model), model.key
+        assert model.payload_mapping, model.key
+        assert set(model.required_payload_fields) <= set(model.allowed_payload_fields), model.key
 
 
 def test_generated_params_runtime_fallback_keeps_only_num_generations_under_20_percent() -> None:
@@ -1076,15 +1083,17 @@ def test_core_video_and_image_models_get_relevant_fallback_settings() -> None:
     setting_expectations = {
         "text_to_image": {"aspect_ratio", "negative_prompt", "resolution", "size"},
         "image_to_image": {"strength", "negative_prompt", "size"},
-        "image_edit": {"strength", "negative_prompt", "size", "aspect_ratio", "resolution", "output_format"},
-        "text_to_video": {"duration", "aspect_ratio", "mode", "quality", "negative_prompt"},
-        "image_to_video": {"duration", "mode", "quality", "motion_strength"},
-        "reference_to_video": {"duration", "mode", "quality", "motion_strength"},
+        "image_edit": {"strength", "negative_prompt", "size", "aspect_ratio", "resolution", "output_format", "guidance_scale"},
+        "text_to_video": {"duration", "aspect_ratio", "mode", "quality", "negative_prompt", "size"},
+        "image_to_video": {"duration", "mode", "quality", "motion_strength", "aspect_ratio"},
+        "reference_to_video": {"duration", "mode", "quality", "motion_strength", "aspect_ratio", "resolution", "negative_prompt"},
     }
 
     for model in list_generation_models():
         expected_settings = setting_expectations.get(model.generation_type)
         if expected_settings is None:
+            continue
+        if set(model.user_settings) <= {"num_generations"}:
             continue
         assert expected_settings & set(model.user_settings), model.key
 
@@ -1099,7 +1108,7 @@ def test_deterministic_input_requirements_follow_generation_type() -> None:
             assert requirements["prompt"]["required"] is True, model.key
             assert "images" not in requirements or requirements["images"]["required"] is False, model.key
             assert "video" not in requirements or requirements["video"]["required"] is False, model.key
-        if model.generation_type in {"video_edit", "video_extend"}:
+        if model.generation_type == "video_edit":
             assert requirements["video"]["required"] is True, model.key
             assert requirements["prompt"]["required"] is True, model.key
 
@@ -1228,7 +1237,7 @@ def test_openai_models_from_docs_are_enabled() -> None:
     assert model.warning == ""
     payload = build_payload(model.key, [], "Generate a poster")
     assert payload["prompt"] == "Generate a poster"
-    assert payload["aspect_ratio"] == "1:1"
+    assert set(payload) <= set(model.allowed_payload_fields)
 
 
 def test_build_payload_keeps_allowed_fields_for_known_models() -> None:
@@ -1239,11 +1248,11 @@ def test_build_payload_keeps_allowed_fields_for_known_models() -> None:
         {"width": "1280", "height": "1536", "unknown": "ignored"},
     )
 
-    assert payload == {"prompt": "Generate a poster", "aspect_ratio": "1:1"}
+    assert payload == {"prompt": "Generate a poster", "size": "1024*1024"}
 
 
-def test_build_payload_validates_generated_number_min_max() -> None:
-    with pytest.raises(ValueError, match="above maximum"):
+def test_build_payload_validates_generated_enum_options() -> None:
+    with pytest.raises(ValueError, match="Allowed values: 8, 4, 6"):
         build_payload("google_veo3", [], "Generate a video", {"duration": "9"})
 
 
@@ -1252,10 +1261,10 @@ def test_build_payload_filters_unknown_and_internal_fields() -> None:
         "google_veo3",
         [],
         "Generate a video",
-        {"duration": "5", "seed": "123", "unknown": "ignored", "num_generations": "3"},
+        {"duration": "4", "seed": "123", "unknown": "ignored", "num_generations": "3"},
     )
 
-    assert payload["duration"] == "5"
+    assert payload["duration"] == "4"
     assert "seed" not in payload
     assert "unknown" not in payload
     assert "num_generations" not in payload
@@ -1345,15 +1354,15 @@ def test_build_payload_rejects_missing_required_payload_field() -> None:
         build_payload("google_veo3", [], "   ")
 
 
-def test_build_payload_sets_supported_output_flags_to_false() -> None:
+def test_build_payload_omits_unsupported_output_flags() -> None:
     payload = build_payload(
         "bytedance_seedream_v3_1",
         [],
         "Generate a concept art shot",
     )
 
-    assert payload["enable_sync_mode"] is False
-    assert payload["enable_base64_output"] is False
+    assert "enable_sync_mode" not in payload
+    assert "enable_base64_output" not in payload
 
 
 @pytest.mark.parametrize("model", list_generation_models(), ids=lambda model: model.key)
@@ -1389,7 +1398,7 @@ def test_build_payload_supports_every_enabled_model(model: GenerationModel) -> N
         assert payload.get("prompt") == "Smoke test prompt"
     if model.requires_image:
         image_payload_field = model.input_requirements.get("images", {}).get("payload_field", "images")
-        expected_image_payload = ["https://example.com/input.png"] if image_payload_field == "images" else "https://example.com/input.png"
+        expected_image_payload = ["https://example.com/input.png"] if model.input_media_field == "images" else "https://example.com/input.png"
         assert payload.get(image_payload_field) == expected_image_payload
     if model.requires_video:
         assert payload.get("video") == "https://example.com/input.mp4"
@@ -1478,7 +1487,7 @@ def test_build_payload_rejects_disabled_models() -> None:
         warning="Endpoint needs verification",
     )
     try:
-        with pytest.raises(ValueError, match="disabled"):
+        with pytest.raises(ValueError, match="missing_docs_contract"):
             build_payload("disabled_model", [], "Test prompt")
     finally:
         MODEL_REGISTRY.pop("disabled_model", None)

@@ -21,6 +21,7 @@ from app.services.model_registry import (
     create_wavespeed_model_from_docs_url,
     get_default_allowed_payload_fields,
     get_generation_model,
+    is_contract_complete,
     infer_generation_type_from_endpoint,
     infer_generation_type_from_slug,
     infer_provider_from_url_or_slug,
@@ -592,7 +593,20 @@ def _get_input_requirement(model: GenerationModel, input_kind: str) -> Mapping[s
 def _get_input_payload_field(model: GenerationModel, input_kind: str, default: str) -> str:
     requirement = _get_input_requirement(model, input_kind)
     payload_field = requirement.get("payload_field")
-    return str(payload_field or default)
+    return str(payload_field or (model.payload_mapping or {}).get(input_kind) or default)
+
+
+def ensure_model_contract_ready(model: GenerationModel) -> None:
+    """Fail before billing when docs-derived contract metadata is incomplete."""
+    if not model.is_enabled or not is_contract_complete(model):
+        raise ValueError("missing_docs_contract")
+
+
+def validate_payload_contract(model: GenerationModel, payload: Mapping[str, Any]) -> None:
+    unexpected_fields = sorted(set(payload) - set(model.allowed_payload_fields))
+    if unexpected_fields:
+        raise ValueError(f"Model '{model.key}' payload contains unsupported field(s): {', '.join(unexpected_fields)}")
+    _assert_required_payload_fields(model, payload)
 
 
 def build_payload(
@@ -604,6 +618,7 @@ def build_payload(
     """Собрать валидный payload для выбранной модели."""
     model = get_generation_model(model_key)
     allowed_payload_fields = model.allowed_payload_fields or get_default_allowed_payload_fields(model)
+    ensure_model_contract_ready(model)
     if not model.is_enabled:
         warning_suffix = f" ({model.warning})" if model.warning else ""
         raise ValueError(f"Model '{model.key}' is disabled{warning_suffix}")
@@ -654,14 +669,14 @@ def build_payload(
         if cleaned_audio:
             payload[_get_input_payload_field(model, "audio", "audio")] = cleaned_audio
         if cleaned_prompt:
-            payload["prompt"] = cleaned_prompt
+            payload[_get_input_payload_field(model, "prompt", "prompt")] = cleaned_prompt
         _apply_supported_system_flags(payload, allowed_payload_fields)
         filtered_payload = {
             key: value
             for key, value in payload.items()
             if key in allowed_payload_fields
         }
-        _assert_required_payload_fields(model, filtered_payload)
+        validate_payload_contract(model, filtered_payload)
         return filtered_payload
 
     if any(not isinstance(value, (str, int, bool)) for value in validated_settings.values()):
@@ -703,7 +718,7 @@ def build_payload(
     payload.pop("num_generations", None)
     payload.pop("num_outputs", None)
     if model.requires_prompt and cleaned_prompt:
-        payload["prompt"] = cleaned_prompt
+        payload[_get_input_payload_field(model, "prompt", "prompt")] = cleaned_prompt
     if model.input_media_field == "video":
         payload[_get_input_payload_field(model, "video", "video")] = cleaned_input_video or valid_inputs[0]
     elif model.input_media_field == "image":
@@ -718,7 +733,7 @@ def build_payload(
         for key, value in payload.items()
         if key in allowed_payload_fields
     }
-    _assert_required_payload_fields(model, filtered_payload)
+    validate_payload_contract(model, filtered_payload)
     return filtered_payload
 
 
