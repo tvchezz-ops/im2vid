@@ -17,6 +17,7 @@ from app.bot.keyboards import (
     build_back_to_settings_reply_keyboard,
     build_generation_confirm_keyboard,
     build_generation_sections_keyboard,
+    build_generation_summary_keyboard,
     build_main_menu_keyboard,
     build_model_settings_keyboard,
     build_models_keyboard,
@@ -43,6 +44,17 @@ def _iter_buttons(markup):
 
 def _iter_callback_data(markup) -> list[str]:
     return [button.callback_data for button in _iter_buttons(markup) if button.callback_data is not None]
+
+
+def test_build_generation_summary_keyboard_contains_only_repeat_button() -> None:
+    keyboard = build_generation_summary_keyboard("12345678-1234-1234-1234-123456789abc", "en")
+
+    assert len(keyboard.inline_keyboard) == 1
+    assert len(keyboard.inline_keyboard[0]) == 1
+    button = keyboard.inline_keyboard[0][0]
+    assert button.text == "🔁 Repeat"
+    assert button.callback_data == "gen:repeat:12345678-1234-1234-1234-123456789abc"
+    validate_callback_length(button.callback_data)
 
 
 def test_build_generation_sections_keyboard_uses_expected_callback_prefix() -> None:

@@ -140,6 +140,7 @@ SETTINGS_BACK_PREFIX = "gen:back:settings"
 SETTINGS_BACK_MODELS = "gen:back:models"
 SETTINGS_CONTINUE = "gen:continue"
 GENERATION_CONFIRM = "gen:confirm"
+GENERATION_REPEAT_PREFIX = "gen:repeat:"
 
 
 def parse_page(value: Any) -> int:
@@ -1596,6 +1597,85 @@ async def prompt_for_generation_audio(message: Message, *, edit: bool, model: Ge
     )
 
 
+async def prompt_for_repeat_media(message: Message, state: FSMContext, model: GenerationModel, *, edit: bool) -> None:
+    required_input_type = get_model_required_input_type(model)
+    if required_input_type == "image":
+        if model.supports_multiple_images and model.input_media_field == "images":
+            await state.set_state(GenerationStates.waiting_for_images)
+            await prompt_for_generation_images(message, edit=edit, model=model)
+            return
+        await state.set_state(GenerationStates.waiting_for_image)
+        await prompt_for_generation_image(message, edit=edit, model=model)
+        return
+    if required_input_type == "video":
+        await state.set_state(GenerationStates.waiting_for_video)
+        await prompt_for_generation_video(message, edit=edit, model=model)
+        return
+    if required_input_type == "audio":
+        await state.set_state(GenerationStates.waiting_for_audio)
+        await prompt_for_generation_audio(message, edit=edit, model=model)
+        return
+    await state.set_state(GenerationStates.waiting_for_image)
+    await prompt_for_generation_input(message, edit=edit, is_lipsync=model.generation_type == "lipsync")
+
+
+async def restore_generation_repeat_flow(callback: CallbackQuery, state: FSMContext, session: AsyncSession, generation_id: Any) -> bool:
+    lang = get_actor_language(callback.from_user)
+    generation = await GenerationRepository(session).get_by_id(generation_id)
+    if generation is None:
+        await callback.answer(t("errors.model_unavailable", lang), show_alert=True)
+        return False
+    if generation.user_id != callback.from_user.id:
+        await callback.answer(t("errors.model_unavailable", lang), show_alert=True)
+        return False
+    try:
+        model = get_generation_model(generation.model_key)
+    except ValueError:
+        await callback.answer(t("errors.model_unavailable", lang), show_alert=True)
+        return False
+    if not model.is_enabled:
+        await callback.answer(t("errors.model_unavailable", lang), show_alert=True)
+        return False
+    try:
+        user_settings = validate_model_settings(model.key, generation.settings or {})
+    except ValueError:
+        await callback.answer(t("errors.invalid_model_settings", lang), show_alert=True)
+        return False
+
+    await reset_generation_state(state)
+    await state.update_data(
+        model_key=model.key,
+        model_title=model.title,
+        model_endpoint=model.endpoint,
+        model_generation_type=model.generation_type,
+        selected_generation_type=model.generation_type,
+        selected_provider=model.provider,
+        user_settings=user_settings,
+        current_setting_key=None,
+        input_image_file_id=None,
+        input_media=None,
+        input_media_items=[],
+        input_media_urls=[],
+        input_media_paths=[],
+        input_media_file_ids=[],
+        input_audio_or_text=None,
+        prompt=str(generation.prompt or ""),
+        user_language=lang,
+    )
+    await callback.message.answer(t("generation.summary.repeat_started", lang, model=escape(model.title)), parse_mode="HTML")
+    if get_model_required_input_type(model) == "text":
+        await send_confirmation_screen(
+            message=callback.message,
+            state=state,
+            session=session,
+            telegram_user=callback.from_user,
+            edit=False,
+        )
+        return True
+    await prompt_for_repeat_media(callback.message, state, model, edit=False)
+    return True
+
+
 async def show_setting_options(message: Message, state: FSMContext, setting_key: str) -> None:
     """Показать варианты значения конкретной настройки."""
     state_data = await state.get_data()
@@ -1893,11 +1973,12 @@ async def send_generation_summary_message(
         return
     if generation_batch.completed_count == 0:
         return
+    summary_id = generations[0].id
     await safe_send_bot_message(
         bot,
         chat_id,
         build_generation_summary_message(generation_batch, lang),
-        reply_markup=build_generation_summary_keyboard(lang),
+        reply_markup=build_generation_summary_keyboard(summary_id, lang),
         parse_mode="HTML",
     )
 
@@ -3237,6 +3318,21 @@ async def choose_generation_model(callback: CallbackQuery, state: FSMContext):
     )
     await render_settings_screen(callback.message, state)
     await callback.answer()
+
+
+@router.callback_query(lambda cb: cb.data.startswith(GENERATION_REPEAT_PREFIX))
+async def repeat_generation_from_summary(callback: CallbackQuery, state: FSMContext, session: AsyncSession):
+    """Restore a generation flow from summary repeat metadata."""
+    log_generation_callback(callback)
+    raw_generation_id = callback.data.removeprefix(GENERATION_REPEAT_PREFIX)
+    try:
+        generation_id = uuid.UUID(raw_generation_id)
+    except (TypeError, ValueError):
+        await callback.answer(t("errors.model_unavailable", get_actor_language(callback.from_user)), show_alert=True)
+        return
+    restored = await restore_generation_repeat_flow(callback, state, session, generation_id)
+    if restored:
+        await callback.answer()
 
 
 @router.callback_query(F.data == PAGINATION_NOOP_CALLBACK)

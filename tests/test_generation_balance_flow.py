@@ -2703,8 +2703,94 @@ async def test_single_generation_sends_summary_once_after_output(session_factory
     assert "Prompt &lt;safe&gt;" in bot.messages[0]
     assert "📥 Results received: <b>1/1</b>" in bot.messages[0]
     assert bot.message_parse_modes == ["HTML"]
-    assert bot.message_markups[0].inline_keyboard[0][0].callback_data == "gen:all"
+    assert len(bot.message_markups[0].inline_keyboard) == 1
+    assert bot.message_markups[0].inline_keyboard[0][0].callback_data == f"gen:repeat:{generation.id}"
     assert temp_input_path.exists() is False
+
+
+@pytest.mark.asyncio
+async def test_summary_repeat_restores_exact_alibaba_model_and_ignores_current_fsm(session_factory) -> None:
+    async with session_factory() as session:
+        await create_user(session, user_id=462, balance=200)
+        model = generations.get_generation_model("alibaba_wan_2_7_text_to_image_pro")
+        generation = await GenerationRepository(session).create_generation_request(
+            user_id=462,
+            model_key=model.key,
+            model_endpoint=model.endpoint,
+            prompt="A cinematic image prompt",
+            settings={**generations.get_default_settings(model.key), "num_generations": "2"},
+            status="completed",
+            cost=34,
+        )
+
+        state = FakeState({"model_key": "nano_banana", "user_settings": {"num_generations": "10"}})
+        callback = FakeCallback(user_id=462, data=f"gen:repeat:{generation.id}")
+
+        await generations.repeat_generation_from_summary(callback, state, session)
+
+        state_data = await state.get_data()
+        assert state_data["model_key"] == "alibaba_wan_2_7_text_to_image_pro"
+        assert state_data["model_title"] == model.title
+        assert state_data["model_generation_type"] == model.generation_type
+        assert state_data["prompt"] == "A cinematic image prompt"
+        assert state_data["user_settings"]["num_generations"] == "2"
+        assert state.state == GenerationStates.waiting_for_confirmation
+        assert callback.message.answers[0] == f"Повтор генерации: {model.title}"
+        assert any("Alibaba Wan 2.7 Text To Image Pro" in answer for answer in callback.message.answers)
+
+
+@pytest.mark.asyncio
+async def test_summary_repeat_text_only_opens_confirmation(session_factory) -> None:
+    async with session_factory() as session:
+        await create_user(session, user_id=463, balance=200)
+        model = generations.get_generation_model("alibaba_wan_2_7_text_to_image_pro")
+        generation = await GenerationRepository(session).create_generation_request(
+            user_id=463,
+            model_key=model.key,
+            model_endpoint=model.endpoint,
+            prompt="A repeatable text only prompt",
+            settings={**generations.get_default_settings(model.key), "num_generations": "1"},
+            status="completed",
+            cost=17,
+        )
+
+        state = FakeState()
+        callback = FakeCallback(user_id=463, data=f"gen:repeat:{generation.id}")
+
+        await generations.repeat_generation_from_summary(callback, state, session)
+
+        assert state.state == GenerationStates.waiting_for_confirmation
+        assert callback.message.answers[0] == f"Повтор генерации: {model.title}"
+        assert "Проверьте генерацию:" in callback.message.answers[-1]
+        assert "A repeatable text only prompt" in callback.message.answers[-1]
+
+
+@pytest.mark.asyncio
+async def test_summary_repeat_media_model_asks_for_media_again(session_factory) -> None:
+    async with session_factory() as session:
+        await create_user(session, user_id=464, balance=200)
+        model = generations.get_generation_model("alibaba_wan_2_7_image_to_video")
+        generation = await GenerationRepository(session).create_generation_request(
+            user_id=464,
+            model_key=model.key,
+            model_endpoint=model.endpoint,
+            prompt="Animate this image with soft camera motion",
+            settings={**generations.get_default_settings(model.key), "num_generations": "1"},
+            status="completed",
+            cost=17,
+        )
+
+        state = FakeState({"model_key": "alibaba_wan_2_7_text_to_image_pro"})
+        callback = FakeCallback(user_id=464, data=f"gen:repeat:{generation.id}")
+
+        await generations.repeat_generation_from_summary(callback, state, session)
+
+        state_data = await state.get_data()
+        assert state_data["model_key"] == "alibaba_wan_2_7_image_to_video"
+        assert state_data["prompt"] == "Animate this image with soft camera motion"
+        assert state.state in {GenerationStates.waiting_for_image, GenerationStates.waiting_for_images}
+        assert callback.message.answers[0] == f"Повтор генерации: {model.title}"
+        assert any("Отправьте изображ" in answer for answer in callback.message.answers)
 
 
 @pytest.mark.asyncio

@@ -68,7 +68,6 @@ BUTTON_ICONS = {
     "generation.all_models": "📚",
     "generation.confirm": "🚀",
     "generation.summary.repeat": "🔁",
-    "generation.summary.new": "🎨",
     "download.button": "🔗",
 }
 
@@ -316,13 +315,12 @@ def get_back_to_menu_keyboard(lang: str = "en") -> ReplyKeyboardMarkup:
     )
 
 
-def build_generation_summary_keyboard(lang: str = "en") -> InlineKeyboardMarkup:
+def build_generation_summary_keyboard(batch_id: object, lang: str = "en") -> InlineKeyboardMarkup:
     """Inline actions shown under the final generation summary."""
+    callback_data = validate_callback_length(f"gen:repeat:{batch_id}")
     return InlineKeyboardMarkup(
         inline_keyboard=[
-            [InlineKeyboardButton(text=get_button_text("generation.summary.repeat", lang), callback_data="gen:all")],
-            [InlineKeyboardButton(text=get_button_text("generation.summary.new", lang), callback_data="gen:all")],
-            [InlineKeyboardButton(text=get_button_text("main.profile", lang), callback_data="profile:open")],
+            [InlineKeyboardButton(text=get_button_text("generation.summary.repeat", lang), callback_data=callback_data)],
         ]
     )
 
