@@ -15,14 +15,17 @@ GENERATED_MODEL_PARAMS = {'alibaba_wan_2_6_image_to_video_flash': {'allowed_payl
                                                                      'resolution',
                                                                      'shot_type'],
                                           'docs_url': 'https://wavespeed.ai/docs/docs-api/alibaba/alibaba-wan-2.6-image-to-video-flash',
-                                          'last_synced_at': '2026-05-12T00:36:17+00:00',
+                                          'input_requirements': {'audio': {'payload_field': 'audio', 'required': False},
+                                                                 'images': {'max': 1,
+                                                                            'min': 1,
+                                                                            'payload_field': 'image',
+                                                                            'required': True},
+                                                                 'prompt': {'payload_field': 'prompt',
+                                                                            'required': True}},
+                                          'last_synced_at': '2026-05-12T01:07:56+00:00',
                                           'required_fields': ['image', 'prompt'],
                                           'system_settings': {},
-                                          'user_settings': {'audio': {'description': 'Audio URL to guide generation '
-                                                                                     '(optional).',
-                                                                      'title': 'Audio',
-                                                                      'type': 'string'},
-                                                            'duration': {'default': '5',
+                                          'user_settings': {'duration': {'default': '5',
                                                                          'description': 'The duration of the generated '
                                                                                         'media in seconds.',
                                                                          'max_value': '15',
@@ -288,14 +291,13 @@ GENERATED_MODEL_PARAMS = {'alibaba_wan_2_6_image_to_video_flash': {'allowed_payl
                                                        'type': 'enum'}}},
  'kwaivgi_kling_lipsync_audio_to_video': {'allowed_payload_fields': ['audio', 'video'],
                                           'docs_url': 'https://wavespeed.ai/docs/docs-api/kwaivgi/kwaivgi-kling-lipsync-audio-to-video',
-                                          'last_synced_at': '2026-05-12T00:35:02+00:00',
+                                          'input_requirements': {'audio': {'max_size_mb': 5,
+                                                                           'payload_field': 'audio',
+                                                                           'required': True},
+                                                                 'prompt': {'payload_field': 'prompt',
+                                                                            'required': False},
+                                                                 'video': {'payload_field': 'video', 'required': True}},
+                                          'last_synced_at': '2026-05-12T01:07:56+00:00',
                                           'required_fields': ['audio', 'video'],
                                           'system_settings': {},
-                                          'user_settings': {'audio': {'description': 'The URL pointing to the audio '
-                                                                                     'file that will be used for '
-                                                                                     'generating synchronized lip '
-                                                                                     'movements. Supported audio file '
-                                                                                     'formats: .mp3/.wav/.m4a/.aac, '
-                                                                                     'with a maximum file size of 5MB.',
-                                                                      'title': 'Audio',
-                                                                      'type': 'string'}}}}
+                                          'user_settings': {}}}

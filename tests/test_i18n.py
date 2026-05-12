@@ -38,6 +38,22 @@ PAGINATION_TRANSLATION_KEYS = {
     "pagination.page",
 }
 
+GENERATED_PARAMS_UI_KEYS = {
+    "generation.send_audio",
+    "generation.send_audio_description",
+    "generation.audio_too_large",
+    "generation.unsupported_audio_type",
+    "generation.audio_received",
+    "generation.prompt_optional_skipped",
+    "generation.send_video_for_lipsync",
+    "generation.send_audio_for_lipsync",
+    "settings.enter_text_value",
+    "settings.enter_number_value",
+    "settings.clear_hint",
+    "settings.current_value",
+    "settings.parameter",
+}
+
 
 def test_supported_languages_match_translation_catalog() -> None:
     assert len(SUPPORTED_LANGUAGES) == 10
@@ -59,6 +75,13 @@ def test_all_languages_have_required_pagination_translation_keys() -> None:
     for language in SUPPORTED_LANGUAGES:
         assert PAGINATION_TRANSLATION_KEYS <= set(TRANSLATIONS[language])
         assert t("pagination.page", language, current=1, total=3)
+
+
+def test_all_languages_have_generated_params_ui_translation_keys() -> None:
+    for language in SUPPORTED_LANGUAGES:
+        assert GENERATED_PARAMS_UI_KEYS <= set(TRANSLATIONS[language])
+        assert t("generation.send_audio", language)
+        assert t("settings.parameter", language, parameter="Duration")
 
 
 def test_get_user_language_returns_english_for_none() -> None:

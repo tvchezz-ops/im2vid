@@ -410,10 +410,14 @@ def build_model_settings_keyboard(model: Any, current_settings: dict[str, Any], 
     rows = []
     for setting_key, setting in get_model_setting_entries(model):
         current_value = str(current_settings.get(setting.key, setting.default))
+        title_key = f"settings.title.{setting_key}"
+        setting_title = t(title_key, lang)
+        if setting_title == title_key:
+            setting_title = getattr(setting, "title", setting.key)
         rows.append(
             [
                 InlineKeyboardButton(
-                    text=f"{getattr(setting, 'title', setting.key)}: {current_value}",
+                    text=f"{setting_title}: {current_value}",
                     callback_data=validate_callback_length(f"gen:setting:{setting_key}"),
                 )
             ]

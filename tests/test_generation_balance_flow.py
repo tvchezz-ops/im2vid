@@ -108,6 +108,7 @@ class FakeCallback:
 
 
 TEXT_SETTING_MODEL_KEY = "test_text_setting_model"
+AUDIO_NO_LIMIT_MODEL_KEY = "test_audio_no_limit_model"
 
 
 def install_text_setting_model() -> None:
@@ -149,6 +150,36 @@ def install_text_setting_model() -> None:
 
 def remove_text_setting_model() -> None:
     MODEL_REGISTRY.pop(TEXT_SETTING_MODEL_KEY, None)
+
+
+def install_audio_no_limit_model() -> None:
+    MODEL_REGISTRY[AUDIO_NO_LIMIT_MODEL_KEY] = GenerationModel(
+        key=AUDIO_NO_LIMIT_MODEL_KEY,
+        title="Test Audio No Limit Model",
+        provider="kling",
+        generation_type="lipsync",
+        endpoint="https://api.wavespeed.ai/api/v3/test/audio-no-limit",
+        docs_url="https://wavespeed.ai/docs/docs-api/test/audio-no-limit",
+        description="Test model with audio input and no docs max size",
+        max_images=0,
+        requires_prompt=False,
+        requires_image=False,
+        requires_video=True,
+        requires_audio=True,
+        outputs="video",
+        required_payload_fields=("video", "audio"),
+        allowed_payload_fields=("video", "audio"),
+        input_requirements={
+            "prompt": {"required": False, "payload_field": "prompt"},
+            "video": {"required": True, "payload_field": "video"},
+            "audio": {"required": True, "payload_field": "audio"},
+        },
+        user_settings={},
+    )
+
+
+def remove_audio_no_limit_model() -> None:
+    MODEL_REGISTRY.pop(AUDIO_NO_LIMIT_MODEL_KEY, None)
 
 
 class FakeBot:
@@ -558,8 +589,7 @@ async def test_continue_after_settings_shows_lipsync_media_prompt() -> None:
     await generations.continue_after_settings(callback, state)
 
     assert state.state == GenerationStates.waiting_for_image
-    assert "Вы выбрали Lipsync." in message.edits[-1]
-    assert "Отправьте фото или видео, затем текст или голос для озвучки." in message.edits[-1]
+    assert "Загрузите видео с лицом" in message.edits[-1]
 
 @pytest.mark.asyncio
 async def test_continue_after_settings_for_text_to_image_goes_to_prompt() -> None:
@@ -988,7 +1018,7 @@ async def test_process_generation_image_saves_lipsync_video_as_input_media() -> 
     assert state.state == GenerationStates.waiting_for_prompt
     assert state.data["input_media"] == {"type": "video", "file_id": "video-file-id"}
     assert state.data["input_image_file_id"] is None
-    assert "текст или голосовое сообщение" in message.answers[-1]
+    assert "аудиофайл" in message.answers[-1].lower()
 
 @pytest.mark.asyncio
 async def test_process_generation_image_rejects_video_for_image_flow() -> None:
@@ -1021,6 +1051,181 @@ async def test_process_generation_video_accepts_video_document(monkeypatch) -> N
     assert state.state == GenerationStates.waiting_for_prompt
     assert state.data["input_media"] == {"type": "video", "count": 1}
     assert state.data["input_media_items"][0]["public_url"] == "https://example.com/video-doc-id.mp4"
+
+
+@pytest.mark.asyncio
+async def test_process_generation_video_for_lipsync_requests_audio(monkeypatch) -> None:
+    async def fake_upload_message_media_item(message):
+        return {
+            "type": "video",
+            "file_id": "video-file-id",
+            "local_path": "/tmp/video-file-id.mp4",
+            "public_url": "https://example.com/video-file-id.mp4",
+        }
+
+    monkeypatch.setattr(generations, "upload_message_media_item", fake_upload_message_media_item)
+
+    state = FakeState(
+        {
+            "model_key": "kwaivgi_kling_lipsync_audio_to_video",
+            "model_generation_type": "lipsync",
+            "user_settings": {},
+        }
+    )
+    message = FakeMessage(chat_id=476)
+    message.video = SimpleNamespace(file_id="video-file-id")
+
+    await generations.process_generation_video(message, state)
+
+    assert state.state == GenerationStates.waiting_for_audio
+    assert state.data["input_media_items"][0]["public_url"] == "https://example.com/video-file-id.mp4"
+    assert "аудиофайл" in message.answers[-1].lower()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("attribute_name", "media_object"),
+    [
+        ("audio", SimpleNamespace(file_id="audio-file-id", file_size=1024)),
+        ("document", SimpleNamespace(file_id="audio-doc-id", mime_type="audio/mpeg", file_size=1024)),
+    ],
+)
+async def test_waiting_for_audio_accepts_audio_inputs(session_factory, monkeypatch, tmp_path, attribute_name, media_object) -> None:
+    class FakeTelegramFilesService:
+        def __init__(self, bot):
+            self.bot = bot
+
+        async def download_temp_file_and_get_public_url(self, file_id: str):
+            return SimpleNamespace(local_path=tmp_path / f"{file_id}.mp3", public_url=f"https://example.com/{file_id}.mp3")
+
+    monkeypatch.setattr(generations, "TelegramFilesService", FakeTelegramFilesService)
+
+    async with session_factory() as session:
+        await create_user(session, user_id=477, balance=30)
+        state = FakeState(
+            {
+                "model_key": "kwaivgi_kling_lipsync_audio_to_video",
+                "model_generation_type": "lipsync",
+                "model_title": "Kwaivgi Kling Lipsync Audio To Video",
+                "model_endpoint": "https://api.wavespeed.ai/api/v3/kwaivgi/kwaivgi-kling-lipsync-audio-to-video",
+                "input_media": {"type": "video", "count": 1},
+                "input_media_items": [
+                    {
+                        "type": "video",
+                        "file_id": "video-file-id",
+                        "local_path": str(tmp_path / "video.mp4"),
+                        "public_url": "https://example.com/video.mp4",
+                    }
+                ],
+                "user_settings": {},
+            }
+        )
+        message = FakeMessage(chat_id=477)
+        setattr(message, attribute_name, media_object)
+
+        await generations.process_generation_audio(message, state, session)
+
+        assert state.state == GenerationStates.waiting_for_confirmation
+        assert state.data["input_audio_url"].endswith(".mp3")
+        assert state.data["input_audio_file_id"] == media_object.file_id
+        assert "Озвучка" in message.answers[-1]
+
+
+@pytest.mark.asyncio
+async def test_waiting_for_audio_rejects_audio_larger_than_docs_limit(session_factory) -> None:
+    async with session_factory() as session:
+        state = FakeState(
+            {
+                "model_key": "kwaivgi_kling_lipsync_audio_to_video",
+                "model_generation_type": "lipsync",
+                "user_settings": {},
+            }
+        )
+        message = FakeMessage(chat_id=478)
+        message.audio = SimpleNamespace(file_id="too-large-audio", file_size=(5 * 1024 * 1024) + 1)
+
+        await generations.process_generation_audio(message, state, session)
+
+        assert state.state is None
+        assert "слишком большой" in message.answers[-1]
+
+
+@pytest.mark.asyncio
+async def test_waiting_for_audio_accepts_audio_document_by_extension(session_factory, monkeypatch, tmp_path) -> None:
+    class FakeTelegramFilesService:
+        def __init__(self, bot):
+            self.bot = bot
+
+        async def download_temp_file_and_get_public_url(self, file_id: str):
+            return SimpleNamespace(local_path=tmp_path / f"{file_id}.mp3", public_url=f"https://example.com/{file_id}.mp3")
+
+    monkeypatch.setattr(generations, "TelegramFilesService", FakeTelegramFilesService)
+
+    async with session_factory() as session:
+        await create_user(session, user_id=479, balance=30)
+        state = FakeState(
+            {
+                "model_key": "kwaivgi_kling_lipsync_audio_to_video",
+                "model_generation_type": "lipsync",
+                "model_title": "Kwaivgi Kling Lipsync Audio To Video",
+                "model_endpoint": "https://api.wavespeed.ai/api/v3/kwaivgi/kwaivgi-kling-lipsync-audio-to-video",
+                "input_media": {"type": "video", "count": 1},
+                "input_media_items": [
+                    {
+                        "type": "video",
+                        "file_id": "video-file-id",
+                        "local_path": str(tmp_path / "video.mp4"),
+                        "public_url": "https://example.com/video.mp4",
+                    }
+                ],
+                "user_settings": {},
+            }
+        )
+        message = FakeMessage(chat_id=479)
+        message.document = SimpleNamespace(file_id="audio-doc-id", mime_type="application/octet-stream", file_name="voice.mp3", file_size=1024)
+
+        await generations.process_generation_audio(message, state, session)
+
+        assert state.state == GenerationStates.waiting_for_confirmation
+        assert state.data["input_audio_url"] == "https://example.com/audio-doc-id.mp3"
+
+
+@pytest.mark.asyncio
+async def test_waiting_for_audio_rejects_text_with_audio_file_error(session_factory) -> None:
+    async with session_factory() as session:
+        state = FakeState({"model_key": "kwaivgi_kling_lipsync_audio_to_video", "user_settings": {}})
+        message = FakeMessage(chat_id=480)
+        message.text = "not an audio file"
+
+        await generations.invalid_generation_audio(message, state)
+
+        assert message.answers[-1] == "❌ Ошибка E001: отправьте аудиофайл."
+
+
+@pytest.mark.asyncio
+async def test_waiting_for_audio_uses_default_20mb_limit_without_docs_max(session_factory) -> None:
+    install_audio_no_limit_model()
+    try:
+        async with session_factory() as session:
+            state = FakeState({"model_key": AUDIO_NO_LIMIT_MODEL_KEY, "user_settings": {}})
+            message = FakeMessage(chat_id=481)
+            message.audio = SimpleNamespace(file_id="too-large-audio", file_size=(20 * 1024 * 1024) + 1)
+
+            await generations.process_generation_audio(message, state, session)
+
+            assert state.state is None
+            assert "слишком большой" in message.answers[-1]
+    finally:
+        remove_audio_no_limit_model()
+
+
+def test_raw_english_docs_description_is_not_displayed_for_ru_setting_text() -> None:
+    model = MODEL_REGISTRY["alibaba_wan_2_6_image_to_video_flash"]
+
+    text = generations.build_setting_value_text(model, "duration", "5", "ru")
+
+    assert "The duration of the generated media" not in text
+    assert "Отправьте новое числовое значение" in text
 
 @pytest.mark.asyncio
 async def test_process_generation_video_rejects_photo_for_video_flow() -> None:
@@ -1078,28 +1283,44 @@ async def test_process_prompt_saves_lipsync_text_input(session_factory) -> None:
 
 
 @pytest.mark.asyncio
-async def test_process_prompt_saves_lipsync_voice_input(session_factory) -> None:
+async def test_waiting_for_audio_accepts_voice_input(session_factory, monkeypatch, tmp_path) -> None:
+    class FakeTelegramFilesService:
+        def __init__(self, bot):
+            self.bot = bot
+
+        async def download_temp_file_and_get_public_url(self, file_id: str):
+            return SimpleNamespace(local_path=tmp_path / f"{file_id}.ogg", public_url=f"https://example.com/{file_id}.ogg")
+
+    monkeypatch.setattr(generations, "TelegramFilesService", FakeTelegramFilesService)
+
     async with session_factory() as session:
         await create_user(session, user_id=410, balance=30)
         state = FakeState(
             {
                 "model_key": "kwaivgi_kling_lipsync_audio_to_video",
                 "model_generation_type": "lipsync",
-                "model_title": "Lip Model",
-                "input_media": {"type": "video", "file_id": "video-file-id"},
+                "model_title": "Kwaivgi Kling Lipsync Audio To Video",
+                "model_endpoint": "https://api.wavespeed.ai/api/v3/kwaivgi/kwaivgi-kling-lipsync-audio-to-video",
+                "input_media": {"type": "video", "count": 1},
+                "input_media_items": [
+                    {
+                        "type": "video",
+                        "file_id": "video-file-id",
+                        "local_path": str(tmp_path / "video.mp4"),
+                        "public_url": "https://example.com/video.mp4",
+                    }
+                ],
                 "user_settings": {},
             }
         )
         message = FakeMessage(chat_id=410)
-        message.voice = SimpleNamespace(file_id="voice-file-id")
+        message.voice = SimpleNamespace(file_id="voice-file-id", file_size=1024)
 
-        await generations.process_prompt(message, state, session)
+        await generations.process_generation_audio(message, state, session)
 
-        assert state.data["input_audio_or_text"] == {
-            "type": "voice",
-            "file_id": "voice-file-id",
-        }
-        assert state.data["prompt"] == "Голосовое сообщение"
+        assert state.state == GenerationStates.waiting_for_confirmation
+        assert state.data["input_audio_url"] == "https://example.com/voice-file-id.ogg"
+        assert state.data["input_audio_or_text"]["type"] == "voice"
 
 
 @pytest.mark.asyncio

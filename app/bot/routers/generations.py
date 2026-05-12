@@ -102,6 +102,8 @@ DOCUMENT_SEND_REQUEST_TIMEOUT_SECONDS = 3600
 DOCUMENT_SEND_RETRY_COUNT = 3
 OUTPUT_DOWNLOAD_TIMEOUT_SECONDS = 300
 MEDIA_GROUP_DEBOUNCE_SECONDS = 1.0
+AUDIO_MAX_SIZE_MB = 20
+AUDIO_FILE_EXTENSIONS = {".mp3", ".wav", ".m4a", ".aac"}
 MEDIA_GROUP_BUFFERS: dict[str, list[Message]] = {}
 MEDIA_GROUP_STATES: dict[str, FSMContext] = {}
 MEDIA_GROUP_TASKS: dict[str, asyncio.Task] = {}
@@ -303,6 +305,23 @@ def format_generation_settings(model: GenerationModel, user_settings: dict[str, 
     )
 
 
+def get_setting_display_title(setting_key: str, setting: Any, lang: str = "en") -> str:
+    title_key = f"settings.title.{setting_key}"
+    translated_title = t(title_key, lang)
+    if translated_title != title_key:
+        return translated_title
+    return str(getattr(setting, "title", setting_key))
+
+
+def format_generation_settings_localized(model: GenerationModel, user_settings: dict[str, Any], lang: str = "en") -> str:
+    if not model.user_settings:
+        return "-"
+    return "\n".join(
+        f"- <b>{escape(get_setting_display_title(setting_key, setting, lang))}</b>: <code>{escape(str(user_settings.get(setting.key, setting.default)))}</code>"
+        for setting_key, setting in model.user_settings.items()
+    )
+
+
 def get_total_generation_cost(model: GenerationModel, user_settings: dict[str, Any]) -> int:
     return calculate_generation_cost_credits(
         model,
@@ -347,35 +366,30 @@ def build_settings_text(model: GenerationModel, user_settings: dict[str, Any], l
         f"{t('generation.settings_header', lang, model=escape(model.title))}\n\n"
         f"{price_line}\n\n"
         f"{t('generation.settings_choose', lang)}\n\n"
-        f"{t('generation.settings_current', lang, values=format_generation_settings(model, user_settings))}"
+        f"{t('generation.settings_current', lang, values=format_generation_settings_localized(model, user_settings, lang))}"
     )
 
 
 def build_setting_value_text(model: GenerationModel, setting_key: str, current_value: str, lang: str = "en") -> str:
     """Собрать экран выбора конкретной настройки."""
     setting = model.user_settings[setting_key]
+    setting_title = get_setting_display_title(setting_key, setting, lang)
     if setting.type in {"text", "number"}:
-        description_block = f"\n\n{escape(setting.description)}" if setting.description else ""
-        range_parts = []
-        if getattr(setting, "min_value", None) is not None:
-            range_parts.append(f"min {setting.min_value}")
-        if getattr(setting, "max_value", None) is not None:
-            range_parts.append(f"max {setting.max_value}")
-        if setting.type == "number" and range_parts:
-            description_block = f"\n\n{' / '.join(range_parts)}{description_block}"
+        prompt_key = "settings.enter_number_value" if setting.type == "number" else "settings.enter_text_value"
         return (
             f"{t('generation.settings_header', lang, model=escape(model.title))}\n\n"
-            f"{t('generation.setting_parameter', lang, parameter=escape(setting.title))}\n"
-            f"{t('generation.setting_current_value', lang, value=escape(current_value))}\n\n"
-            f"{t('generation.setting_send_text', lang, description=description_block)}"
+            f"{t('settings.parameter', lang, parameter=escape(setting_title))}\n"
+            f"{t('settings.current_value', lang, value=escape(current_value))}\n\n"
+            f"{t(prompt_key, lang)}\n"
+            f"{t('settings.clear_hint', lang)}"
         )
     options = "\n".join(f"• <code>{escape(option.value)}</code>" for option in setting.options)
     return (
         f"{t('generation.settings_header', lang, model=escape(model.title))}\n\n"
         f"{t('generation.setting_choose_value', lang)}\n\n"
         f"{t('generation.model_label', lang, model=escape(model.title))}\n"
-        f"{t('generation.setting_parameter', lang, parameter=escape(setting.title))}\n"
-        f"{t('generation.setting_current_value', lang, value=escape(current_value))}\n\n"
+        f"{t('settings.parameter', lang, parameter=escape(setting_title))}\n"
+        f"{t('settings.current_value', lang, value=escape(current_value))}\n\n"
         f"{t('generation.setting_options', lang, options=options)}"
     )
 
@@ -397,7 +411,7 @@ def build_confirmation_text(
     return (
         f"{t('generation.review', lang)}\n\n"
         f"{t('generation.model_label', lang, model=escape(model.title))}\n"
-        f"{t('generation.settings_label', lang, settings=format_generation_settings(model, user_settings))}\n\n"
+        f"{t('generation.settings_label', lang, settings=format_generation_settings_localized(model, user_settings, lang))}\n\n"
         f"{prompt_line}\n\n"
         f"{t('generation.count_label', lang, count=num_generations)}\n"
         f"{t('generation.cost_label', lang, cost=total_cost)}\n"
@@ -507,11 +521,15 @@ def state_has_required_media(model: GenerationModel, input_media: Any, input_med
 
 
 def state_has_required_prompt_or_audio(model: GenerationModel, prompt: str, input_audio_or_text: Any) -> bool:
-    if model.requires_prompt:
+    prompt_required = model_requires_prompt_input(model)
+    audio_required = model_requires_audio_file(model)
+    if prompt_required and audio_required:
+        return bool(prompt.strip()) and is_audio_input_payload(input_audio_or_text)
+    if prompt_required:
         if model.generation_type == "lipsync":
             return is_text_input_payload(input_audio_or_text)
         return bool(prompt.strip())
-    if model.requires_audio:
+    if audio_required:
         return is_audio_input_payload(input_audio_or_text)
     return True
 
@@ -521,6 +539,35 @@ def get_second_step_prompt_text(*, is_lipsync: bool, lang: str = "en") -> str:
     if is_lipsync:
         return get_flow_texts("lipsync", lang).second_step_prompt
     return t("generation.second_step_text", lang)
+
+
+def model_requires_audio_file(model: GenerationModel) -> bool:
+    audio_requirement = (model.input_requirements or {}).get("audio")
+    if isinstance(audio_requirement, dict):
+        return bool(audio_requirement.get("required"))
+    return bool(model.requires_audio)
+
+
+def model_requires_prompt_input(model: GenerationModel) -> bool:
+    prompt_requirement = (model.input_requirements or {}).get("prompt")
+    if isinstance(prompt_requirement, dict):
+        return bool(prompt_requirement.get("required"))
+    if isinstance(prompt_requirement, bool):
+        return prompt_requirement
+    return bool(model.requires_prompt)
+
+
+def get_audio_max_size_bytes(model: GenerationModel) -> int | None:
+    audio_requirement = (model.input_requirements or {}).get("audio")
+    if not isinstance(audio_requirement, dict):
+        return None
+    max_size_mb = audio_requirement.get("max_size_mb")
+    if max_size_mb is None:
+        return AUDIO_MAX_SIZE_MB * 1024 * 1024
+    try:
+        return int(max_size_mb) * 1024 * 1024
+    except (TypeError, ValueError):
+        return None
 
 
 def get_flow_texts(generation_type: str, lang: str = "en") -> FlowTexts:
@@ -561,6 +608,22 @@ def get_flow_texts(generation_type: str, lang: str = "en") -> FlowTexts:
             invalid_media=t("generation.flow.video.invalid", lang),
             invalid_specific_media=t("generation.flow.video.invalid_specific", lang),
         ),
+        "video_extend": FlowTexts(
+            initial_prompt=t("generation.flow.video_extend.initial", lang),
+            second_step_prompt=t("generation.second_step_text", lang),
+            missing_prompt=t("errors.e002", lang).lower() + ".",
+            missing_media=t("generation.flow.video.missing", lang),
+            invalid_media=t("generation.flow.video.invalid", lang),
+            invalid_specific_media=t("generation.flow.video.invalid_specific", lang),
+        ),
+        "reference_to_video": FlowTexts(
+            initial_prompt=t("generation.flow.reference_to_video.initial", lang),
+            second_step_prompt=t("generation.second_step_text", lang),
+            missing_prompt=t("errors.e002", lang).lower() + ".",
+            missing_media=t("generation.flow.image.missing", lang),
+            invalid_media=t("generation.flow.image.invalid", lang),
+            invalid_specific_media=t("generation.flow.image.invalid_specific", lang),
+        ),
         "lipsync": FlowTexts(
             initial_prompt=t("generation.flow.lipsync.initial", lang),
             second_step_prompt=t("generation.flow.lipsync.second", lang),
@@ -580,11 +643,14 @@ def get_second_prompt_for_generation_type(generation_type: str, lang: str = "en"
 
 def extract_document_media_type(document: Any) -> str:
     mime_type = (getattr(document, "mime_type", "") or "").lower()
+    filename = (getattr(document, "file_name", "") or "").lower()
     if mime_type.startswith("image/"):
         return "image"
     if mime_type.startswith("video/"):
         return "video"
     if mime_type.startswith("audio/"):
+        return "audio"
+    if any(filename.endswith(extension) for extension in AUDIO_FILE_EXTENSIONS):
         return "audio"
     return "unknown"
 
@@ -609,11 +675,31 @@ def is_supported_video_input(message: Message) -> bool:
     return False
 
 
+def is_supported_audio_input(message: Message) -> bool:
+    if message.voice or message.audio:
+        return True
+    if message.document:
+        return extract_document_media_type(message.document) == "audio"
+    return False
+
+
+def get_audio_input_file(message: Message) -> Any:
+    return message.audio or message.voice or message.document
+
+
+def get_audio_input_file_size(message: Message) -> int | None:
+    audio_file = get_audio_input_file(message)
+    file_size = getattr(audio_file, "file_size", None)
+    return int(file_size) if isinstance(file_size, int) else None
+
+
 def get_waiting_state_for_input_type(required_input_type: str):
     if required_input_type == "image":
         return GenerationStates.waiting_for_image
     if required_input_type == "video":
         return GenerationStates.waiting_for_video
+    if required_input_type == "audio":
+        return GenerationStates.waiting_for_audio
     return GenerationStates.waiting_for_prompt
 
 
@@ -913,6 +999,9 @@ async def cleanup_state_media(state: FSMContext) -> None:
     state_data = await state.get_data()
     media_items = get_input_media_items(state_data)
     await cleanup_media_items(media_items)
+    input_audio_path = state_data.get("input_audio_path")
+    if isinstance(input_audio_path, str) and input_audio_path:
+        Path(input_audio_path).unlink(missing_ok=True)
     await state.update_data(
         input_media=None,
         input_media_items=[],
@@ -920,6 +1009,10 @@ async def cleanup_state_media(state: FSMContext) -> None:
         input_media_paths=[],
         input_media_file_ids=[],
         input_image_file_id=None,
+        input_audio_url=None,
+        input_audio_path=None,
+        input_audio_file_id=None,
+        input_audio_or_text=None,
     )
 
 
@@ -1117,7 +1210,7 @@ def build_input_audio_or_text_payload(message: Message) -> dict[str, str]:
         return {"type": "voice", "file_id": message.voice.file_id}
     if message.audio:
         return {"type": "audio", "file_id": message.audio.file_id}
-    if message.document and ((message.document.mime_type or "").lower().startswith("audio/")):
+    if message.document and extract_document_media_type(message.document) == "audio":
         return {"type": "audio", "file_id": message.document.file_id}
     return {}
 
@@ -1319,7 +1412,7 @@ async def prompt_for_generation_images(message: Message, *, edit: bool, model: G
 async def prompt_for_generation_video(message: Message, *, edit: bool, model: GenerationModel) -> None:
     """Показать шаг загрузки видео с reply keyboard возврата к настройкам."""
     lang = get_actor_language(message.from_user)
-    prompt_text = t("generation.video_for_model", lang, model=model.title)
+    prompt_text = t("generation.send_video_for_lipsync", lang) if model.generation_type == "lipsync" else t("generation.video_for_model", lang, model=model.title)
     if edit:
         await message.edit_text(prompt_text, reply_markup=None)
     else:
@@ -1327,6 +1420,21 @@ async def prompt_for_generation_video(message: Message, *, edit: bool, model: Ge
 
     await message.answer(
         t("generation.back_to_settings_hint", lang),
+        reply_markup=build_back_to_settings_keyboard(lang),
+    )
+
+
+async def prompt_for_generation_audio(message: Message, *, edit: bool, model: GenerationModel) -> None:
+    """Показать шаг загрузки аудио с reply keyboard возврата к настройкам."""
+    lang = get_actor_language(message.from_user)
+    prompt_text = t("generation.send_audio_for_lipsync", lang) if model.generation_type == "lipsync" else t("generation.send_audio", lang)
+    if edit:
+        await message.edit_text(prompt_text, reply_markup=None)
+    else:
+        await message.answer(prompt_text)
+
+    await message.answer(
+        t("generation.send_audio_description", lang),
         reply_markup=build_back_to_settings_keyboard(lang),
     )
 
@@ -3357,6 +3465,7 @@ async def navigate_back_to_settings(message: Message, state: FSMContext) -> None
         GenerationStates.waiting_for_image,
         GenerationStates.waiting_for_images,
         GenerationStates.waiting_for_video,
+        GenerationStates.waiting_for_audio,
         GenerationStates.waiting_for_prompt,
     ),
     lambda message: is_localized_button_text(message.text, "common.back_to_settings", getattr(message.from_user, "language_code", None)),
@@ -3436,7 +3545,17 @@ async def process_generation_image(message: Message, state: FSMContext, *, from_
         input_media_paths=[media_item["local_path"]],
         input_media_file_ids=[media_item.get("file_id", "")],
         input_image_file_id=media_item.get("file_id"),
+        input_video_url=media_item["public_url"],
     )
+    model_key = state_data.get("model_key")
+    model = get_generation_model(model_key) if model_key else None
+    if model and model_requires_audio_file(model):
+        await state.set_state(GenerationStates.waiting_for_audio)
+        await message.answer(
+            t("generation.send_audio_for_lipsync", lang) if model.generation_type == "lipsync" else t("generation.send_audio", lang),
+            reply_markup=build_back_to_settings_keyboard(lang),
+        )
+        return
     await set_waiting_for_prompt_with_diagnostic(
         state,
         user_id=message.from_user.id,
@@ -3599,6 +3718,15 @@ async def process_generation_video(message: Message, state: FSMContext):
         input_media_file_ids=[media_item.get("file_id", "")],
         input_image_file_id=media_item.get("file_id"),
     )
+    model_key = state_data.get("model_key")
+    model = get_generation_model(model_key) if model_key else None
+    if model and model_requires_audio_file(model):
+        await state.set_state(GenerationStates.waiting_for_audio)
+        await message.answer(
+            t("generation.send_audio_for_lipsync", lang) if model.generation_type == "lipsync" else t("generation.send_audio", lang),
+            reply_markup=build_back_to_settings_keyboard(lang),
+        )
+        return
     await set_waiting_for_prompt_with_diagnostic(
         state,
         user_id=message.from_user.id,
@@ -3618,6 +3746,95 @@ async def invalid_generation_video(message: Message, state: FSMContext):
     await message.answer(
         build_invalid_input_message("video", model_generation_type, lang=get_actor_language(message.from_user)),
         reply_markup=build_back_to_settings_keyboard(get_actor_language(message.from_user)),
+    )
+
+
+@router.message(GenerationStates.waiting_for_audio, lambda message: bool(message.voice) or bool(message.audio) or bool(message.document))
+async def process_generation_audio(message: Message, state: FSMContext, session: AsyncSession):
+    """Принять аудио для моделей с отдельным audio-входом."""
+    state_data = await state.get_data()
+    lang = get_state_language(state_data, message.from_user)
+    model_key = state_data.get("model_key")
+    model = get_generation_model(model_key) if model_key else None
+    if not model:
+        await message.answer(format_user_error(ErrorCode.E005_UNSUPPORTED_MODEL, t("errors.model_unavailable", lang), lang))
+        return
+    if not is_supported_audio_input(message):
+        await message.answer(
+            format_user_error(ErrorCode.E001_INVALID_INPUT_TYPE, t("generation.unsupported_audio_type", lang), lang),
+            reply_markup=build_back_to_settings_keyboard(lang),
+        )
+        return
+
+    max_size_bytes = get_audio_max_size_bytes(model)
+    file_size = get_audio_input_file_size(message)
+    if max_size_bytes is not None and file_size is not None and file_size > max_size_bytes:
+        await message.answer(
+            format_user_error(ErrorCode.E001_INVALID_INPUT_TYPE, t("generation.audio_too_large", lang), lang),
+            reply_markup=build_back_to_settings_keyboard(lang),
+        )
+        return
+
+    audio_payload = build_input_audio_or_text_payload(message)
+    audio_file_id = audio_payload.get("file_id")
+    if not audio_file_id:
+        await message.answer(
+            format_user_error(ErrorCode.E001_INVALID_INPUT_TYPE, t("generation.unsupported_audio_type", lang), lang),
+            reply_markup=build_back_to_settings_keyboard(lang),
+        )
+        return
+
+    try:
+        telegram_files = TelegramFilesService(message.bot)
+        temp_audio = await telegram_files.download_temp_file_and_get_public_url(str(audio_file_id))
+    except ImageUploadError:
+        log_generation_error(ErrorCode.E012_MEDIA_UPLOAD_FAILED, user_id=message.from_user.id, status="failed")
+        await message.answer(
+            format_user_error(ErrorCode.E012_MEDIA_UPLOAD_FAILED, t("errors.prepare_media_failed", lang), lang),
+            reply_markup=build_back_to_settings_keyboard(lang),
+        )
+        return
+
+    await state.update_data(
+        input_audio_url=temp_audio.public_url,
+        input_audio_path=str(temp_audio.local_path),
+        input_audio_file_id=str(audio_file_id),
+        input_audio_or_text={**audio_payload, "public_url": temp_audio.public_url},
+        prompt=t("generation.audio_file", lang),
+    )
+    if model_requires_prompt_input(model):
+        await set_waiting_for_prompt_with_diagnostic(
+            state,
+            user_id=message.from_user.id,
+            incoming_text_type=get_incoming_text_type(message),
+        )
+        await message.answer(
+            t("generation.audio_received", lang),
+            reply_markup=build_back_to_settings_keyboard(lang),
+        )
+        await message.answer(
+            get_second_prompt_for_generation_type(model.generation_type, lang),
+            reply_markup=build_back_to_settings_keyboard(lang),
+        )
+        return
+    await message.answer(t("generation.audio_received", lang))
+    await send_confirmation_screen(
+        message=message,
+        state=state,
+        session=session,
+        telegram_user=message.from_user,
+        edit=False,
+    )
+
+
+@router.message(GenerationStates.waiting_for_audio)
+async def invalid_generation_audio(message: Message, state: FSMContext):
+    """Сообщить, что ожидается аудиофайл."""
+    state_data = await state.get_data()
+    lang = get_state_language(state_data, message.from_user)
+    await message.answer(
+        format_user_error(ErrorCode.E001_INVALID_INPUT_TYPE, t("generation.unsupported_audio_type", lang), lang),
+        reply_markup=build_back_to_settings_keyboard(lang),
     )
 
 
@@ -3652,10 +3869,11 @@ async def process_prompt(
             input_audio_or_text = build_input_audio_or_text_payload(message)
             prompt = get_input_audio_or_text_display(input_audio_or_text, lang)
             if not input_audio_or_text:
-                await message.answer(format_user_error(ErrorCode.E001_INVALID_INPUT_TYPE, t("generation.lipsync_need_text", lang), lang))
+                message_key = "generation.send_audio_for_lipsync" if model.requires_audio else "generation.lipsync_need_text"
+                await message.answer(format_user_error(ErrorCode.E001_INVALID_INPUT_TYPE, t(message_key, lang), lang))
                 return
             if model.requires_audio and not is_audio_input_payload(input_audio_or_text):
-                await message.answer(format_user_error(ErrorCode.E001_INVALID_INPUT_TYPE, t("generation.lipsync_need_text", lang), lang))
+                await message.answer(format_user_error(ErrorCode.E001_INVALID_INPUT_TYPE, t("generation.send_audio_for_lipsync", lang), lang))
                 return
             if model.requires_prompt and not is_text_input_payload(input_audio_or_text):
                 await message.answer(format_user_error(ErrorCode.E002_MISSING_PROMPT, get_flow_texts(model.generation_type, lang).missing_prompt, lang))
@@ -3898,14 +4116,25 @@ async def confirm_generation(callback: CallbackQuery, state: FSMContext, session
             temp_input_paths.append(str(temp_media.local_path))
 
         payload_user_settings = dict(user_settings)
+        if model and model.input_media_field == "video":
+            input_video_url = state_data.get("input_video_url") or (media_urls[0] if media_urls else None)
+            if isinstance(input_video_url, str) and input_video_url:
+                payload_user_settings["input_video_url"] = input_video_url
         if model and model.requires_audio:
-            audio_input = input_audio_or_text if isinstance(input_audio_or_text, dict) else {}
-            audio_file_id = audio_input.get("file_id") if audio_input.get("type") in {"voice", "audio"} else None
-            if audio_file_id:
-                telegram_files = TelegramFilesService(callback.bot)
-                temp_audio = await telegram_files.download_temp_file_and_get_public_url(str(audio_file_id))
-                payload_user_settings["audio_url"] = temp_audio.public_url
-                temp_input_paths.append(str(temp_audio.local_path))
+            audio_url = state_data.get("input_audio_url")
+            audio_path = state_data.get("input_audio_path")
+            if isinstance(audio_url, str) and audio_url:
+                payload_user_settings["input_audio_url"] = audio_url
+                if isinstance(audio_path, str) and audio_path:
+                    temp_input_paths.append(audio_path)
+            else:
+                audio_input = input_audio_or_text if isinstance(input_audio_or_text, dict) else {}
+                audio_file_id = audio_input.get("file_id") if audio_input.get("type") in {"voice", "audio"} else None
+                if audio_file_id:
+                    telegram_files = TelegramFilesService(callback.bot)
+                    temp_audio = await telegram_files.download_temp_file_and_get_public_url(str(audio_file_id))
+                    payload_user_settings["input_audio_url"] = temp_audio.public_url
+                    temp_input_paths.append(str(temp_audio.local_path))
         if len(temp_input_paths) == 1:
             temp_input_path = temp_input_paths[0]
         else:

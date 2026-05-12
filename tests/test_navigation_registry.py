@@ -94,9 +94,11 @@ def _build_minimal_payload_for_model(model: GenerationModel) -> dict[str, object
 
     if model.generation_type == "lipsync":
         image_urls = ["https://example.com/face.mp4"]
+        user_settings["input_video_url"] = image_urls[0]
+        image_urls = []
         if model.requires_audio:
             prompt = ""
-            user_settings["audio_url"] = "https://example.com/input.mp3"
+            user_settings["input_audio_url"] = "https://example.com/input.mp3"
         else:
             prompt = "Lip sync text"
     elif model.requires_image:
@@ -104,7 +106,7 @@ def _build_minimal_payload_for_model(model: GenerationModel) -> dict[str, object
     elif model.requires_video:
         image_urls = ["https://example.com/input.mp4"]
     if model.requires_audio:
-        user_settings["audio_url"] = "https://example.com/input.mp3"
+        user_settings["input_audio_url"] = "https://example.com/input.mp3"
 
     if not model.requires_prompt and model.generation_type != "lipsync":
         prompt = ""

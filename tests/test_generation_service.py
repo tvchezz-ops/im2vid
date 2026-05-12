@@ -57,6 +57,7 @@ from app.services.model_registry.minimax import MINIMAX_MODEL_SLUGS, PROVIDER_MO
 from app.services.model_registry.openai import OPENAI_MODEL_SLUGS, PROVIDER_MODELS as OPENAI_MODELS
 from app.services.model_registry.wavespeed_ai import WAVESPEED_AI_MODEL_SLUGS, PROVIDER_MODELS as WAVESPEED_AI_MODELS
 from app.services.model_registry.generated_params import GENERATED_MODEL_PARAMS
+from app.services.model_registry.base import apply_generated_model_params
 
 
 def test_build_payload_nano_banana_defaults() -> None:
@@ -226,10 +227,10 @@ def test_build_payload_ignores_blank_image_urls_and_requires_one_valid_image() -
 
 def test_build_payload_lipsync_requires_exact_media_and_audio_or_prompt() -> None:
     with pytest.raises(ValueError, match="Lipsync models require a video input"):
-        build_payload("kwaivgi_kling_lipsync_audio_to_video", [], "", {"audio_url": "https://example.com/voice.mp3"})
+        build_payload("kwaivgi_kling_lipsync_audio_to_video", [], "", {"input_audio_url": "https://example.com/voice.mp3"})
 
     with pytest.raises(ValueError, match="Lipsync models require a video input"):
-        build_payload("kwaivgi_kling_lipsync_audio_to_video", ["https://example.com/face.png"], "", {"audio_url": "https://example.com/voice.mp3"})
+        build_payload("kwaivgi_kling_lipsync_audio_to_video", ["https://example.com/face.png"], "", {"input_audio_url": "https://example.com/voice.mp3"})
 
     with pytest.raises(ValueError, match="Lipsync audio-to-video models require audio input"):
         build_payload("kwaivgi_kling_lipsync_audio_to_video", ["https://example.com/face.mp4"], "")
@@ -251,9 +252,12 @@ def test_build_payload_lipsync_builds_video_audio_or_prompt_payload() -> None:
 
     audio_payload = build_payload(
         "kwaivgi_kling_lipsync_audio_to_video",
-        ["https://example.com/avatar.mp4"],
+        [],
         "",
-        {"audio_url": "https://example.com/voice.mp3"},
+        {
+            "input_video_url": "https://example.com/avatar.mp4",
+            "input_audio_url": "https://example.com/voice.mp3",
+        },
     )
     assert audio_payload == {
         "video": "https://example.com/avatar.mp4",
@@ -854,7 +858,7 @@ def test_wavespeed_ai_wan_2_2_speech_to_video_accepts_audio_input() -> None:
         "wan_2_2_speech_to_video",
         [],
         "",
-        {"audio_url": "https://example.com/speech.mp3"},
+        {"input_audio_url": "https://example.com/speech.mp3"},
     )
 
     assert payload == {"audio": "https://example.com/speech.mp3"}
@@ -866,7 +870,7 @@ def test_enabled_models_reject_missing_required_media_before_confirm_payload() -
             continue
 
         prompt = "Smoke test prompt" if model.requires_prompt else ""
-        user_settings = {"audio_url": "https://example.com/input.mp3"} if model.requires_audio else {}
+        user_settings = {"input_audio_url": "https://example.com/input.mp3"} if model.requires_audio else {}
 
         with pytest.raises(ValueError):
             build_payload(model.key, [], prompt, user_settings)
@@ -1012,10 +1016,7 @@ def test_generated_params_are_merged_into_registry() -> None:
 
 
 def test_target_models_have_generated_params_beyond_num_generations() -> None:
-    for model_key in (
-        "kwaivgi_kling_lipsync_audio_to_video",
-        "alibaba_wan_2_6_image_to_video_flash",
-    ):
+    for model_key in ("alibaba_wan_2_6_image_to_video_flash",):
         model = get_generation_model(model_key)
         generated = GENERATED_MODEL_PARAMS[model.key]
 
@@ -1049,11 +1050,70 @@ def test_wan_flash_generated_settings_are_visible_and_validated() -> None:
 def test_lipsync_audio_model_has_generated_audio_setting_and_flow_fields() -> None:
     model = get_generation_model("kwaivgi_kling_lipsync_audio_to_video")
 
-    assert "audio" in model.user_settings
+    assert "audio" not in model.user_settings
     assert model.input_media_field == "video"
     assert model.requires_audio is True
     assert model.required_payload_fields == ("audio", "video")
     assert {"audio", "video"} <= set(model.allowed_payload_fields)
+    assert model.input_requirements["prompt"] == {"required": False, "payload_field": "prompt"}
+    assert model.input_requirements["video"] == {"required": True, "payload_field": "video"}
+    assert model.input_requirements["audio"] == {"required": True, "payload_field": "audio", "max_size_mb": 5}
+
+
+def test_media_input_fields_are_not_user_settings() -> None:
+    media_setting_keys = {
+        "audio",
+        "audio_url",
+        "video",
+        "video_url",
+        "image",
+        "image_url",
+        "images",
+    }
+    for model in list_generation_models():
+        assert not (media_setting_keys & set(model.user_settings)), model.key
+
+
+def test_build_payload_uses_collected_audio_input_url() -> None:
+    payload = build_payload(
+        "kwaivgi_kling_lipsync_audio_to_video",
+        ["https://example.com/face.mp4"],
+        "",
+        {"input_audio_url": "https://example.com/voice.mp3"},
+    )
+
+    assert payload == {
+        "video": "https://example.com/face.mp4",
+        "audio": "https://example.com/voice.mp3",
+    }
+
+
+def test_runtime_merge_removes_media_fields_from_generated_user_settings() -> None:
+    base_model = get_generation_model("kwaivgi_kling_lipsync_audio_to_video")
+
+    merged_model = apply_generated_model_params(
+        (base_model,),
+        {
+            base_model.key: {
+                "allowed_payload_fields": ["video", "audio", "audio_url"],
+                "required_fields": ["video", "audio"],
+                "input_requirements": {
+                    "prompt": {"required": False, "payload_field": "prompt"},
+                    "video": {"required": True, "payload_field": "video"},
+                    "audio": {"required": True, "payload_field": "audio"},
+                },
+                "user_settings": {
+                    "audio": {"type": "string", "title": "Audio"},
+                    "audio_url": {"type": "string", "title": "Audio URL"},
+                    "duration": {"type": "integer", "title": "Duration", "default": "5"},
+                },
+            }
+        },
+    )[0]
+
+    assert "audio" not in merged_model.user_settings
+    assert "audio_url" not in merged_model.user_settings
+    assert "duration" in merged_model.user_settings
 
 
 def test_seed_is_not_exposed_for_any_enabled_model() -> None:
@@ -1217,7 +1277,7 @@ def test_build_payload_supports_every_enabled_model(model: GenerationModel) -> N
     if model.generation_type == "lipsync":
         image_urls = ["https://example.com/face.mp4"]
         if model.requires_audio:
-            payload = build_payload(model.key, image_urls, "", {"audio_url": "https://example.com/input.mp3"})
+            payload = build_payload(model.key, [], "", {"input_video_url": image_urls[0], "input_audio_url": "https://example.com/input.mp3"})
             assert payload.get("audio") == "https://example.com/input.mp3"
         else:
             payload = build_payload(model.key, image_urls, "Lip sync text")
@@ -1230,7 +1290,7 @@ def test_build_payload_supports_every_enabled_model(model: GenerationModel) -> N
     elif model.requires_video:
         image_urls = ["https://example.com/input.mp4"]
     if model.requires_audio:
-        user_settings["audio_url"] = "https://example.com/input.mp3"
+        user_settings["input_audio_url"] = "https://example.com/input.mp3"
 
     if not model.requires_prompt:
         prompt = ""

@@ -584,6 +584,17 @@ def _assert_required_payload_fields(
         raise ValueError(f"Model '{model.key}' requires payload field(s): {missing}")
 
 
+def _get_input_requirement(model: GenerationModel, input_kind: str) -> Mapping[str, Any]:
+    requirement = (model.input_requirements or {}).get(input_kind)
+    return requirement if isinstance(requirement, Mapping) else {}
+
+
+def _get_input_payload_field(model: GenerationModel, input_kind: str, default: str) -> str:
+    requirement = _get_input_requirement(model, input_kind)
+    payload_field = requirement.get("payload_field")
+    return str(payload_field or default)
+
+
 def build_payload(
     model_key: str,
     image_urls: list[str],
@@ -611,9 +622,15 @@ def build_payload(
         _normalize_seed_setting(validate_model_settings(model_key, user_settings)),
     )
 
+    input_video_value = raw_user_settings.get("input_video_url")
+    if input_video_value is not None and not isinstance(input_video_value, str):
+        raise ValueError("Video input must be a string value")
+    cleaned_input_video = input_video_value.strip() if isinstance(input_video_value, str) else ""
+    input_audio_value = raw_user_settings.get("input_audio_url")
+
     if model.generation_type == "lipsync":
-        media_url = valid_inputs[0] if valid_inputs else ""
-        audio_value = raw_user_settings.get("audio") or raw_user_settings.get("audio_url")
+        media_url = cleaned_input_video or (valid_inputs[0] if valid_inputs else "")
+        audio_value = input_audio_value
         if audio_value is not None and not isinstance(audio_value, str):
             raise ValueError("Audio for lipsync models must be a string value")
         cleaned_audio = audio_value.strip() if isinstance(audio_value, str) else ""
@@ -630,12 +647,12 @@ def build_payload(
             raise ValueError("Prompt must not be empty")
 
         payload: dict[str, Any] = {
-            "video": media_url,
+            _get_input_payload_field(model, "video", "video"): media_url,
             **validated_settings,
             **model.system_settings,
         }
         if cleaned_audio:
-            payload["audio"] = cleaned_audio
+            payload[_get_input_payload_field(model, "audio", "audio")] = cleaned_audio
         if cleaned_prompt:
             payload["prompt"] = cleaned_prompt
         _apply_supported_system_flags(payload, allowed_payload_fields)
@@ -668,14 +685,14 @@ def build_payload(
         if len(valid_inputs) > 1:
             raise ValueError(f"Model {model.key} supports exactly one image input")
     elif model.input_media_field == "video":
-        if not valid_inputs:
+        if not cleaned_input_video and not valid_inputs:
             raise ValueError("At least one video URL is required")
-        if len(valid_inputs) > 1:
+        if not cleaned_input_video and len(valid_inputs) > 1:
             raise ValueError(f"Model {model.key} supports exactly one video input")
 
     cleaned_audio = ""
     if model.requires_audio:
-        audio_value = raw_user_settings.get("audio") or raw_user_settings.get("audio_url")
+        audio_value = input_audio_value
         if audio_value is not None and not isinstance(audio_value, str):
             raise ValueError("Audio input must be a string value")
         cleaned_audio = audio_value.strip() if isinstance(audio_value, str) else ""
@@ -688,13 +705,13 @@ def build_payload(
     if model.requires_prompt and cleaned_prompt:
         payload["prompt"] = cleaned_prompt
     if model.input_media_field == "video":
-        payload["video"] = valid_inputs[0]
+        payload[_get_input_payload_field(model, "video", "video")] = cleaned_input_video or valid_inputs[0]
     elif model.input_media_field == "image":
-        payload["image"] = valid_inputs[0]
+        payload[_get_input_payload_field(model, "images", "image")] = valid_inputs[0]
     elif model.input_media_field == "images":
-        payload["images"] = valid_inputs
+        payload[_get_input_payload_field(model, "images", "images")] = valid_inputs
     if model.requires_audio:
-        payload["audio"] = cleaned_audio
+        payload[_get_input_payload_field(model, "audio", "audio")] = cleaned_audio
     _apply_supported_system_flags(payload, allowed_payload_fields)
     filtered_payload = {
         key: value

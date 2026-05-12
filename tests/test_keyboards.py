@@ -389,12 +389,14 @@ def test_build_model_settings_keyboard_shows_generated_settings_for_target_model
 
     wan_callbacks = _iter_callback_data(wan_keyboard)
     lipsync_callbacks = _iter_callback_data(lipsync_keyboard)
+    lipsync_texts = [button.text for button in _iter_buttons(lipsync_keyboard)]
 
     assert "gen:setting:duration" in wan_callbacks
     assert "gen:setting:resolution" in wan_callbacks
     assert "gen:setting:shot_type" in wan_callbacks
     assert "gen:setting:num_generations" in wan_callbacks
-    assert "gen:setting:audio" in lipsync_callbacks
+    assert "gen:setting:audio" not in lipsync_callbacks
+    assert all("Audio" not in text and "Аудио" not in text for text in lipsync_texts)
     assert "gen:setting:num_generations" in lipsync_callbacks
 
 

@@ -20,6 +20,7 @@ class GenerationStates(StatesGroup):
     waiting_for_images = State()
     waiting_for_image = State()
     waiting_for_video = State()
+    waiting_for_audio = State()
     waiting_for_prompt = State()
     waiting_for_confirmation = State()
 

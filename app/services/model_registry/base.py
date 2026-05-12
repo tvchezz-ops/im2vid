@@ -63,6 +63,7 @@ class GenerationModel:
     warning: str = ""
     required_payload_fields: tuple[str, ...] = ()
     allowed_payload_fields: tuple[str, ...] = ()
+    input_requirements: dict[str, Any] = field(default_factory=dict)
     input_schema: dict[str, Any] = field(default_factory=dict)
     user_settings: dict[str, GenerationSetting] = field(default_factory=dict)
     system_settings: dict[str, Any] = field(default_factory=dict)
@@ -147,6 +148,30 @@ PROVIDERS = [
     "minimax",
     "wavespeed_ai",
 ]
+
+MEDIA_INPUT_FIELDS = frozenset(
+    {
+        "image",
+        "images",
+        "image_url",
+        "image_urls",
+        "input_image",
+        "input_images",
+        "video",
+        "video_url",
+        "input_video",
+        "audio",
+        "audio_url",
+        "input_audio",
+        "first_frame",
+        "last_frame",
+        "reference_image",
+        "reference_images",
+        "face_image",
+        "source_image",
+        "target_image",
+    }
+)
 
 
 def normalize_generation_type(generation_type: str) -> str:
@@ -480,6 +505,24 @@ def build_model_registry(models: tuple[GenerationModel, ...]) -> dict[str, Gener
             model = replace(model, allowed_payload_fields=get_default_allowed_payload_fields(model))
         if not model.input_schema:
             model = replace(model, input_schema=build_input_schema(model))
+        media_user_settings = sorted(set(model.user_settings) & MEDIA_INPUT_FIELDS)
+        if media_user_settings:
+            logger.warning(
+                {
+                    "action": "media_input_fields_removed_from_user_settings",
+                    "model_key": model.key,
+                    "media_fields": media_user_settings,
+                }
+            )
+            model = replace(
+                model,
+                user_settings={
+                    setting_key: setting
+                    for setting_key, setting in model.user_settings.items()
+                    if setting_key not in MEDIA_INPUT_FIELDS
+                },
+            )
+            model = replace(model, input_schema=build_input_schema(model))
         if model.provider not in PROVIDERS:
             raise ValueError(f"Unsupported provider '{model.provider}' for model '{model.key}'")
         if model.generation_type not in GENERATION_TYPES:
@@ -492,6 +535,15 @@ def build_model_registry(models: tuple[GenerationModel, ...]) -> dict[str, Gener
             model = replace(model, warning="Model is disabled")
         if model.key in registry:
             raise ValueError(f"Duplicate generation model key: {model.key}")
+        logger.info(
+            {
+                "action": "model_input_requirements_loaded",
+                "model_key": model.key,
+                "requires_audio": model.requires_audio,
+                "requires_video": model.requires_video,
+                "user_settings_keys": sorted(model.user_settings),
+            }
+        )
         registry[model.key] = model
 
     return registry
@@ -591,13 +643,22 @@ def apply_generated_model_params(
         generated_user_settings = {
             setting_key: generation_setting_from_generated(setting_key, setting_data)
             for setting_key, setting_data in dict(generated.get("user_settings", {})).items()
-            if isinstance(setting_data, Mapping)
+            if isinstance(setting_data, Mapping) and setting_key not in MEDIA_INPUT_FIELDS
         }
+        generated_media_settings = sorted(set(dict(generated.get("user_settings", {}))) & MEDIA_INPUT_FIELDS)
+        if generated_media_settings:
+            logger.warning(
+                {
+                    "action": "media_input_fields_removed_from_user_settings",
+                    "model_key": model.key,
+                    "media_fields": generated_media_settings,
+                }
+            )
         user_settings = {**generated_user_settings, **model.user_settings}
         user_settings = {
             setting_key: setting
             for setting_key, setting in user_settings.items()
-            if setting.is_user_visible
+            if setting.is_user_visible and setting_key not in MEDIA_INPUT_FIELDS
         }
 
         system_settings = {**model.system_settings, **dict(generated.get("system_settings", {}))}
@@ -612,6 +673,7 @@ def apply_generated_model_params(
             "pricing_rules": "pricing_rules",
             "docs_url": "docs_url",
             "input_media_field": "input_media_field",
+            "input_requirements": "input_requirements",
             "min_images": "min_images",
             "max_images": "max_images",
             "supports_multiple_images": "supports_multiple_images",
@@ -626,6 +688,14 @@ def apply_generated_model_params(
                 raw_value = generated[source_key]
                 if model_field in {"required_payload_fields", "allowed_payload_fields"}:
                     replace_kwargs[model_field] = tuple(str(value) for value in raw_value)
+                elif model_field == "input_requirements" and isinstance(raw_value, Mapping):
+                    input_requirements = dict(raw_value)
+                    prompt_requirement = input_requirements.get("prompt")
+                    if isinstance(prompt_requirement, bool):
+                        input_requirements["prompt"] = {"required": prompt_requirement, "payload_field": "prompt"}
+                    elif not isinstance(prompt_requirement, Mapping):
+                        input_requirements["prompt"] = {"required": bool(model.requires_prompt), "payload_field": "prompt"}
+                    replace_kwargs[model_field] = input_requirements
                 else:
                     replace_kwargs[model_field] = raw_value
         if "base_wavespeed_price_usd" in generated:
@@ -724,6 +794,7 @@ def _model(
     required_payload_fields: tuple[str, ...] = (),
     allowed_payload_fields: tuple[str, ...] = (),
     input_schema: Optional[dict[str, Any]] = None,
+    input_requirements: Optional[dict[str, Any]] = None,
     user_settings: Optional[dict[str, GenerationSetting]] = None,
     system_settings: Optional[dict[str, Any]] = None,
     base_wavespeed_price_usd: Decimal = Decimal("0.05"),
@@ -763,6 +834,7 @@ def _model(
         warning=warning,
         required_payload_fields=required_payload_fields,
         allowed_payload_fields=allowed_payload_fields,
+        input_requirements=input_requirements or {},
         input_schema=input_schema or {},
         user_settings=normalized_user_settings,
         system_settings=system_settings or {},
@@ -971,6 +1043,39 @@ def get_default_required_payload_fields(model: GenerationModel) -> tuple[str, ..
     return model.required_fields
 
 
+def build_input_requirements(model: GenerationModel) -> dict[str, Any]:
+    """Build declarative user input requirements separate from API settings."""
+    if model.input_requirements:
+        requirements = dict(model.input_requirements)
+        prompt_requirement = requirements.get("prompt")
+        if isinstance(prompt_requirement, bool):
+            requirements["prompt"] = {"required": prompt_requirement, "payload_field": "prompt"}
+        elif not isinstance(prompt_requirement, Mapping):
+            requirements["prompt"] = {"required": bool(model.requires_prompt), "payload_field": "prompt"}
+        return requirements
+
+    requirements: dict[str, Any] = {"prompt": {"required": bool(model.requires_prompt), "payload_field": "prompt"}}
+    if model.input_media_field in {"image", "images"} or model.requires_image:
+        payload_field = model.input_media_field or ("images" if model.supports_multiple_images else "image")
+        requirements["images"] = {
+            "required": bool(model.requires_image),
+            "min": model.min_images,
+            "max": model.max_images,
+            "payload_field": payload_field,
+        }
+    if model.input_media_field == "video" or model.requires_video:
+        requirements["video"] = {
+            "required": bool(model.requires_video),
+            "payload_field": "video",
+        }
+    if model.requires_audio:
+        requirements["audio"] = {
+            "required": True,
+            "payload_field": "audio",
+        }
+    return requirements
+
+
 def build_input_schema(model: GenerationModel) -> dict[str, Any]:
     """Собрать декларативное описание допустимых параметров модели."""
     return {
@@ -980,6 +1085,7 @@ def build_input_schema(model: GenerationModel) -> dict[str, Any]:
         "supports_multiple_images": model.supports_multiple_images,
         "required_payload_fields": list(model.required_payload_fields),
         "allowed_payload_fields": list(model.allowed_payload_fields),
+        "input_requirements": build_input_requirements(model),
         "user_settings": {
             setting_key: {
                 "type": setting.type,
