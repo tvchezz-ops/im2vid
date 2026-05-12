@@ -1,0 +1,8 @@
+{
+  "type": "object",
+  "required": ["audio", "video"],
+  "properties": {
+    "audio": {"type": "string", "description": "The URL pointing to the audio file."},
+    "video": {"type": "string", "description": "The URL of the video file."}
+  }
+}

@@ -1,0 +1,13 @@
+{
+  "type": "object",
+  "required": ["image", "prompt"],
+  "properties": {
+    "image": {"type": "string", "description": "The image for generating the output."},
+    "prompt": {"type": "string", "description": "The positive prompt for the generation."},
+    "negative_prompt": {"type": "string", "description": "The negative prompt for the generation."},
+    "resolution": {"type": "string", "default": "720p", "enum": ["720p", "1080p"], "description": "The resolution of the generated media."},
+    "duration": {"type": "integer", "default": 5, "minimum": 2, "maximum": 15, "description": "The duration of the generated media in seconds."},
+    "shot_type": {"type": "string", "default": "single", "enum": ["single", "multi"], "description": "The type of shots to generate."},
+    "enable_audio": {"type": "boolean", "default": true, "description": "If set to true, outputs video with audio."}
+  }
+}

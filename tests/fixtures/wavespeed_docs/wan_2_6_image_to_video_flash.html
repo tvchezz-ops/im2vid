@@ -1,0 +1,24 @@
+# Alibaba Wan 2.6 Image To Video Flash
+
+## Parameters
+
+### Task Submission Parameters
+
+#### Request Parameters
+
+| Parameter | Type | Required | Default | Range / Options | Description |
+| --- | --- | --- | --- | --- | --- |
+| image | string | Yes | | - | The image for generating the output. |
+| audio | string | No | - | - | Audio URL to guide generation (optional). |
+| prompt | string | Yes | | - | The positive prompt for the generation. |
+| negative_prompt | string | No | | - | The negative prompt for the generation. |
+| resolution | string | No | 720p | 720p, 1080p | The resolution of the generated media. |
+| duration | integer | No | 5 | 2 ~ 15 | The duration of the generated media in seconds. |
+| shot_type | string | No | single | single, multi | The type of shots to generate. |
+| enable_prompt_expansion | boolean | No | false | - | If set to true, the prompt optimizer will be enabled. |
+| enable_audio | boolean | No | true | - | If set to true, outputs video with audio. If false, outputs silent video. |
+| seed | integer | No | -1 | -1 ~ 2147483647 | The random seed to use for the generation. |
+
+#### Response Parameters
+
+| code | integer | HTTP status code |

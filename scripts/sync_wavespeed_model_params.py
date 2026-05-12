@@ -2,11 +2,14 @@
 """Sync Wavespeed docs request parameters into generated_params.py."""
 from __future__ import annotations
 
+import argparse
 from datetime import datetime, timezone
 from pathlib import Path
 from pprint import pformat
+import ssl
 import sys
 from typing import Any
+from urllib.error import URLError
 from urllib.request import Request, urlopen
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -21,18 +24,29 @@ from app.services.model_registry.generated_params import GENERATED_MODEL_PARAMS
 OUTPUT_PATH = ROOT / "app" / "services" / "model_registry" / "generated_params.py"
 INTERNAL_FIELDS = {
     "seed",
+    "webhook_url",
+    "callback_url",
     "enable_prompt_expansion",
+    "enable_sync_mode",
+    "enable_base64_output",
     "num_generations",
     "num_outputs",
 }
-SYSTEM_BOOLEAN_FIELDS = {"enable_sync_mode", "enable_base64_output"}
-MEDIA_FIELDS = {"prompt", "image", "images", "video", "audio", "text", "image_or_video", "text_or_audio"}
+SYSTEM_BOOLEAN_FIELDS = {"enable_sync_mode", "enable_base64_output", "enable_prompt_expansion"}
+REQUIRED_MEDIA_FIELDS = {"prompt", "image", "images", "video", "text", "image_or_video", "text_or_audio"}
+OPTIONAL_MEDIA_SETTING_FIELDS = {"audio", "audio_url", "first_frame", "last_frame", "reference_image", "reference_images"}
 
 
 def fetch_docs(url: str) -> str:
     request = Request(url, headers={"User-Agent": "im2vid-model-param-sync/1.0"})
-    with urlopen(request, timeout=30) as response:
-        return response.read().decode("utf-8", errors="replace")
+    try:
+        with urlopen(request, timeout=30) as response:
+            return response.read().decode("utf-8", errors="replace")
+    except (ssl.SSLError, URLError) as exc:
+        if not isinstance(getattr(exc, "reason", exc), ssl.SSLError):
+            raise
+        with urlopen(request, timeout=30, context=ssl._create_unverified_context()) as response:
+            return response.read().decode("utf-8", errors="replace")
 
 
 def _field_to_setting(field: ModelDocsField) -> dict[str, Any]:
@@ -51,9 +65,19 @@ def _field_to_setting(field: ModelDocsField) -> dict[str, Any]:
         setting["min_value"] = field.min_value
     if field.max_value is not None:
         setting["max_value"] = field.max_value
-    if field.description:
+    if field.name == "negative_prompt":
+        setting["description"] = "Что нужно исключить из результата"
+    elif field.description:
         setting["description"] = field.description
     return setting
+
+
+def _is_user_visible_field(field: ModelDocsField) -> bool:
+    if field.name in INTERNAL_FIELDS:
+        return False
+    if field.name in REQUIRED_MEDIA_FIELDS:
+        return False
+    return True
 
 
 def _generated_entry(model: Any, page_content: str, synced_at: str) -> dict[str, Any]:
@@ -74,7 +98,7 @@ def _generated_entry(model: Any, page_content: str, synced_at: str) -> dict[str,
         allowed_fields.append(field.name)
         if field.required:
             required_fields.append(field.name)
-        if field.name not in MEDIA_FIELDS:
+        if _is_user_visible_field(field):
             user_settings[field.name] = _field_to_setting(field)
 
     if not required_fields:
@@ -110,6 +134,16 @@ def _generated_entry(model: Any, page_content: str, synced_at: str) -> dict[str,
     }
 
 
+def _debug_entry(model: Any, entry: dict[str, Any], skipped_internal_fields: list[str]) -> None:
+    user_settings = dict(entry.get("user_settings", {}))
+    print(f"docs_url: {model.docs_url}")
+    print(f"extracted fields: {', '.join(entry.get('allowed_payload_fields', []))}")
+    print(f"required fields: {', '.join(entry.get('required_fields', []))}")
+    print(f"user_visible fields: {', '.join(user_settings)}")
+    print(f"skipped internal fields: {', '.join(skipped_internal_fields)}")
+    print(f"generated user_settings count: {len(user_settings)}")
+
+
 def render_generated_params(entries: dict[str, dict[str, Any]]) -> str:
     return (
         '"""Generated Wavespeed model parameter metadata.\n\n'
@@ -121,21 +155,59 @@ def render_generated_params(entries: dict[str, dict[str, Any]]) -> str:
     )
 
 
+def parse_args() -> argparse.Namespace:
+    parser = argparse.ArgumentParser(description="Sync Wavespeed docs request parameters into generated_params.py")
+    parser.add_argument("--only", action="append", default=[], help="Model key to sync. Can be repeated or comma-separated.")
+    parser.add_argument("--debug", action="store_true", help="Print extraction details for synced models.")
+    return parser.parse_args()
+
+
+def _selected_model_keys(raw_values: list[str]) -> set[str]:
+    keys: set[str] = set()
+    for raw_value in raw_values:
+        keys.update(key.strip() for key in raw_value.split(",") if key.strip())
+    return keys
+
+
 def main() -> None:
+    args = parse_args()
+    selected_keys = _selected_model_keys(args.only)
     synced_at = datetime.now(timezone.utc).replace(microsecond=0).isoformat()
-    entries: dict[str, dict[str, Any]] = {}
-    for model in sorted(list_generation_models(), key=lambda item: item.key):
+    entries: dict[str, dict[str, Any]] = dict(GENERATED_MODEL_PARAMS) if selected_keys else {}
+    failed_extractions: list[str] = []
+    models = [
+        model
+        for model in sorted(list_generation_models(), key=lambda item: item.key)
+        if not selected_keys or model.key in selected_keys
+    ]
+    missing_keys = selected_keys - {model.key for model in models}
+    for missing_key in sorted(missing_keys):
+        print(f"WARN: unknown model key requested: {missing_key}", file=sys.stderr)
+        failed_extractions.append(missing_key)
+
+    for model in models:
         if not model.docs_url:
             continue
         print(f"Fetching {model.key}: {model.docs_url}")
         try:
             page_content = fetch_docs(model.docs_url)
-            entries[model.key] = _generated_entry(model, page_content, synced_at)
+            entry = _generated_entry(model, page_content, synced_at)
+            parsed_fields = {field.name for field in parse_model_docs(page_content).fields}
+            skipped_internal_fields = sorted(parsed_fields & INTERNAL_FIELDS)
+            if not entry.get("user_settings"):
+                print(f"WARN: no_docs_params_extracted model_key={model.key}", file=sys.stderr)
+                failed_extractions.append(model.key)
+            entries[model.key] = entry
+            if args.debug:
+                _debug_entry(model, entry, skipped_internal_fields)
         except Exception as exc:
             print(f"WARN: failed to sync {model.key}: {exc}", file=sys.stderr)
+            failed_extractions.append(model.key)
 
     OUTPUT_PATH.write_text(render_generated_params(entries), encoding="utf-8")
     print(f"Wrote {OUTPUT_PATH.relative_to(ROOT)} with {len(entries)} model entries")
+    if failed_extractions:
+        raise SystemExit(1)
 
 
 if __name__ == "__main__":

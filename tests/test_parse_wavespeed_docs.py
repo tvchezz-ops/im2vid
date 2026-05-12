@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import os
+from pathlib import Path
 
 import pytest
 
@@ -21,6 +22,9 @@ from scripts.parse_wavespeed_docs import (
     infer_generation_type_from_page,
     parse_model_docs,
 )
+
+
+FIXTURES_DIR = Path(__file__).parent / "fixtures" / "wavespeed_docs"
 
 
 @pytest.mark.parametrize(
@@ -71,3 +75,31 @@ def test_parse_model_docs_extracts_json_schema_fields() -> None:
     assert extract_enum_options(schema)["aspect_ratio"] == ("16:9", "9:16")
     assert extract_default_values(schema)["duration"] == 5
     assert extract_field_types(schema)["duration"] == "integer"
+
+
+@pytest.mark.parametrize(
+    ("fixture_name", "expected_fields"),
+    [
+        ("wan_2_6_image_to_video_flash.html", {"image", "prompt", "duration", "resolution", "shot_type"}),
+        ("kling_lipsync_audio_to_video.html", {"audio", "video"}),
+        ("wan_2_6_image_to_video_flash.json", {"image", "prompt", "duration", "resolution", "shot_type"}),
+        ("kling_lipsync_audio_to_video.json", {"audio", "video"}),
+    ],
+)
+def test_parse_model_docs_extracts_fields_from_saved_fixtures(fixture_name: str, expected_fields: set[str]) -> None:
+    schema = parse_model_docs((FIXTURES_DIR / fixture_name).read_text(encoding="utf-8"))
+    field_names = set(extract_field_types(schema))
+
+    assert len(field_names) >= 2
+    assert expected_fields <= field_names
+
+
+def test_parse_model_docs_extracts_table_defaults_options_and_bounds() -> None:
+    schema = parse_model_docs((FIXTURES_DIR / "wan_2_6_image_to_video_flash.html").read_text(encoding="utf-8"))
+    fields = {field.name: field for field in schema.fields}
+
+    assert fields["duration"].default == "5"
+    assert fields["duration"].min_value == "2"
+    assert fields["duration"].max_value == "15"
+    assert fields["resolution"].enum_options == ("720p", "1080p")
+    assert fields["shot_type"].enum_options == ("single", "multi")

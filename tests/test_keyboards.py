@@ -377,6 +377,27 @@ def test_build_model_settings_keyboard_uses_setting_keys() -> None:
     assert keyboard.inline_keyboard[-1][0].callback_data == "gen:back:models"
 
 
+def test_build_model_settings_keyboard_shows_generated_settings_for_target_models() -> None:
+    wan_keyboard = build_model_settings_keyboard(
+        get_generation_model("alibaba_wan_2_6_image_to_video_flash"),
+        {},
+    )
+    lipsync_keyboard = build_model_settings_keyboard(
+        get_generation_model("kwaivgi_kling_lipsync_audio_to_video"),
+        {},
+    )
+
+    wan_callbacks = _iter_callback_data(wan_keyboard)
+    lipsync_callbacks = _iter_callback_data(lipsync_keyboard)
+
+    assert "gen:setting:duration" in wan_callbacks
+    assert "gen:setting:resolution" in wan_callbacks
+    assert "gen:setting:shot_type" in wan_callbacks
+    assert "gen:setting:num_generations" in wan_callbacks
+    assert "gen:setting:audio" in lipsync_callbacks
+    assert "gen:setting:num_generations" in lipsync_callbacks
+
+
 def test_build_setting_options_keyboard_uses_setting_key_and_option_index() -> None:
     model = SimpleNamespace(
         user_settings={

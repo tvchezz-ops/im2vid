@@ -1011,6 +1011,51 @@ def test_generated_params_are_merged_into_registry() -> None:
     assert model.system_settings["enable_sync_mode"] is False
 
 
+def test_target_models_have_generated_params_beyond_num_generations() -> None:
+    for model_key in (
+        "kwaivgi_kling_lipsync_audio_to_video",
+        "alibaba_wan_2_6_image_to_video_flash",
+    ):
+        model = get_generation_model(model_key)
+        generated = GENERATED_MODEL_PARAMS[model.key]
+
+        assert generated["allowed_payload_fields"]
+        assert len(model.user_settings) > 1
+        assert "num_generations" in model.user_settings
+
+
+def test_wan_flash_generated_settings_are_visible_and_validated() -> None:
+    model = get_generation_model("alibaba_wan_2_6_image_to_video_flash")
+
+    assert {"duration", "resolution", "shot_type", "negative_prompt", "enable_audio"} <= set(model.user_settings)
+    assert "enable_prompt_expansion" not in model.user_settings
+    assert "seed" not in model.user_settings
+
+    payload = build_payload(
+        model.key,
+        ["https://example.com/input.png"],
+        "Animate this scene",
+        {"duration": "15", "resolution": "1080p", "shot_type": "multi", "enable_audio": "false", "negative_prompt": "blur"},
+    )
+
+    assert payload["image"] == "https://example.com/input.png"
+    assert payload["duration"] == "15"
+    assert payload["resolution"] == "1080p"
+    assert payload["shot_type"] == "multi"
+    assert payload["enable_audio"] is False
+    assert payload["negative_prompt"] == "blur"
+
+
+def test_lipsync_audio_model_has_generated_audio_setting_and_flow_fields() -> None:
+    model = get_generation_model("kwaivgi_kling_lipsync_audio_to_video")
+
+    assert "audio" in model.user_settings
+    assert model.input_media_field == "video"
+    assert model.requires_audio is True
+    assert model.required_payload_fields == ("audio", "video")
+    assert {"audio", "video"} <= set(model.allowed_payload_fields)
+
+
 def test_seed_is_not_exposed_for_any_enabled_model() -> None:
     for model in list_generation_models():
         assert "seed" not in model.user_settings
