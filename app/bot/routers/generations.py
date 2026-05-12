@@ -26,6 +26,7 @@ from app.bot.keyboards import (
     build_media_upload_reply_keyboard,
     build_generation_confirm_keyboard,
     build_generation_sections_keyboard,
+    build_generation_summary_keyboard,
     build_generation_type_keyboard,
     build_models_keyboard,
     build_model_selection_keyboard,
@@ -226,6 +227,22 @@ class OutputDeliveryResult:
         return self.success
 
 
+SUMMARY_PROMPT_LIMIT = 1500
+
+
+@dataclass(frozen=True)
+class GenerationBatchSummary:
+    """User-facing summary data for one generation request batch."""
+
+    model: GenerationModel
+    prompt: str
+    settings: Mapping[str, Any]
+    expected_count: int
+    completed_count: int
+    failed_count: int
+    credits_spent: int
+
+
 GENERATION_TYPE_LABELS = {
     "text_to_image": "🖼 Text → Image",
     "image_to_image": "🖼 Image → Image",
@@ -324,6 +341,99 @@ def format_generation_settings_localized(model: GenerationModel, user_settings: 
     return "\n".join(
         f"- <b>{escape(get_setting_display_title(setting_key, setting, lang))}</b>: <code>{escape(str(user_settings.get(setting.key, setting.default)))}</code>"
         for setting_key, setting in model.user_settings.items()
+    )
+
+
+def get_generation_summary_setting_title(setting_key: str, setting: Any, lang: str = "en") -> str:
+    if setting_key == "num_generations":
+        return t("generation.summary.setting_generations", lang)
+    return get_setting_display_title(setting_key, setting, lang)
+
+
+def get_setting_display_value(setting: Any, value: Any) -> str:
+    raw_value = str(value)
+    for option in getattr(setting, "options", ()) or ():
+        if option.value == raw_value:
+            return option.label
+    return raw_value
+
+
+def truncate_generation_summary_prompt(prompt: str, limit: int = SUMMARY_PROMPT_LIMIT) -> str:
+    if len(prompt) <= limit:
+        return prompt
+    return f"{prompt[: max(0, limit - 3)].rstrip()}..."
+
+
+def format_generation_summary_settings(model: GenerationModel, user_settings: Mapping[str, Any], lang: str = "en") -> str:
+    rows: list[str] = []
+    for setting_key, setting in model.user_settings.items():
+        if not getattr(setting, "is_user_visible", True):
+            continue
+        title = get_generation_summary_setting_title(setting_key, setting, lang)
+        value = user_settings.get(setting.key, setting.default)
+        display_value = get_setting_display_value(setting, value)
+        rows.append(f"• {escape(title)}: <code>{escape(str(display_value))}</code>")
+    return "\n".join(rows) if rows else "-"
+
+
+def build_generation_summary_message(generation_batch: GenerationBatchSummary, lang: str = "en") -> str:
+    """Build the final localized summary shown after all generation outputs in a batch."""
+    prompt = str(generation_batch.prompt or "").strip() or t("generation.summary.no_prompt", lang)
+    prompt = escape(truncate_generation_summary_prompt(prompt))
+    generation_type = escape(get_generation_type_title(generation_batch.model.generation_type, lang))
+    settings_text = format_generation_summary_settings(generation_batch.model, generation_batch.settings, lang)
+
+    parts = [
+        t("generation.summary.title", lang),
+        "",
+        t("generation.summary.model", lang, model=escape(generation_batch.model.title)),
+        t("generation.summary.type", lang, generation_type=generation_type),
+        t("generation.summary.prompt", lang, prompt=prompt),
+        "",
+        t("generation.summary.settings", lang, settings=settings_text),
+        "",
+        t(
+            "generation.summary.results",
+            lang,
+            completed=generation_batch.completed_count,
+            expected=generation_batch.expected_count,
+        ),
+    ]
+
+    if generation_batch.failed_count:
+        parts.extend(
+            [
+                t("generation.summary.partial_failed", lang, count=generation_batch.failed_count),
+                t("generation.summary.refund_done", lang),
+            ]
+        )
+
+    parts.extend(["", t("generation.summary.credits", lang, credits=generation_batch.credits_spent)])
+    return "\n".join(parts)
+
+
+def build_generation_batch_summary(generations: list[Any]) -> Optional[GenerationBatchSummary]:
+    if not generations:
+        return None
+    first_generation = generations[0]
+    try:
+        model = get_generation_model(first_generation.model_key)
+    except ValueError:
+        logger.warning("Skipped generation summary for unsupported model: %s", first_generation.model_key)
+        return None
+
+    completed_count = sum(1 for generation in generations if generation.status == GenerationRequestStatus.COMPLETED)
+    expected_count = len(generations)
+    failed_count = max(expected_count - completed_count, 0)
+    credits_spent = sum(int(generation.cost or 0) for generation in generations if generation.status == GenerationRequestStatus.COMPLETED)
+    return GenerationBatchSummary(
+        model=model,
+        prompt=str(first_generation.prompt or ""),
+        settings=dict(first_generation.settings or {}),
+        expected_count=expected_count,
+        completed_count=completed_count,
+        failed_count=failed_count,
+        credits_spent=credits_spent,
     )
 
 
@@ -1757,15 +1867,39 @@ async def mark_generation_completed(
     await log_generation_event(generation_request_id, user_id, model_key, "completed", output_count)
 
 
-async def safe_send_bot_message(bot, chat_id: int, text: str, reply_markup=None) -> None:
+async def safe_send_bot_message(bot, chat_id: int, text: str, reply_markup=None, parse_mode: str | None = None) -> None:
     """Безопасно отправить сообщение пользователю, не роняя background task."""
     if not text or not text.strip():
         logger.warning("Skipped sending empty Telegram message to user")
         return
     try:
-        await bot.send_message(chat_id, text, reply_markup=reply_markup)
+        await bot.send_message(chat_id, text, reply_markup=reply_markup, parse_mode=parse_mode)
     except Exception as exc:
         logger.exception("Failed to send Telegram message to user: %s", type(exc).__name__)
+
+
+async def send_generation_summary_message(
+    *,
+    bot,
+    chat_id: int,
+    generation_request_ids: list[Any],
+    lang: str,
+) -> None:
+    """Send one final summary for a completed generation batch."""
+    async with db_manager.session_factory() as session:
+        generations = await GenerationRepository(session).list_by_ids(generation_request_ids)
+    generation_batch = build_generation_batch_summary(generations)
+    if generation_batch is None:
+        return
+    if generation_batch.completed_count == 0:
+        return
+    await safe_send_bot_message(
+        bot,
+        chat_id,
+        build_generation_summary_message(generation_batch, lang),
+        reply_markup=build_generation_summary_keyboard(lang),
+        parse_mode="HTML",
+    )
 
 
 def get_max_telegram_document_size_bytes() -> int:
@@ -2579,6 +2713,13 @@ async def poll_generation_result(
         cleanup_inputs=True,
         use_partial_failure_message=False,
     )
+    lang = await get_user_keyboard_language(user_id)
+    await send_generation_summary_message(
+        bot=bot,
+        chat_id=chat_id,
+        generation_request_ids=[generation_request_id],
+        lang=lang,
+    )
 
 
 async def submit_generation_request(
@@ -2978,6 +3119,13 @@ async def poll_generation_results_batch(
                 logger.exception("Batch generation task failed unexpectedly: %s", result)
     finally:
         await cleanup_generation_file(temp_input_path)
+        lang = await get_user_keyboard_language(user_id)
+        await send_generation_summary_message(
+            bot=bot,
+            chat_id=chat_id,
+            generation_request_ids=[generation_request_id for generation_request_id, _ in generation_predictions],
+            lang=lang,
+        )
         for generation_request_id, _ in generation_predictions:
             BACKGROUND_GENERATIONS.pop(generation_request_id, None)
 

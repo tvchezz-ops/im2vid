@@ -190,6 +190,7 @@ class FakeBot:
         self.videos: list[dict[str, object]] = []
         self.messages: list[str] = []
         self.message_markups: list[object] = []
+        self.message_parse_modes: list[str | None] = []
 
     async def send_document(self, chat_id, document, caption=None, reply_markup=None, request_timeout=None):
         self.documents.append(
@@ -223,9 +224,10 @@ class FakeBot:
             }
         )
 
-    async def send_message(self, chat_id, text, reply_markup=None):
+    async def send_message(self, chat_id, text, reply_markup=None, parse_mode=None):
         self.messages.append(text)
         self.message_markups.append(reply_markup)
+        self.message_parse_modes.append(parse_mode)
 
 
 @pytest_asyncio.fixture
@@ -2400,6 +2402,112 @@ def test_build_confirmation_text_shows_num_generations_and_total_cost() -> None:
     assert "💳 Balance after launch: <code>49</code>" in text
 
 
+def test_build_generation_summary_message_formats_visible_settings_and_escapes_html() -> None:
+    model = GenerationModel(
+        key="summary_test_model",
+        title="Kling <Pro>",
+        provider="kling",
+        generation_type="image_to_video",
+        endpoint="/api/v3/kling/test",
+        docs_url="https://example.com/docs",
+        description="Summary test model",
+        max_images=1,
+        requires_prompt=True,
+        requires_image=True,
+        requires_video=False,
+        requires_audio=False,
+        outputs="video",
+        user_settings={
+            "num_generations": GenerationSetting(
+                key="num_generations",
+                title="Generation count",
+                type="select",
+                default="1",
+                options=(SettingOption(value="4", label="4"),),
+            ),
+            "resolution": GenerationSetting(
+                key="resolution",
+                title="Resolution",
+                type="select",
+                default="720p",
+                options=(SettingOption(value="1080p", label="1080p"),),
+            ),
+            "internal_token": GenerationSetting(
+                key="internal_token",
+                title="Internal token",
+                type="text",
+                default="secret",
+                options=(),
+                is_user_visible=False,
+            ),
+        },
+    )
+    batch = generations.GenerationBatchSummary(
+        model=model,
+        prompt="Render <b>cinematic</b> shot",
+        settings={"num_generations": "4", "resolution": "1080p", "internal_token": "raw-api-key"},
+        expected_count=4,
+        completed_count=4,
+        failed_count=0,
+        credits_spent=24,
+    )
+
+    text = generations.build_generation_summary_message(batch, "en")
+
+    assert "✅ Your generations are ready!" in text
+    assert "🤖 Model: <b>Kling &lt;Pro&gt;</b>" in text
+    assert "🎨 Type: <b>Image to Video</b>" in text
+    assert "Render &lt;b&gt;cinematic&lt;/b&gt; shot" in text
+    assert "• Generations: <code>4</code>" in text
+    assert "• Resolution: <code>1080p</code>" in text
+    assert "internal_token" not in text
+    assert "raw-api-key" not in text
+    assert "📥 Results received: <b>4/4</b>" in text
+    assert "💰 Credits spent: <b>24</b>" in text
+
+
+def test_build_generation_summary_message_localizes_empty_prompt_and_partial_failure() -> None:
+    model = generations.get_generation_model("nano_banana")
+    batch = generations.GenerationBatchSummary(
+        model=model,
+        prompt="",
+        settings={"num_generations": "10", "resolution": "4k", "aspect_ratio": "1:1", "output_format": "png"},
+        expected_count=10,
+        completed_count=7,
+        failed_count=3,
+        credits_spent=119,
+    )
+
+    text = generations.build_generation_summary_message(batch, "ru")
+
+    assert "✅ Ваши генерации готовы!" in text
+    assert "Без текстового описания" in text
+    assert "• Количество генераций: <code>10</code>" in text
+    assert "📥 Получено результатов: <b>7/10</b>" in text
+    assert "⚠️ 3 генерации завершились ошибкой." in text
+    assert "💸 Возврат кредитов выполнен автоматически." in text
+    assert "💰 Потрачено кредитов: <b>119</b>" in text
+
+
+def test_build_generation_summary_message_truncates_long_prompt() -> None:
+    model = generations.get_generation_model("nano_banana")
+    long_prompt = f"{'a' * 1600}<secret>"
+    batch = generations.GenerationBatchSummary(
+        model=model,
+        prompt=long_prompt,
+        settings={"num_generations": "1", "resolution": "4k", "aspect_ratio": "1:1", "output_format": "png"},
+        expected_count=1,
+        completed_count=1,
+        failed_count=0,
+        credits_spent=17,
+    )
+
+    text = generations.build_generation_summary_message(batch, "en")
+
+    assert "..." in text
+    assert "&lt;secret&gt;" not in text
+
+
 def test_build_settings_text_shows_price_and_recalculates_duration() -> None:
     model = generations.get_generation_model("alibaba_wan_2_6_text_to_video")
 
@@ -2542,6 +2650,123 @@ def test_parallel_generation_limit_artifacts_are_absent() -> None:
 
 
 @pytest.mark.asyncio
+async def test_single_generation_sends_summary_once_after_output(session_factory, monkeypatch, tmp_path) -> None:
+    session_maker = session_factory
+    monkeypatch.setattr(generations.db_manager, "session_factory", session_maker)
+
+    async with session_maker() as session:
+        await create_user(session, user_id=459, balance=100)
+        generation = await GenerationRepository(session).create_generation_request(
+            user_id=459,
+            model_key="nano_banana",
+            model_endpoint="/api/v3/nano-banana",
+            prompt="Prompt <safe>",
+            settings={"num_generations": "1", "resolution": "4k", "aspect_ratio": "1:1", "output_format": "png"},
+            status="created",
+            cost=17,
+        )
+
+    temp_input_path = tmp_path / "single-input.png"
+    temp_input_path.write_bytes(b"input")
+
+    class SuccessfulWavespeedService:
+        async def poll_until_complete(self, prediction_id: str, cancel_event=None, timeout_seconds=600, interval=60, **kwargs):
+            return SimpleNamespace(raw_response={"nsfw_flags": None}, outputs=["https://example.com/single.jpg"])
+
+        async def close(self) -> None:
+            return None
+
+    delivery_calls: list[list[str]] = []
+
+    async def fake_send_generation_outputs(*args, **kwargs):
+        delivery_calls.append(args[2])
+        return generations.OutputDeliveryResult(delivered_successfully=True)
+
+    bot = FakeBot()
+    monkeypatch.setattr(generations, "WavespeedService", SuccessfulWavespeedService)
+    monkeypatch.setattr(generations, "send_generation_outputs", fake_send_generation_outputs)
+
+    await generations.poll_generation_result(
+        bot=bot,
+        user_id=459,
+        chat_id=459,
+        generation_request_id=generation.id,
+        prediction_id="pred-single",
+        model_key="nano_banana",
+        cost=17,
+        temp_input_path=str(temp_input_path),
+    )
+
+    assert len(delivery_calls) == 1
+    assert len(bot.messages) == 1
+    assert "✅ Your generations are ready!" in bot.messages[0]
+    assert "Prompt &lt;safe&gt;" in bot.messages[0]
+    assert "📥 Results received: <b>1/1</b>" in bot.messages[0]
+    assert bot.message_parse_modes == ["HTML"]
+    assert bot.message_markups[0].inline_keyboard[0][0].callback_data == "gen:all"
+    assert temp_input_path.exists() is False
+
+
+@pytest.mark.asyncio
+async def test_ten_generation_batch_sends_one_summary_after_outputs(session_factory, monkeypatch, tmp_path) -> None:
+    session_maker = session_factory
+    monkeypatch.setattr(generations.db_manager, "session_factory", session_maker)
+
+    async with session_maker() as session:
+        await create_user(session, user_id=461, balance=200)
+        generation_ids = []
+        for _ in range(10):
+            generation = await GenerationRepository(session).create_generation_request(
+                user_id=461,
+                model_key="nano_banana",
+                model_endpoint="/api/v3/nano-banana",
+                prompt="Batch prompt",
+                settings={"num_generations": "10", "resolution": "4k", "aspect_ratio": "1:1", "output_format": "png"},
+                status="created",
+                cost=17,
+            )
+            generation_ids.append(generation.id)
+
+    temp_input_path = tmp_path / "batch-success-input.png"
+    temp_input_path.write_bytes(b"input")
+    generation_predictions = [(generation_id, f"pred-success-{index}") for index, generation_id in enumerate(generation_ids)]
+
+    class SuccessfulWavespeedService:
+        async def poll_until_complete(self, prediction_id: str, cancel_event=None, timeout_seconds=600, interval=60, **kwargs):
+            return SimpleNamespace(raw_response={"nsfw_flags": None}, outputs=[f"https://example.com/{prediction_id}.jpg"])
+
+        async def close(self) -> None:
+            return None
+
+    delivery_calls: list[list[str]] = []
+
+    async def fake_send_generation_outputs(*args, **kwargs):
+        delivery_calls.append(args[2])
+        return generations.OutputDeliveryResult(delivered_successfully=True)
+
+    bot = FakeBot()
+    monkeypatch.setattr(generations, "WavespeedService", SuccessfulWavespeedService)
+    monkeypatch.setattr(generations, "send_generation_outputs", fake_send_generation_outputs)
+
+    await generations.poll_generation_results_batch(
+        bot=bot,
+        user_id=461,
+        chat_id=461,
+        generation_predictions=generation_predictions,
+        model_key="nano_banana",
+        cost=17,
+        temp_input_path=str(temp_input_path),
+    )
+
+    assert len(delivery_calls) == 10
+    assert len(bot.messages) == 1
+    assert "📥 Results received: <b>10/10</b>" in bot.messages[0]
+    assert "💰 Credits spent: <b>170</b>" in bot.messages[0]
+    assert bot.message_parse_modes == ["HTML"]
+    assert temp_input_path.exists() is False
+
+
+@pytest.mark.asyncio
 async def test_batch_failure_refunds_only_one_credit_and_cleans_up_after_all_tasks(session_factory, monkeypatch, tmp_path) -> None:
     session_maker = session_factory
     monkeypatch.setattr(generations.db_manager, "session_factory", session_maker)
@@ -2607,6 +2832,10 @@ async def test_batch_failure_refunds_only_one_credit_and_cleans_up_after_all_tas
     assert len(delivery_calls) == 7
     assert temp_input_path.exists() is False
     assert bot.messages.count("❌ Error E007: one of the generations failed. Its generation cost was refunded.") == 3
+    assert "📥 Results received: <b>7/10</b>" in bot.messages[-1]
+    assert "⚠️ 3 generations failed." in bot.messages[-1]
+    assert "💸 Credits were refunded automatically." in bot.messages[-1]
+    assert "💰 Credits spent: <b>119</b>" in bot.messages[-1]
 
 
 @pytest.mark.asyncio

@@ -289,6 +289,16 @@ class GenerationRepository:
         )
         return result.scalars().first()
 
+    async def list_by_ids(self, generation_ids: list[Any]) -> list[GenerationRequest]:
+        """Получить generation_request records по списку id с сохранением порядка списка."""
+        if not generation_ids:
+            return []
+        result = await self.session.execute(
+            select(GenerationRequest).where(GenerationRequest.id.in_(generation_ids))
+        )
+        generations_by_id = {generation.id: generation for generation in result.scalars().all()}
+        return [generations_by_id[generation_id] for generation_id in generation_ids if generation_id in generations_by_id]
+
     async def count_active_generations(self, user_id: int) -> int:
         """Посчитать активные generation_request пользователя."""
         result = await self.session.execute(
