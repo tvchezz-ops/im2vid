@@ -85,6 +85,7 @@ def test_build_providers_keyboard_uses_expected_callback_prefix() -> None:
     keyboard = build_providers_keyboard()
 
     callback_data = _iter_callback_data(keyboard)
+    button_texts = [button.text for button in _iter_buttons(keyboard)]
     assert "gen:provider:google:0" in callback_data
     assert "gen:provider:bytedance:0" in callback_data
     assert "gen:provider:kling:0" in callback_data
@@ -92,6 +93,8 @@ def test_build_providers_keyboard_uses_expected_callback_prefix() -> None:
     assert "gen:provider:minimax:0" in callback_data
     assert "gen:provider:wavespeed_ai:0" in callback_data
     assert "gen:provider:midjourney" not in callback_data
+    assert "Wan AI" in button_texts
+    assert all("Wavespeed" not in button.text for button in _iter_buttons(keyboard))
 
 
 def test_build_models_keyboard_uses_passed_models_only() -> None:

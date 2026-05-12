@@ -78,7 +78,7 @@ PROVIDER_LABELS = {
     "kling": "Kling",
     "grok": "Grok",
     "minimax": "MiniMax",
-    "wavespeed_ai": "Wavespeed AI",
+    "wavespeed_ai": "Wan AI",
 }
 
 

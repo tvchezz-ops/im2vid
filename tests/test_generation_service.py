@@ -640,7 +640,7 @@ def test_normalize_model_key_from_slug() -> None:
 
 def test_humanize_model_title_from_slug() -> None:
     assert humanize_model_title("openai-gpt-image-2-edit") == "OpenAI GPT Image 2 Edit"
-    assert humanize_model_title("wavespeed-ai-t2v") == "Wavespeed AI T2V"
+    assert humanize_model_title("wavespeed-ai-t2v") == "Wan AI T2V"
 
 
 def test_create_wavespeed_model_from_docs_url_creates_valid_model() -> None:

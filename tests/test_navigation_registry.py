@@ -188,7 +188,8 @@ def test_new_providers_appear_when_they_have_enabled_models() -> None:
         assert "gen:provider:minimax:0" in callbacks
         assert "gen:provider:wavespeed_ai:0" in callbacks
         assert "MiniMax" in button_texts
-        assert "Wavespeed AI" in button_texts
+        assert "Wan AI" in button_texts
+        assert "Wavespeed AI" not in button_texts
     finally:
         for provider in injected_providers:
             MODEL_REGISTRY.pop(f"enabled_{provider}_navigation_model", None)

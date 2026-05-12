@@ -253,7 +253,7 @@ PROVIDER_LABELS = {
     "kling": "Kling",
     "grok": "Grok",
     "minimax": "MiniMax",
-    "wavespeed_ai": "Wavespeed AI",
+    "wavespeed_ai": "Wan AI",
 }
 
 
@@ -2431,7 +2431,7 @@ def get_content_type_for_path(file_path: str) -> Optional[str]:
 
 
 def normalize_filename(original_name: str) -> str:
-    """Нормализовать имя output-файла Wavespeed к формату imai-*.ext."""
+    """Нормализовать имя output-файла к формату imai-*.ext."""
     raw_name = Path(unquote(original_name or "")).name
     suffix = Path(raw_name).suffix.lower()
     stem = Path(raw_name).stem

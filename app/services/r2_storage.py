@@ -44,6 +44,12 @@ class R2StorageService:
     def _normalize_filename(filename: str, local_path: str) -> str:
         raw_name = Path(filename or "").name
         if raw_name:
+            stem = Path(raw_name).stem
+            suffix = Path(raw_name).suffix
+            if stem.startswith("wavespeed-output"):
+                suffix_text = stem.removeprefix("wavespeed-output").lstrip("-_")
+                normalized_stem = f"imai-{suffix_text}" if suffix_text else "imai-output"
+                return f"{normalized_stem}{suffix}"
             return raw_name
         local_name = Path(local_path).name
         if local_name:

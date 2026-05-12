@@ -309,6 +309,7 @@ def humanize_model_title(slug: str) -> str:
         "openai": "OpenAI",
         "t2i": "T2I",
         "t2v": "T2V",
+        "wavespeed": "Wan",
     }
     title_parts = []
     tokens = _slug_tokens(slug)
@@ -672,7 +673,7 @@ def create_wavespeed_model_from_docs_url(
         generation_type=generation_type,
         endpoint=f"https://api.wavespeed.ai/api/v3/{resolved_provider}/{slug}",
         docs_url=url,
-        description=f"{humanize_model_title(slug)} model from Wavespeed docs.",
+        description=f"{humanize_model_title(slug)} model.",
         is_enabled=inferred_enabled,
         warning="" if inferred_enabled else inferred_warning or "Model is disabled",
         required_payload_fields=(),

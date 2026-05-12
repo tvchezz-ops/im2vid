@@ -116,7 +116,8 @@ def test_upload_and_get_signed_url_uses_temporary_outputs_prefix(tmp_path, monke
     assert signed_url == "https://signed.example.com/temp"
     upload_call = client.upload_calls[0]
     assert upload_call["object_key"].startswith("temporary-outputs/")
-    assert upload_call["object_key"].endswith("/wavespeed-output.mp4")
+    assert upload_call["object_key"].endswith("/imai-output.mp4")
+    assert "/wavespeed-output" not in upload_call["object_key"]
     assert client.presign_calls[0]["params"]["Key"] == upload_call["object_key"]
 
 
@@ -130,7 +131,8 @@ def test_upload_and_get_object_key_returns_generated_object_key(tmp_path, monkey
     object_key = service.upload_and_get_object_key(str(local_file), "wavespeed-output.mp4", "video/mp4")
 
     assert object_key.startswith("temporary-outputs/")
-    assert object_key.endswith("/wavespeed-output.mp4")
+    assert object_key.endswith("/imai-output.mp4")
+    assert "/wavespeed-output" not in object_key
     assert client.upload_calls[0]["object_key"] == object_key
 
 
