@@ -661,16 +661,16 @@ def test_create_wavespeed_model_from_docs_url_creates_valid_model() -> None:
     )
     registry = build_model_registry((model,))
 
-    assert registry[model.key] == model
+    registered_model = registry[model.key]
     assert model.key == "google_nano_banana_pro_edit_ultra"
     assert model.title == "Google Nano Banana Pro Edit Ultra"
     assert model.provider == "google"
     assert model.generation_type == "image_edit"
     assert model.base_wavespeed_price_usd == Decimal("0.05")
     assert model.pricing_type == "per_generation"
-    assert set(model.user_settings) == {"num_generations"}
-    assert "seed" not in model.user_settings
-    assert "enable_prompt_expansion" not in model.user_settings
+    assert set(registered_model.user_settings) >= {"num_generations", "strength", "negative_prompt"}
+    assert "seed" not in registered_model.user_settings
+    assert "enable_prompt_expansion" not in registered_model.user_settings
 
 
 def test_create_wavespeed_model_from_docs_url_uses_unique_key_format() -> None:
@@ -903,6 +903,7 @@ def test_video_extend_requires_video_and_prompt() -> None:
         "prompt": "Extend this scene",
         "enable_sync_mode": False,
         "enable_base64_output": False,
+        "mode": "fast",
     }
 
 
@@ -997,8 +998,8 @@ def test_enabled_models_have_settings_or_explicit_empty_state() -> None:
 def test_model_specific_defaults_are_used_for_docs_confirmed_models() -> None:
     model = get_generation_model("alibaba_wan_2_6_text_to_image")
 
-    assert set(model.user_settings) == {"num_generations"}
-    assert get_default_settings(model.key) == {"num_generations": "1"}
+    assert {"aspect_ratio", "negative_prompt", "num_generations"} <= set(model.user_settings)
+    assert get_default_settings(model.key) == {"aspect_ratio": "1:1", "negative_prompt": "", "num_generations": "1"}
 
 
 def test_generated_params_import_and_reference_registry_models() -> None:
@@ -1053,25 +1054,110 @@ def test_lipsync_audio_model_has_generated_audio_setting_and_flow_fields() -> No
     assert "audio" not in model.user_settings
     assert model.input_media_field == "video"
     assert model.requires_audio is True
-    assert model.required_payload_fields == ("audio", "video")
+    assert set(model.required_payload_fields) == {"audio", "video"}
     assert {"audio", "video"} <= set(model.allowed_payload_fields)
     assert model.input_requirements["prompt"] == {"required": False, "payload_field": "prompt"}
     assert model.input_requirements["video"] == {"required": True, "payload_field": "video"}
     assert model.input_requirements["audio"] == {"required": True, "payload_field": "audio", "max_size_mb": 5}
 
 
+def test_generated_params_runtime_fallback_keeps_only_num_generations_under_20_percent() -> None:
+    enabled_models = list_generation_models()
+    only_num_generations = [
+        model.key
+        for model in enabled_models
+        if {key for key, setting in model.user_settings.items() if setting.is_user_visible} <= {"num_generations"}
+    ]
+
+    assert len(only_num_generations) / len(enabled_models) <= 0.2, only_num_generations[:30]
+
+
+def test_core_video_and_image_models_get_relevant_fallback_settings() -> None:
+    setting_expectations = {
+        "text_to_image": {"aspect_ratio", "negative_prompt", "resolution", "size"},
+        "image_to_image": {"strength", "negative_prompt", "size"},
+        "image_edit": {"strength", "negative_prompt", "size", "aspect_ratio", "resolution", "output_format"},
+        "text_to_video": {"duration", "aspect_ratio", "mode", "quality", "negative_prompt"},
+        "image_to_video": {"duration", "mode", "quality", "motion_strength"},
+        "reference_to_video": {"duration", "mode", "quality", "motion_strength"},
+    }
+
+    for model in list_generation_models():
+        expected_settings = setting_expectations.get(model.generation_type)
+        if expected_settings is None:
+            continue
+        assert expected_settings & set(model.user_settings), model.key
+
+
+def test_deterministic_input_requirements_follow_generation_type() -> None:
+    for model in list_generation_models():
+        requirements = model.input_requirements
+        if model.generation_type == "image_to_video":
+            assert requirements["images"]["required"] is True, model.key
+            assert requirements["prompt"]["required"] is True, model.key
+        if model.generation_type == "text_to_video":
+            assert requirements["prompt"]["required"] is True, model.key
+            assert "images" not in requirements or requirements["images"]["required"] is False, model.key
+            assert "video" not in requirements or requirements["video"]["required"] is False, model.key
+        if model.generation_type in {"video_edit", "video_extend"}:
+            assert requirements["video"]["required"] is True, model.key
+            assert requirements["prompt"]["required"] is True, model.key
+
+
+def test_specific_generated_and_fallback_model_contracts() -> None:
+    wan = get_generation_model("alibaba_wan_2_6_image_to_video_flash")
+    kling = get_generation_model("kwaivgi_kling_lipsync_audio_to_video")
+    veo_extend = get_generation_model("google_veo3_1_fast_video_extend")
+
+    assert wan.input_requirements["images"]["required"] is True
+    assert {"duration", "quality", "mode"} & set(wan.user_settings)
+    assert kling.input_requirements["video"]["required"] is True
+    assert kling.input_requirements["audio"]["required"] is True
+    assert "audio" not in kling.user_settings
+    assert veo_extend.input_requirements["video"]["required"] is True
+    assert veo_extend.input_requirements["prompt"]["required"] is True
+    assert set(veo_extend.user_settings) - {"num_generations"}
+
+
 def test_media_input_fields_are_not_user_settings() -> None:
     media_setting_keys = {
         "audio",
         "audio_url",
+        "input_audio",
         "video",
         "video_url",
+        "input_video",
         "image",
         "image_url",
         "images",
+        "image_urls",
+        "input_image",
+        "input_images",
+        "first_frame",
+        "last_frame",
+        "reference_image",
+        "reference_images",
+        "source_image",
+        "target_image",
+        "face_image",
     }
     for model in list_generation_models():
         assert not (media_setting_keys & set(model.user_settings)), model.key
+
+
+def test_media_fields_can_still_be_allowed_payload_fields() -> None:
+    model = get_generation_model("kwaivgi_kling_lipsync_audio_to_video")
+
+    assert {"audio", "video"} <= set(model.allowed_payload_fields)
+
+
+def test_registry_logs_aggregate_params_summary_without_per_model_spam(caplog) -> None:
+    caplog.set_level(logging.INFO)
+
+    build_model_registry((get_generation_model("kwaivgi_kling_lipsync_audio_to_video"),))
+
+    assert any("model_registry_params_summary" in record.getMessage() for record in caplog.records)
+    assert not any("model_input_requirements_loaded" in record.getMessage() for record in caplog.records)
 
 
 def test_build_payload_uses_collected_audio_input_url() -> None:
@@ -1140,7 +1226,9 @@ def test_openai_models_from_docs_are_enabled() -> None:
 
     assert model.is_enabled is True
     assert model.warning == ""
-    assert build_payload(model.key, [], "Generate a poster") == {"prompt": "Generate a poster"}
+    payload = build_payload(model.key, [], "Generate a poster")
+    assert payload["prompt"] == "Generate a poster"
+    assert payload["aspect_ratio"] == "1:1"
 
 
 def test_build_payload_keeps_allowed_fields_for_known_models() -> None:
@@ -1151,7 +1239,7 @@ def test_build_payload_keeps_allowed_fields_for_known_models() -> None:
         {"width": "1280", "height": "1536", "unknown": "ignored"},
     )
 
-    assert payload == {"prompt": "Generate a poster"}
+    assert payload == {"prompt": "Generate a poster", "aspect_ratio": "1:1"}
 
 
 def test_build_payload_validates_generated_number_min_max() -> None:
@@ -1219,7 +1307,7 @@ def test_empty_negative_prompt_is_not_added_to_payload() -> None:
     assert "negative_prompt" not in payload
 
 
-def test_filled_negative_prompt_is_not_added_without_model_support() -> None:
+def test_filled_negative_prompt_is_added_when_fallback_exposes_model_support() -> None:
     payload = build_payload(
         "alibaba_wan_2_6_text_to_video",
         [],
@@ -1227,7 +1315,7 @@ def test_filled_negative_prompt_is_not_added_without_model_support() -> None:
         {"negative_prompt": "blur, noise"},
     )
 
-    assert "negative_prompt" not in payload
+    assert payload["negative_prompt"] == "blur, noise"
 
 
 def test_build_payload_maps_media_fields_per_model_contract() -> None:
@@ -1299,10 +1387,10 @@ def test_build_payload_supports_every_enabled_model(model: GenerationModel) -> N
 
     if model.requires_prompt:
         assert payload.get("prompt") == "Smoke test prompt"
-    if model.requires_image and model.outputs == "video":
-        assert payload.get("image") == "https://example.com/input.png"
-    elif model.requires_image:
-        assert payload.get("images") == ["https://example.com/input.png"]
+    if model.requires_image:
+        image_payload_field = model.input_requirements.get("images", {}).get("payload_field", "images")
+        expected_image_payload = ["https://example.com/input.png"] if image_payload_field == "images" else "https://example.com/input.png"
+        assert payload.get(image_payload_field) == expected_image_payload
     if model.requires_video:
         assert payload.get("video") == "https://example.com/input.mp4"
     if model.requires_audio:

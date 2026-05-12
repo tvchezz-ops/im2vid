@@ -395,6 +395,132 @@ def _infer_model_io(generation_type: str, slug: str = "") -> dict[str, Any]:
     return contract
 
 
+def _model_slug_text(model: GenerationModel) -> str:
+    return _slug_text(" ".join((model.key, model.endpoint, model.docs_url)))
+
+
+def _is_audio_to_video_prompt_required(slug_text: str) -> bool:
+    return any(marker in slug_text for marker in ("prompt", "text", "t2v"))
+
+
+def apply_deterministic_input_contract(model: GenerationModel) -> GenerationModel:
+    """Enforce input requirements from generation_type/slug so docs coverage gaps stay usable."""
+    slug_text = _model_slug_text(model)
+    generation_type = normalize_generation_type(model.generation_type)
+    outputs = "image" if generation_type in {"text_to_image", "image_to_image", "image_edit"} else "video"
+    requires_prompt = False
+    requires_image = False
+    requires_video = False
+    requires_audio = False
+    input_media_field: str | None = None
+    min_images = 0
+    max_images = 0
+    supports_multiple_images = False
+    is_enabled = model.is_enabled
+    warning = model.warning
+
+    if generation_type in {"text_to_image", "text_to_video"}:
+        requires_prompt = True
+    elif generation_type in {"image_to_video", "image_to_image", "image_edit"}:
+        requires_prompt = True
+        requires_image = True
+        input_media_field = "images" if generation_type in {"image_to_image", "image_edit"} else "image"
+        min_images = 1
+        max_images = max(model.max_images, 10 if generation_type == "image_edit" else 1)
+        supports_multiple_images = generation_type == "image_edit"
+    elif generation_type == "reference_to_video":
+        requires_prompt = True
+        requires_image = True
+        input_media_field = "images"
+        min_images = 1
+        max_images = max(model.max_images, 2)
+        supports_multiple_images = True
+    elif generation_type in {"video_edit", "video_extend"}:
+        requires_prompt = True
+        requires_video = True
+        input_media_field = "video"
+    elif generation_type == "video_to_audio":
+        requires_video = True
+        input_media_field = "video"
+    elif generation_type == "audio_to_video":
+        requires_audio = True
+        requires_prompt = _is_audio_to_video_prompt_required(slug_text)
+        if any(marker in slug_text for marker in ("video", "avatar", "face")) and "audio-to-video" not in slug_text and "speech-to-video" not in slug_text:
+            requires_video = True
+            input_media_field = "video"
+    elif generation_type == "lipsync":
+        requires_video = True
+        input_media_field = "video"
+        if "audio-to-video" in slug_text:
+            requires_audio = True
+        elif "text-to-video" in slug_text:
+            requires_prompt = True
+        else:
+            is_enabled = False
+            warning = warning or "Lipsync input contract needs verification"
+    elif generation_type == "motion_control":
+        if "image-to-video" in slug_text or "i2v" in slug_text:
+            requires_prompt = True
+            requires_image = True
+            input_media_field = "image"
+            min_images = 1
+            max_images = 1
+        elif "text-to-video" in slug_text or "t2v" in slug_text:
+            requires_prompt = True
+        else:
+            is_enabled = False
+            warning = warning or "Motion control input contract needs verification"
+    elif generation_type in {"effects", "avatar"}:
+        if any(marker in slug_text for marker in ("image-to-video", "i2v", "image", "avatar")):
+            requires_prompt = "text" in slug_text or "prompt" in slug_text
+            requires_image = True
+            input_media_field = "image"
+            min_images = 1
+            max_images = 1
+        elif "text-to-video" in slug_text or "t2v" in slug_text:
+            requires_prompt = True
+        elif "video" in slug_text:
+            requires_video = True
+            input_media_field = "video"
+        else:
+            is_enabled = False
+            warning = warning or f"{generation_type} input contract needs verification"
+
+    required_fields: list[str] = []
+    if requires_image:
+        required_fields.append(input_media_field or "image")
+    if requires_video:
+        required_fields.append("video")
+    if requires_audio:
+        required_fields.append("audio")
+    if requires_prompt:
+        required_fields.append("prompt")
+
+    allowed_fields = list(model.allowed_payload_fields)
+    for field_name in required_fields:
+        if field_name not in allowed_fields:
+            allowed_fields.append(field_name)
+
+    normalized_model = replace(
+        model,
+        generation_type=generation_type,
+        outputs=outputs,
+        requires_prompt=requires_prompt,
+        requires_image=requires_image,
+        requires_video=requires_video,
+        requires_audio=requires_audio,
+        input_media_field=input_media_field,
+        min_images=min_images,
+        max_images=max_images,
+        supports_multiple_images=supports_multiple_images,
+        is_enabled=is_enabled,
+        warning=warning,
+        required_payload_fields=tuple(dict.fromkeys(required_fields)),
+        allowed_payload_fields=tuple(dict.fromkeys(allowed_fields)),
+    )
+    return replace(normalized_model, input_requirements=build_input_requirements(normalized_model))
+
+
 def create_wavespeed_model_from_docs_url(
     url: str,
     provider: str | None = None,
@@ -488,6 +614,8 @@ def build_model_registry(models: tuple[GenerationModel, ...]) -> dict[str, Gener
     registry: dict[str, GenerationModel] = {}
 
     for model in models:
+        default_allowed_fields = set(get_default_allowed_payload_fields(model))
+        allowed_was_missing = not model.allowed_payload_fields or set(model.allowed_payload_fields) <= default_allowed_fields
         generation_type = model.generation_type or infer_generation_type_from_endpoint(model.endpoint)
         if not generation_type:
             logger.warning(
@@ -499,6 +627,7 @@ def build_model_registry(models: tuple[GenerationModel, ...]) -> dict[str, Gener
         generation_type = normalize_generation_type(generation_type)
         if generation_type != model.generation_type:
             model = replace(model, generation_type=generation_type)
+        model = apply_deterministic_input_contract(model)
         if not model.required_payload_fields:
             model = replace(model, required_payload_fields=get_default_required_payload_fields(model))
         if not model.allowed_payload_fields:
@@ -523,6 +652,8 @@ def build_model_registry(models: tuple[GenerationModel, ...]) -> dict[str, Gener
                 },
             )
             model = replace(model, input_schema=build_input_schema(model))
+        model = apply_fallback_user_settings(model, allowed_was_missing=allowed_was_missing)
+        model = replace(model, input_schema=build_input_schema(model))
         if model.provider not in PROVIDERS:
             raise ValueError(f"Unsupported provider '{model.provider}' for model '{model.key}'")
         if model.generation_type not in GENERATION_TYPES:
@@ -535,17 +666,29 @@ def build_model_registry(models: tuple[GenerationModel, ...]) -> dict[str, Gener
             model = replace(model, warning="Model is disabled")
         if model.key in registry:
             raise ValueError(f"Duplicate generation model key: {model.key}")
-        logger.info(
-            {
-                "action": "model_input_requirements_loaded",
-                "model_key": model.key,
-                "requires_audio": model.requires_audio,
-                "requires_video": model.requires_video,
-                "user_settings_keys": sorted(model.user_settings),
-            }
-        )
         registry[model.key] = model
 
+    enabled_models = [model for model in registry.values() if model.is_enabled]
+    only_num_generations = [model.key for model in enabled_models if _has_only_num_generations_settings(model)]
+    logger.info(
+        {
+            "action": "model_registry_params_summary",
+            "enabled_models": len(enabled_models),
+            "models_with_generated_params": sum(1 for model in enabled_models if not _has_only_num_generations_settings(model)),
+            "models_with_only_num_generations": len(only_num_generations),
+            "models_requiring_audio": sum(1 for model in enabled_models if model.requires_audio),
+            "models_requiring_video": sum(1 for model in enabled_models if model.requires_video),
+            "models_requiring_images": sum(1 for model in enabled_models if model.requires_image),
+        }
+    )
+    if only_num_generations:
+        logger.warning(
+            {
+                "action": "model_registry_params_low_coverage",
+                "only_num_generations_count": len(only_num_generations),
+                "sample_model_keys": only_num_generations[:20],
+            }
+        )
     return registry
 
 
@@ -761,6 +904,126 @@ def _text_setting(
         default=default,
         options=(),
     )
+
+
+def _number_setting(
+    key: str,
+    title: str,
+    default: str,
+    min_value: str,
+    max_value: str,
+    description: str = "",
+) -> GenerationSetting:
+    return GenerationSetting(
+        key=key,
+        title=title,
+        description=description,
+        type="number",
+        default=default,
+        options=(),
+        min_value=min_value,
+        max_value=max_value,
+    )
+
+
+def _has_only_num_generations_settings(model: GenerationModel) -> bool:
+    visible_keys = {key for key, setting in model.user_settings.items() if setting.is_user_visible}
+    return visible_keys <= {"num_generations"}
+
+
+def _fallback_field_allowed(model: GenerationModel, field_name: str, allowed_was_missing: bool) -> bool:
+    return allowed_was_missing or field_name in set(model.allowed_payload_fields)
+
+
+def _resolution_from_slug(slug_text: str) -> str | None:
+    for resolution in ("4k", "1080p", "720p", "480p"):
+        if resolution in slug_text:
+            return resolution
+    return None
+
+
+def _quality_values_from_slug(slug_text: str) -> tuple[str, ...]:
+    values: list[str] = []
+    for value, markers in (
+        ("fast", ("fast",)),
+        ("turbo", ("turbo",)),
+        ("lite", ("lite",)),
+        ("pro", ("pro",)),
+        ("standard", ("std", "standard")),
+        ("4k", ("4k",)),
+    ):
+        if any(marker in slug_text for marker in markers):
+            values.append(value)
+    return tuple(dict.fromkeys(values))
+
+
+def _add_fallback_setting(
+    settings: dict[str, GenerationSetting],
+    allowed_fields: list[str],
+    model: GenerationModel,
+    setting: GenerationSetting,
+    allowed_was_missing: bool,
+) -> None:
+    if setting.key in settings or not _fallback_field_allowed(model, setting.key, allowed_was_missing):
+        return
+    settings[setting.key] = setting
+    if setting.key not in allowed_fields:
+        allowed_fields.append(setting.key)
+
+
+def _add_quality_or_mode_fallback(
+    settings: dict[str, GenerationSetting],
+    allowed_fields: list[str],
+    model: GenerationModel,
+    slug_text: str,
+    allowed_was_missing: bool,
+) -> None:
+    values = _quality_values_from_slug(slug_text)
+    if not values:
+        return
+    allowed = set(model.allowed_payload_fields)
+    key = "quality" if "quality" in allowed else "mode" if "mode" in allowed else "mode"
+    _add_fallback_setting(settings, allowed_fields, model, _select_setting(key, key.replace("_", " ").title(), values[0], values), allowed_was_missing)
+
+
+def apply_fallback_user_settings(model: GenerationModel, *, allowed_was_missing: bool) -> GenerationModel:
+    """Add conservative settings for models whose docs overlay produced only num_generations."""
+    if not model.is_enabled or not _has_only_num_generations_settings(model):
+        return model
+    if model.generation_type in {"lipsync", "audio_to_video"}:
+        return model
+
+    settings = dict(model.user_settings)
+    allowed_fields = list(model.allowed_payload_fields)
+    slug_text = _model_slug_text(model)
+    generation_type = model.generation_type
+
+    if generation_type == "text_to_image":
+        _add_fallback_setting(settings, allowed_fields, model, _select_setting("aspect_ratio", "Формат", "1:1", ("1:1", "16:9", "9:16", "4:3", "3:4")), allowed_was_missing)
+        resolution = _resolution_from_slug(slug_text)
+        if resolution:
+            _add_fallback_setting(settings, allowed_fields, model, _select_setting("resolution", "Разрешение", resolution, tuple(dict.fromkeys((resolution, "1080p", "720p")))), allowed_was_missing)
+        _add_fallback_setting(settings, allowed_fields, model, _text_setting("negative_prompt", "Negative Prompt", "", "Что нужно исключить из результата"), allowed_was_missing)
+    elif generation_type in {"image_edit", "image_to_image"}:
+        _add_fallback_setting(settings, allowed_fields, model, _number_setting("strength", "Strength", "0.5", "0.0", "1.0"), allowed_was_missing)
+        _add_fallback_setting(settings, allowed_fields, model, _text_setting("negative_prompt", "Negative Prompt", "", "Что нужно исключить из результата"), allowed_was_missing)
+    elif generation_type == "text_to_video":
+        _add_fallback_setting(settings, allowed_fields, model, _select_setting("duration", "Длительность", "5", ("5", "10")), allowed_was_missing)
+        _add_fallback_setting(settings, allowed_fields, model, _select_setting("aspect_ratio", "Формат", "16:9", ("16:9", "9:16", "1:1")), allowed_was_missing)
+        _add_quality_or_mode_fallback(settings, allowed_fields, model, slug_text, allowed_was_missing)
+        _add_fallback_setting(settings, allowed_fields, model, _text_setting("negative_prompt", "Negative Prompt", "", "Что нужно исключить из результата"), allowed_was_missing)
+    elif generation_type in {"image_to_video", "reference_to_video"}:
+        _add_fallback_setting(settings, allowed_fields, model, _select_setting("duration", "Длительность", "5", ("5", "10")), allowed_was_missing)
+        _add_quality_or_mode_fallback(settings, allowed_fields, model, slug_text, allowed_was_missing)
+        _add_fallback_setting(settings, allowed_fields, model, _number_setting("motion_strength", "Motion Strength", "0.5", "0.0", "1.0"), allowed_was_missing)
+    elif generation_type in {"video_edit", "video_extend"}:
+        if "duration" in slug_text or _fallback_field_allowed(model, "duration", False):
+            _add_fallback_setting(settings, allowed_fields, model, _select_setting("duration", "Длительность", "5", ("5", "10")), allowed_was_missing)
+        _add_quality_or_mode_fallback(settings, allowed_fields, model, slug_text, allowed_was_missing)
+
+    if settings == model.user_settings:
+        return model
+    return replace(model, user_settings=settings, allowed_payload_fields=tuple(dict.fromkeys(allowed_fields)))
 
 
 def _api_endpoint(provider: str, path: str) -> str:

@@ -52,6 +52,15 @@ GENERATED_PARAMS_UI_KEYS = {
     "settings.clear_hint",
     "settings.current_value",
     "settings.parameter",
+    "settings.title.duration",
+    "settings.title.aspect_ratio",
+    "settings.title.quality",
+    "settings.title.mode",
+    "settings.title.negative_prompt",
+    "settings.title.strength",
+    "settings.title.motion_strength",
+    "settings.title.resolution",
+    "settings.title.num_generations",
 }
 
 

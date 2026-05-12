@@ -1227,6 +1227,24 @@ def test_raw_english_docs_description_is_not_displayed_for_ru_setting_text() -> 
     assert "The duration of the generated media" not in text
     assert "Отправьте новое числовое значение" in text
 
+
+def test_settings_screen_shows_generated_or_fallback_settings_without_media_fields() -> None:
+    wan = MODEL_REGISTRY["alibaba_wan_2_6_image_to_video_flash"]
+    kling = MODEL_REGISTRY["kwaivgi_kling_lipsync_audio_to_video"]
+    veo_extend = MODEL_REGISTRY["google_veo3_1_fast_video_extend"]
+
+    wan_text = generations.build_settings_text(wan, {}, "ru")
+    kling_text = generations.build_settings_text(kling, {}, "ru")
+    veo_text = generations.build_settings_text(veo_extend, {}, "ru")
+
+    assert set(wan.user_settings) - {"num_generations"}
+    assert set(veo_extend.user_settings) - {"num_generations"}
+    assert "Audio:" not in kling_text
+    assert "Аудио:" not in kling_text
+    assert "Длительность" in wan_text or "Разрешение" in wan_text
+    assert "Режим" in veo_text or "Качество" in veo_text
+    assert "The duration of the generated media" not in wan_text
+
 @pytest.mark.asyncio
 async def test_process_generation_video_rejects_photo_for_video_flow() -> None:
     state = FakeState({"model_generation_type": "video_edit"})

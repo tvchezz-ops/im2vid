@@ -19,7 +19,6 @@ if str(ROOT) not in sys.path:
 from app.services.model_docs_parser import ModelDocsField, parse_model_docs
 from app.services.model_registry import list_generation_models
 from app.services.model_registry.generated_params import GENERATED_MODEL_PARAMS
-from app.utils import logger
 
 
 OUTPUT_PATH = ROOT / "app" / "services" / "model_registry" / "generated_params.py"
@@ -186,16 +185,6 @@ def _generated_entry(model: Any, page_content: str, synced_at: str) -> dict[str,
     if not allowed_fields:
         allowed_fields = list(model.allowed_payload_fields)
     input_requirements = _build_input_requirements(model, fields)
-    media_fields = [field.name for field in fields if field.name in MEDIA_INPUT_FIELDS]
-    logger.info(
-        {
-            "action": "generated_params_media_fields_separated",
-            "model_key": model.key,
-            "media_fields": media_fields,
-            "user_settings_count": len(user_settings),
-            "input_requirements": input_requirements,
-        }
-    )
 
     preserved_keys = {
         key: existing_entry[key]
@@ -252,6 +241,8 @@ def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Sync Wavespeed docs request parameters into generated_params.py")
     parser.add_argument("--only", action="append", default=[], help="Model key to sync. Can be repeated or comma-separated.")
     parser.add_argument("--debug", action="store_true", help="Print extraction details for synced models.")
+    parser.add_argument("--fail-under-coverage", type=float, default=0.6, help="Fail if docs params coverage is below this ratio.")
+    parser.add_argument("--allow-low-coverage", action="store_true", help="Do not fail when docs params coverage is below threshold.")
     return parser.parse_args()
 
 
@@ -268,6 +259,8 @@ def main() -> None:
     synced_at = datetime.now(timezone.utc).replace(microsecond=0).isoformat()
     entries: dict[str, dict[str, Any]] = dict(GENERATED_MODEL_PARAMS) if selected_keys else {}
     failed_extractions: list[str] = []
+    parsed_successfully: set[str] = set()
+    docs_params_keys: set[str] = set()
     models = [
         model
         for model in sorted(list_generation_models(), key=lambda item: item.key)
@@ -290,6 +283,10 @@ def main() -> None:
             if not entry.get("user_settings") and not entry.get("input_requirements"):
                 print(f"WARN: no_docs_params_extracted model_key={model.key}", file=sys.stderr)
                 failed_extractions.append(model.key)
+            else:
+                parsed_successfully.add(model.key)
+            if len(dict(entry.get("user_settings", {}))) > 0:
+                docs_params_keys.add(model.key)
             entries[model.key] = entry
             if args.debug:
                 _debug_entry(model, entry, skipped_internal_fields)
@@ -299,7 +296,26 @@ def main() -> None:
 
     OUTPUT_PATH.write_text(render_generated_params(entries), encoding="utf-8")
     print(f"Wrote {OUTPUT_PATH.relative_to(ROOT)} with {len(entries)} model entries")
+    total_models = len(models)
+    synced_entries = [dict(entries.get(model.key, {})) for model in models]
+    models_with_more_than_one_user_setting = sum(1 for entry in synced_entries if len(dict(entry.get("user_settings", {}))) > 1)
+    models_with_only_fallback = total_models - len(docs_params_keys)
+    coverage = (len(docs_params_keys) / total_models) if total_models else 1.0
+    print(f"Total models: {total_models}")
+    print(f"Models parsed successfully: {len(parsed_successfully)}")
+    print(f"Models with >1 user setting: {models_with_more_than_one_user_setting}")
+    print(f"Models with only fallback: {models_with_only_fallback}")
+    print(f"Failed docs: {len(failed_extractions)}")
+    print(f"Sample failed keys: {', '.join(failed_extractions[:20])}")
+    print(f"Docs params coverage: {coverage:.3f}")
     if failed_extractions:
+        raise SystemExit(1)
+    if not args.allow_low_coverage and coverage < args.fail_under_coverage:
+        print(
+            f"ERROR: docs params coverage {coverage:.3f} below threshold {args.fail_under_coverage:.3f}; "
+            "rerun with --allow-low-coverage to write anyway.",
+            file=sys.stderr,
+        )
         raise SystemExit(1)
 
 
