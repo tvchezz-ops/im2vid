@@ -61,6 +61,12 @@ GENERATED_PARAMS_UI_KEYS = {
     "settings.title.motion_strength",
     "settings.title.resolution",
     "settings.title.num_generations",
+    "settings.target_resolution",
+    "settings.output_format",
+    "settings.option.jpeg",
+    "settings.option.png",
+    "settings.option.webp",
+    "requirements.image",
 }
 
 

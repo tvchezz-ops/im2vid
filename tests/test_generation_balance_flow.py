@@ -1064,6 +1064,39 @@ async def test_process_generation_image_saves_lipsync_video_as_input_media() -> 
     assert state.data["input_image_file_id"] is None
     assert "аудиофайл" in message.answers[-1].lower()
 
+
+@pytest.mark.asyncio
+async def test_process_generation_image_for_upscaler_skips_prompt(monkeypatch) -> None:
+    async def fake_upload_message_media_item(message):
+        return {
+            "type": "photo",
+            "file_id": "upscale-photo-id",
+            "local_path": "/tmp/upscale-photo-id.png",
+            "public_url": "https://example.com/upscale-photo-id.png",
+        }
+
+    confirmation_calls = []
+
+    async def fake_show_confirmation_if_media_completes_model(message, state, model):
+        confirmation_calls.append(model.key)
+        await state.set_state(GenerationStates.waiting_for_confirmation)
+        await message.answer("confirmation")
+        return True
+
+    monkeypatch.setattr(generations, "upload_message_media_item", fake_upload_message_media_item)
+    monkeypatch.setattr(generations, "show_confirmation_if_media_completes_model", fake_show_confirmation_if_media_completes_model)
+
+    state = FakeState({"model_key": "wan_ai_image_upscaler", "model_generation_type": "image_to_image"})
+    message = FakeMessage(chat_id=409)
+    message.photo = [SimpleNamespace(file_id="upscale-photo-id")]
+
+    await generations.process_generation_image(message, state)
+
+    assert confirmation_calls == ["wan_ai_image_upscaler"]
+    assert state.state == GenerationStates.waiting_for_confirmation
+    assert state.data["input_media_urls"] == ["https://example.com/upscale-photo-id.png"]
+    assert message.answers == ["confirmation"]
+
 @pytest.mark.asyncio
 async def test_process_generation_image_rejects_video_for_image_flow() -> None:
     state = FakeState({"model_generation_type": "image_edit"})

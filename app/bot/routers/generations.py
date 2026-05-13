@@ -329,6 +329,10 @@ def format_generation_settings(model: GenerationModel, user_settings: dict[str, 
 
 
 def get_setting_display_title(setting_key: str, setting: Any, lang: str = "en") -> str:
+    direct_title_key = f"settings.{setting_key}"
+    direct_translated_title = t(direct_title_key, lang)
+    if direct_translated_title != direct_title_key:
+        return direct_translated_title
     title_key = f"settings.title.{setting_key}"
     translated_title = t(title_key, lang)
     if translated_title != title_key:
@@ -1595,6 +1599,20 @@ async def prompt_for_generation_audio(message: Message, *, edit: bool, model: Ge
         t("generation.send_audio_description", lang),
         reply_markup=build_back_to_settings_keyboard(lang),
     )
+
+
+async def show_confirmation_if_media_completes_model(message: Message, state: FSMContext, model: GenerationModel) -> bool:
+    if model_requires_prompt_input(model) or model_requires_audio_file(model):
+        return False
+    async with db_manager.session_factory() as session:
+        await send_confirmation_screen(
+            message=message,
+            state=state,
+            session=session,
+            telegram_user=message.from_user,
+            edit=False,
+        )
+    return True
 
 
 async def prompt_for_repeat_media(message: Message, state: FSMContext, model: GenerationModel, *, edit: bool) -> None:
@@ -3890,6 +3908,8 @@ async def process_generation_image(message: Message, state: FSMContext, *, from_
             reply_markup=build_back_to_settings_keyboard(lang),
         )
         return
+    if model and await show_confirmation_if_media_completes_model(message, state, model):
+        return
     await set_waiting_for_prompt_with_diagnostic(
         state,
         user_id=message.from_user.id,
@@ -4323,7 +4343,7 @@ async def confirm_generation(callback: CallbackQuery, state: FSMContext, session
     model_key = state_data.get("model_key")
     model_title = state_data.get("model_title")
     model_endpoint = state_data.get("model_endpoint")
-    prompt = state_data.get("prompt")
+    prompt = str(state_data.get("prompt") or "")
     input_media = state_data.get("input_media")
     input_media_items = get_input_media_items(state_data)
     input_image_file_id = state_data.get("input_image_file_id")

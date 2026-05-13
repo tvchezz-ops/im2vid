@@ -208,6 +208,26 @@ def _get_setting_options(options: Iterable[Any]) -> list[tuple[str, str]]:
     return normalized_options
 
 
+def get_setting_display_title(setting_key: str, setting: Any, lang: str = "en") -> str:
+    direct_key = f"settings.{setting_key}"
+    direct_title = t(direct_key, lang)
+    if direct_title != direct_key:
+        return direct_title
+    title_key = f"settings.title.{setting_key}"
+    translated_title = t(title_key, lang)
+    if translated_title != title_key:
+        return translated_title
+    return str(getattr(setting, "title", setting_key))
+
+
+def get_setting_option_display_label(value: str, label: str, lang: str = "en") -> str:
+    option_key = f"settings.option.{value}"
+    translated_label = t(option_key, lang)
+    if translated_label != option_key:
+        return translated_label
+    return label
+
+
 def get_model_setting_entries(model: Any) -> list[tuple[str, Any]]:
     """Получить упорядоченный список настроек модели."""
     return [
@@ -421,10 +441,7 @@ def build_model_settings_keyboard(model: Any, current_settings: dict[str, Any], 
     rows = []
     for setting_key, setting in get_model_setting_entries(model):
         current_value = str(current_settings.get(setting.key, setting.default))
-        title_key = f"settings.title.{setting_key}"
-        setting_title = t(title_key, lang)
-        if setting_title == title_key:
-            setting_title = getattr(setting, "title", setting.key)
+        setting_title = get_setting_display_title(setting_key, setting, lang)
         rows.append(
             [
                 InlineKeyboardButton(
@@ -445,9 +462,10 @@ def build_setting_options_keyboard(model: Any, setting_key: str, current_value: 
     option_buttons = []
     for option_index, (value, label) in enumerate(_get_setting_options(setting.options)):
         marker = "✅ " if value == current_value else ""
+        display_label = get_setting_option_display_label(value, label, lang)
         option_buttons.append(
             InlineKeyboardButton(
-                text=f"{marker}{label}",
+                text=f"{marker}{display_label}",
                 callback_data=validate_callback_length(f"gen:set:{setting_key}:{option_index}"),
             )
         )

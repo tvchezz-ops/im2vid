@@ -33,6 +33,7 @@ from app.bot.keyboards import (
     resolve_model_key_from_token,
     validate_callback_length,
 )
+from app.services.generation_service import list_models_by_provider, list_models_by_type
 from app.i18n import t
 from app.services.generation_service import get_generation_model
 from app.services.generation_service import list_generation_models
@@ -107,6 +108,42 @@ def test_build_providers_keyboard_uses_expected_callback_prefix() -> None:
     assert "gen:provider:midjourney" not in callback_data
     assert "Wan AI" in button_texts
     assert all("Wavespeed" not in button.text for button in _iter_buttons(keyboard))
+
+
+def test_image_upscaler_is_user_visible_under_image_to_image_and_wan_ai() -> None:
+    category_models = list_models_by_type("image_to_image")
+    provider_models = list_models_by_provider("wavespeed_ai")
+    category_index = next(index for index, model in enumerate(category_models) if model.key == "wan_ai_image_upscaler")
+    provider_index = next(index for index, model in enumerate(provider_models) if model.key == "wan_ai_image_upscaler")
+
+    assert any(model.key == "wan_ai_image_upscaler" for model in category_models)
+    assert any(model.key == "wan_ai_image_upscaler" for model in provider_models)
+
+    category_keyboard = build_models_keyboard(category_models, "gen:back:sections", page=category_index // 8)
+    provider_keyboard = build_models_keyboard(provider_models, "gen:back:providers", page=provider_index // 8)
+    category_texts = [button.text for button in _iter_buttons(category_keyboard)]
+    provider_texts = [button.text for button in _iter_buttons(provider_keyboard)]
+
+    assert "Image Upscaler" in category_texts
+    assert "Image Upscaler" in provider_texts
+    assert all("Wavespeed" not in text for text in category_texts + provider_texts)
+
+
+def test_image_upscaler_settings_keyboard_uses_localized_labels() -> None:
+    model = get_generation_model("wan_ai_image_upscaler")
+
+    settings_keyboard = build_model_settings_keyboard(model, {"target_resolution": "4k", "output_format": "jpeg"}, lang="ru")
+    settings_texts = [button.text for button in _iter_buttons(settings_keyboard)]
+
+    assert "Целевое разрешение: 4k" in settings_texts
+    assert "Формат файла: jpeg" in settings_texts
+
+    options_keyboard = build_setting_options_keyboard(model, "output_format", "jpeg", lang="ru")
+    option_texts = [button.text for button in _iter_buttons(options_keyboard)]
+
+    assert "✅ jpeg" in option_texts
+    assert "png" in option_texts
+    assert "webp" in option_texts
 
 
 def test_build_models_keyboard_uses_passed_models_only() -> None:

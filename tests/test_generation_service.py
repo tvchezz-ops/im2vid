@@ -320,6 +320,53 @@ def test_calculate_generation_cost_multiplies_num_generations() -> None:
     assert calculate_generation_price_quote(model, get_default_settings(model.key), num_generations=10)[1] == 170
 
 
+def test_wan_ai_image_upscaler_contract_payload_and_pricing() -> None:
+    model = get_generation_model("wan_ai_image_upscaler")
+
+    assert model.title == "Image Upscaler"
+    assert model.provider == "wavespeed_ai"
+    assert model.generation_type == "image_to_image"
+    assert model.endpoint == "https://api.wavespeed.ai/api/v3/wavespeed-ai/image-upscaler"
+    assert model.docs_url == "https://wavespeed.ai/docs/docs-api/wavespeed-ai/image-upscaler"
+    assert model.requires_prompt is False
+    assert model.requires_image is True
+    assert model.requires_video is False
+    assert model.requires_audio is False
+    assert model.min_images == 1
+    assert model.max_images == 1
+    assert model.input_requirements["images"] == {"required": True, "min": 1, "max": 1, "payload_field": "image"}
+    assert model.input_requirements["prompt"]["required"] is False
+    assert model.input_requirements["video"]["required"] is False
+    assert model.input_requirements["audio"]["required"] is False
+    assert list(model.user_settings) == ["target_resolution", "output_format", "num_generations"]
+    assert {key for key, setting in model.user_settings.items() if setting.is_user_visible} == {
+        "target_resolution",
+        "output_format",
+        "num_generations",
+    }
+    assert "enable_base64_output" not in model.user_settings
+    assert "enable_sync_mode" not in model.user_settings
+
+    payload = build_payload(
+        model.key,
+        ["https://example.com/input.png"],
+        "",
+        {"target_resolution": "4k", "output_format": "jpeg", "num_generations": "10"},
+    )
+
+    assert payload == {
+        "image": "https://example.com/input.png",
+        "target_resolution": "4k",
+        "output_format": "jpeg",
+        "enable_base64_output": False,
+        "enable_sync_mode": False,
+    }
+    assert model in list_models_by_type("image_to_image")
+    assert model in list_models_by_provider("wavespeed_ai")
+    assert calculate_generation_cost_credits(model, get_default_settings(model.key), num_generations=1) == 2
+    assert calculate_generation_cost_credits(model, get_default_settings(model.key), num_generations=10) == 20
+
+
 def test_calculate_generation_cost_ceil_credits() -> None:
     model = GenerationModel(
         key="ceil-model",
@@ -525,7 +572,8 @@ def test_every_enabled_model_has_required_registry_metadata_and_pricing_fields()
         assert model.endpoint
         assert docs_slug
         endpoint_key = normalize_model_key(model.endpoint.rstrip("/").rsplit("/api/v3/", 1)[-1])
-        assert endpoint_key.endswith(model.key) or model.key.endswith(endpoint_key)
+        aliased_endpoint_key = endpoint_key.replace("wavespeed_ai", "wan_ai", 1)
+        assert endpoint_key.endswith(model.key) or model.key.endswith(endpoint_key) or aliased_endpoint_key.endswith(model.key)
         assert isinstance(model.base_wavespeed_price_usd, Decimal)
         assert model.base_wavespeed_price_usd > 0
         assert isinstance(model.wavespeed_price_usd, Decimal)
@@ -820,9 +868,12 @@ def test_remaining_provider_model_keys_are_unique(
     slugs: tuple[str, ...],
 ) -> None:
     keys = [model.key for model in models]
+    expected_count = len(dict.fromkeys(slugs))
+    if models is WAVESPEED_AI_MODELS:
+        expected_count += 1
 
     assert len(keys) == len(set(keys))
-    assert len(keys) == len(dict.fromkeys(slugs))
+    assert len(keys) == expected_count
 
 
 @pytest.mark.parametrize(
@@ -1092,7 +1143,7 @@ def test_generated_params_runtime_fallback_keeps_only_num_generations_under_20_p
 def test_core_video_and_image_models_get_relevant_fallback_settings() -> None:
     setting_expectations = {
         "text_to_image": {"aspect_ratio", "negative_prompt", "resolution", "size"},
-        "image_to_image": {"strength", "negative_prompt", "size"},
+        "image_to_image": {"strength", "negative_prompt", "size", "target_resolution", "output_format"},
         "image_edit": {"strength", "negative_prompt", "size", "aspect_ratio", "resolution", "output_format", "guidance_scale"},
         "text_to_video": {"duration", "aspect_ratio", "mode", "quality", "negative_prompt", "size"},
         "image_to_video": {"duration", "mode", "quality", "motion_strength", "aspect_ratio"},
