@@ -659,6 +659,52 @@ async def test_continue_after_settings_for_video_edit_goes_to_video_step() -> No
 
 
 @pytest.mark.asyncio
+async def test_generation_image_step_uses_db_language_without_mixing(session_factory) -> None:
+    async with session_factory() as session:
+        user = await create_user(session, user_id=481, balance=100)
+        user.language_code = "ru"
+        await session.commit()
+
+        state = FakeState({"model_key": "alibaba_wan_2_7_image_to_video", "model_generation_type": "image_to_video"})
+        message = FakeMessage(chat_id=481)
+        callback = FakeCallback(user_id=481, message=message, data="gen:continue")
+        callback.from_user.language_code = "en"
+        message.from_user.language_code = "en"
+
+        await generations.continue_after_settings(callback, state, session)
+
+        combined_text = "\n".join(message.edits + message.answers)
+        assert "Отправьте изображение для модели Alibaba Wan 2.7 Image To Video." in combined_text
+        assert "Если передумали" in combined_text
+        assert "Send an image" not in combined_text
+        assert "If you changed your mind" not in combined_text
+        assert message.answer_markups[-1].keyboard[0][0].text == "⬅️ Назад к настройкам"
+
+
+@pytest.mark.asyncio
+async def test_generation_image_step_english_user_has_no_russian_phrases(session_factory) -> None:
+    async with session_factory() as session:
+        user = await create_user(session, user_id=482, balance=100)
+        user.language_code = "en"
+        await session.commit()
+
+        state = FakeState({"model_key": "alibaba_wan_2_7_image_to_video", "model_generation_type": "image_to_video"})
+        message = FakeMessage(chat_id=482)
+        callback = FakeCallback(user_id=482, message=message, data="gen:continue")
+        callback.from_user.language_code = "ru"
+        message.from_user.language_code = "ru"
+
+        await generations.continue_after_settings(callback, state, session)
+
+        combined_text = "\n".join(message.edits + message.answers)
+        assert "Send an image for model Alibaba Wan 2.7 Image To Video." in combined_text
+        assert "If you changed your mind" in combined_text
+        assert "Отправьте" not in combined_text
+        assert "Если передумали" not in combined_text
+        assert message.answer_markups[-1].keyboard[0][0].text == "⬅️ Back to settings"
+
+
+@pytest.mark.asyncio
 async def test_continue_after_settings_for_multi_image_model_goes_to_images_step() -> None:
     state = FakeState({"model_key": "nano_banana", "model_generation_type": "image_edit"})
     message = FakeMessage(chat_id=476)
@@ -1276,7 +1322,7 @@ async def test_waiting_for_audio_rejects_text_with_audio_file_error(session_fact
 
         await generations.invalid_generation_audio(message, state)
 
-        assert message.answers[-1] == "❌ Ошибка E001: отправьте аудиофайл."
+        assert message.answers[-1] == "❌ Ошибка E001: Я жду аудио. Отправьте голосовое сообщение, аудиофайл или документ с форматом audio/*."
 
 
 @pytest.mark.asyncio
@@ -2796,6 +2842,37 @@ async def test_summary_repeat_text_only_opens_confirmation(session_factory) -> N
         assert callback.message.answers[0] == f"Повтор генерации: {model.title}"
         assert "Проверьте генерацию:" in callback.message.answers[-1]
         assert "A repeatable text only prompt" in callback.message.answers[-1]
+
+
+@pytest.mark.asyncio
+async def test_summary_repeat_english_user_does_not_mix_russian(session_factory) -> None:
+    async with session_factory() as session:
+        user = await create_user(session, user_id=465, balance=200)
+        user.language_code = "en"
+        await session.commit()
+        model = generations.get_generation_model("alibaba_wan_2_7_text_to_image_pro")
+        generation = await GenerationRepository(session).create_generation_request(
+            user_id=465,
+            model_key=model.key,
+            model_endpoint=model.endpoint,
+            prompt="A repeatable English prompt",
+            settings={**generations.get_default_settings(model.key), "num_generations": "1"},
+            status="completed",
+            cost=17,
+        )
+
+        state = FakeState()
+        callback = FakeCallback(user_id=465, data=f"gen:repeat:{generation.id}")
+        callback.from_user.language_code = "ru"
+
+        await generations.repeat_generation_from_summary(callback, state, session)
+
+        combined_text = "\n".join(callback.message.answers)
+        assert callback.message.answers[0] == f"Repeat generation: {model.title}"
+        assert "Review generation:" in combined_text
+        assert "Model:" in combined_text
+        assert "Повтор генерации" not in combined_text
+        assert "Проверьте генерацию" not in combined_text
 
 
 @pytest.mark.asyncio

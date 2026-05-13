@@ -6,7 +6,7 @@ from typing import Any, Callable, Iterable, Sequence
 from aiogram.types import InlineKeyboardButton, InlineKeyboardMarkup, KeyboardButton, ReplyKeyboardMarkup
 from aiogram.utils.keyboard import InlineKeyboardBuilder
 
-from app.i18n import get_user_language, t
+from app.i18n import DEFAULT_LANGUAGE, SUPPORTED_LANGUAGES, get_user_language, t
 from app.services.payments import ALLOWED_STARS_AMOUNTS
 from app.services.generation_service import (
     generation_cost_has_minimum_label,
@@ -83,7 +83,7 @@ PROVIDER_LABELS = {
 }
 
 
-def get_button_text(key: str, lang: str = "en") -> str:
+def get_button_text(key: str, lang: str = DEFAULT_LANGUAGE) -> str:
     """Build a localized button label with a stable icon prefix when configured."""
     resolved_lang = get_user_language(lang)
     icon = BUTTON_ICONS.get(key)
@@ -97,7 +97,8 @@ def is_localized_button_text(text: str | None, key: str, language_code: str | No
     """Check whether incoming text matches the localized keyboard label."""
     if text is None:
         return False
-    return text == get_button_text(key, get_user_language(language_code))
+    candidate_languages = (get_user_language(language_code), *SUPPORTED_LANGUAGES)
+    return any(text == get_button_text(key, language) for language in dict.fromkeys(candidate_languages))
 
 
 def validate_callback_length(callback_data: str) -> str:
@@ -136,7 +137,7 @@ def build_paginated_keyboard(
     page_callback_builder: Callable[[int], str] | None = None,
     columns: int = 1,
     hide_unavailable_navigation: bool = True,
-    lang: str = "en",
+    lang: str = DEFAULT_LANGUAGE,
 ) -> InlineKeyboardMarkup:
     """Build a paginated inline keyboard with navigation and a back row."""
     item_list = list(items)
@@ -208,7 +209,7 @@ def _get_setting_options(options: Iterable[Any]) -> list[tuple[str, str]]:
     return normalized_options
 
 
-def get_setting_display_title(setting_key: str, setting: Any, lang: str = "en") -> str:
+def get_setting_display_title(setting_key: str, setting: Any, lang: str = DEFAULT_LANGUAGE) -> str:
     direct_key = f"settings.{setting_key}"
     direct_title = t(direct_key, lang)
     if direct_title != direct_key:
@@ -220,7 +221,7 @@ def get_setting_display_title(setting_key: str, setting: Any, lang: str = "en") 
     return str(getattr(setting, "title", setting_key))
 
 
-def get_setting_option_display_label(value: str, label: str, lang: str = "en") -> str:
+def get_setting_option_display_label(value: str, label: str, lang: str = DEFAULT_LANGUAGE) -> str:
     option_key = f"settings.option.{value}"
     translated_label = t(option_key, lang)
     if translated_label != option_key:
@@ -293,7 +294,7 @@ def resolve_model_key_from_token(models: Sequence[Any], token: str) -> str | Non
     return None
 
 
-def format_model_price_label(model: Any, lang: str = "en") -> str:
+def format_model_price_label(model: Any, lang: str = DEFAULT_LANGUAGE) -> str:
     """Build a compact price suffix for model selection buttons."""
     try:
         cost = get_minimum_generation_cost_credits(model)
@@ -307,7 +308,7 @@ def format_model_price_label(model: Any, lang: str = "en") -> str:
         return ""
 
 
-def build_main_menu_keyboard(lang: str = "en") -> ReplyKeyboardMarkup:
+def build_main_menu_keyboard(lang: str = DEFAULT_LANGUAGE) -> ReplyKeyboardMarkup:
     """Главное меню Telegram reply keyboard."""
     return ReplyKeyboardMarkup(
         keyboard=[
@@ -322,12 +323,12 @@ def build_main_menu_keyboard(lang: str = "en") -> ReplyKeyboardMarkup:
     )
 
 
-def get_main_menu_keyboard(lang: str = "en") -> ReplyKeyboardMarkup:
+def get_main_menu_keyboard(lang: str = DEFAULT_LANGUAGE) -> ReplyKeyboardMarkup:
     """Совместимость со старым именем главного меню."""
     return build_main_menu_keyboard(lang)
 
 
-def get_back_to_menu_keyboard(lang: str = "en") -> ReplyKeyboardMarkup:
+def get_back_to_menu_keyboard(lang: str = DEFAULT_LANGUAGE) -> ReplyKeyboardMarkup:
     """Клавиатура возврата в меню."""
     return ReplyKeyboardMarkup(
         keyboard=[[KeyboardButton(text=get_button_text("common.back", lang))]],
@@ -335,7 +336,7 @@ def get_back_to_menu_keyboard(lang: str = "en") -> ReplyKeyboardMarkup:
     )
 
 
-def build_generation_summary_keyboard(batch_id: object, lang: str = "en") -> InlineKeyboardMarkup:
+def build_generation_summary_keyboard(batch_id: object, lang: str = DEFAULT_LANGUAGE) -> InlineKeyboardMarkup:
     """Inline actions shown under the final generation summary."""
     callback_data = validate_callback_length(f"gen:repeat:{batch_id}")
     return InlineKeyboardMarkup(
@@ -345,7 +346,7 @@ def build_generation_summary_keyboard(batch_id: object, lang: str = "en") -> Inl
     )
 
 
-def build_back_to_settings_reply_keyboard(lang: str = "en") -> ReplyKeyboardMarkup:
+def build_back_to_settings_reply_keyboard(lang: str = DEFAULT_LANGUAGE) -> ReplyKeyboardMarkup:
     """Reply keyboard для возврата с этапа ввода к настройкам модели."""
     return ReplyKeyboardMarkup(
         keyboard=[[KeyboardButton(text=get_button_text("common.back_to_settings", lang))]],
@@ -357,7 +358,7 @@ def build_back_to_settings_reply_keyboard(lang: str = "en") -> ReplyKeyboardMark
 def build_media_upload_reply_keyboard(
     *,
     show_continue: bool,
-    lang: str = "en",
+    lang: str = DEFAULT_LANGUAGE,
     show_clear_images: bool = False,
 ) -> ReplyKeyboardMarkup:
     """Reply keyboard для этапа загрузки media с optional continue action."""
@@ -373,7 +374,7 @@ def build_media_upload_reply_keyboard(
     )
 
 
-def build_generation_sections_keyboard(lang: str = "en") -> InlineKeyboardMarkup:
+def build_generation_sections_keyboard(lang: str = DEFAULT_LANGUAGE) -> InlineKeyboardMarkup:
     """Построить клавиатуру разделов генерации по enabled registry."""
     rows = [
         [
@@ -389,7 +390,7 @@ def build_generation_sections_keyboard(lang: str = "en") -> InlineKeyboardMarkup
     return InlineKeyboardMarkup(inline_keyboard=rows)
 
 
-def build_providers_keyboard(lang: str = "en", page: int = 0) -> InlineKeyboardMarkup:
+def build_providers_keyboard(lang: str = DEFAULT_LANGUAGE, page: int = 0) -> InlineKeyboardMarkup:
     """Построить клавиатуру провайдеров из registry."""
     return build_paginated_keyboard(
         list_providers(),
@@ -406,7 +407,7 @@ def build_providers_keyboard(lang: str = "en", page: int = 0) -> InlineKeyboardM
 def build_models_keyboard(
     models: Iterable[Any],
     back_callback: str,
-    lang: str = "en",
+    lang: str = DEFAULT_LANGUAGE,
     page: int = 0,
     page_callback_builder: Callable[[int], str] | None = None,
     show_price: bool = False,
@@ -436,7 +437,7 @@ def build_models_keyboard(
     )
 
 
-def build_model_settings_keyboard(model: Any, current_settings: dict[str, Any], lang: str = "en") -> InlineKeyboardMarkup:
+def build_model_settings_keyboard(model: Any, current_settings: dict[str, Any], lang: str = DEFAULT_LANGUAGE) -> InlineKeyboardMarkup:
     """Построить клавиатуру настроек модели."""
     rows = []
     for setting_key, setting in get_model_setting_entries(model):
@@ -455,7 +456,7 @@ def build_model_settings_keyboard(model: Any, current_settings: dict[str, Any], 
     return InlineKeyboardMarkup(inline_keyboard=rows)
 
 
-def build_setting_options_keyboard(model: Any, setting_key: str, current_value: str, lang: str = "en") -> InlineKeyboardMarkup:
+def build_setting_options_keyboard(model: Any, setting_key: str, current_value: str, lang: str = DEFAULT_LANGUAGE) -> InlineKeyboardMarkup:
     """Построить клавиатуру вариантов значения настройки."""
     setting = model.user_settings[setting_key]
     rows = []
@@ -477,7 +478,7 @@ def build_setting_options_keyboard(model: Any, setting_key: str, current_value: 
     return InlineKeyboardMarkup(inline_keyboard=rows)
 
 
-def build_generation_confirm_keyboard(lang: str = "en") -> InlineKeyboardMarkup:
+def build_generation_confirm_keyboard(lang: str = DEFAULT_LANGUAGE) -> InlineKeyboardMarkup:
     """Кнопки подтверждения запуска генерации."""
     return InlineKeyboardMarkup(
         inline_keyboard=[
@@ -487,7 +488,7 @@ def build_generation_confirm_keyboard(lang: str = "en") -> InlineKeyboardMarkup:
     )
 
 
-def build_insufficient_balance_keyboard(lang: str = "en") -> InlineKeyboardMarkup:
+def build_insufficient_balance_keyboard(lang: str = DEFAULT_LANGUAGE) -> InlineKeyboardMarkup:
     """Inline-кнопки для сценария нехватки кредитов."""
     return InlineKeyboardMarkup(
         inline_keyboard=[
@@ -497,12 +498,12 @@ def build_insufficient_balance_keyboard(lang: str = "en") -> InlineKeyboardMarku
     )
 
 
-def build_back_to_settings_keyboard(lang: str = "en") -> ReplyKeyboardMarkup:
+def build_back_to_settings_keyboard(lang: str = DEFAULT_LANGUAGE) -> ReplyKeyboardMarkup:
     """Совместимость со старым именем reply keyboard возврата к настройкам."""
     return build_back_to_settings_reply_keyboard(lang)
 
 
-def build_generation_type_keyboard(options: Iterable[tuple[str, str]] | None = None, lang: str = "en") -> InlineKeyboardMarkup:
+def build_generation_type_keyboard(options: Iterable[tuple[str, str]] | None = None, lang: str = DEFAULT_LANGUAGE) -> InlineKeyboardMarkup:
     """Совместимость со старым именем клавиатуры выбора разделов."""
     if options is None:
         return build_generation_sections_keyboard(lang)
@@ -514,7 +515,7 @@ def build_generation_type_keyboard(options: Iterable[tuple[str, str]] | None = N
     return InlineKeyboardMarkup(inline_keyboard=rows)
 
 
-def build_provider_keyboard(providers: Iterable[tuple[str, str]] | None = None, lang: str = "en") -> InlineKeyboardMarkup:
+def build_provider_keyboard(providers: Iterable[tuple[str, str]] | None = None, lang: str = DEFAULT_LANGUAGE) -> InlineKeyboardMarkup:
     """Совместимость со старым именем клавиатуры выбора провайдера."""
     if providers is None:
         return build_providers_keyboard(lang)
@@ -532,32 +533,32 @@ def build_provider_keyboard(providers: Iterable[tuple[str, str]] | None = None, 
     )
 
 
-def build_model_selection_keyboard(models: Iterable[Any], lang: str = "en") -> InlineKeyboardMarkup:
+def build_model_selection_keyboard(models: Iterable[Any], lang: str = DEFAULT_LANGUAGE) -> InlineKeyboardMarkup:
     """Совместимость со старым именем функции выбора модели."""
     return build_models_keyboard(models, "gen:back:sections", lang)
 
 
-def build_generation_type_selection_keyboard(options: Iterable[tuple[str, str]], lang: str = "en") -> InlineKeyboardMarkup:
+def build_generation_type_selection_keyboard(options: Iterable[tuple[str, str]], lang: str = DEFAULT_LANGUAGE) -> InlineKeyboardMarkup:
     """Совместимость со старым именем клавиатуры выбора типа генерации."""
     return build_generation_type_keyboard(options, lang)
 
 
-def build_provider_selection_keyboard(providers: Iterable[tuple[str, str]], lang: str = "en") -> InlineKeyboardMarkup:
+def build_provider_selection_keyboard(providers: Iterable[tuple[str, str]], lang: str = DEFAULT_LANGUAGE) -> InlineKeyboardMarkup:
     """Совместимость со старым именем клавиатуры выбора провайдера."""
     return build_provider_keyboard(providers, lang)
 
 
-def get_generation_models_keyboard(models: Iterable[Any], lang: str = "en") -> InlineKeyboardMarkup:
+def get_generation_models_keyboard(models: Iterable[Any], lang: str = DEFAULT_LANGUAGE) -> InlineKeyboardMarkup:
     """Совместимость со старым именем функции выбора модели."""
     return build_model_selection_keyboard(models, lang)
 
 
-def get_generation_confirm_keyboard(lang: str = "en") -> InlineKeyboardMarkup:
+def get_generation_confirm_keyboard(lang: str = DEFAULT_LANGUAGE) -> InlineKeyboardMarkup:
     """Совместимость со старым именем функции подтверждения."""
     return build_generation_confirm_keyboard(lang)
 
 
-def get_back_to_menu_inline_keyboard(lang: str = "en") -> InlineKeyboardMarkup:
+def get_back_to_menu_inline_keyboard(lang: str = DEFAULT_LANGUAGE) -> InlineKeyboardMarkup:
     """Инлайн кнопка возврата в меню."""
     return InlineKeyboardMarkup(
         inline_keyboard=[
@@ -566,7 +567,7 @@ def get_back_to_menu_inline_keyboard(lang: str = "en") -> InlineKeyboardMarkup:
     )
 
 
-def get_profile_keyboard(*, send_results_as_files: bool, lang: str = "en") -> InlineKeyboardMarkup:
+def get_profile_keyboard(*, send_results_as_files: bool, lang: str = DEFAULT_LANGUAGE) -> InlineKeyboardMarkup:
     """Инлайн-кнопки профиля пользователя."""
     return InlineKeyboardMarkup(
         inline_keyboard=[
@@ -576,7 +577,7 @@ def get_profile_keyboard(*, send_results_as_files: bool, lang: str = "en") -> In
     )
 
 
-def build_top_up_method_keyboard(lang: str = "en") -> InlineKeyboardMarkup:
+def build_top_up_method_keyboard(lang: str = DEFAULT_LANGUAGE) -> InlineKeyboardMarkup:
     """Клавиатура выбора способа пополнения баланса."""
     return InlineKeyboardMarkup(
         inline_keyboard=[
@@ -587,7 +588,7 @@ def build_top_up_method_keyboard(lang: str = "en") -> InlineKeyboardMarkup:
     )
 
 
-def build_stars_top_up_keyboard(lang: str = "en") -> InlineKeyboardMarkup:
+def build_stars_top_up_keyboard(lang: str = DEFAULT_LANGUAGE) -> InlineKeyboardMarkup:
     """Клавиатура выбора пакета Telegram Stars."""
     builder = InlineKeyboardBuilder()
     for amount in ALLOWED_STARS_AMOUNTS:
@@ -605,7 +606,7 @@ def build_stars_top_up_keyboard(lang: str = "en") -> InlineKeyboardMarkup:
     return builder.as_markup()
 
 
-def build_stars_wallet_redirect_keyboard(*, wallet_payment_url: str, lang: str = "en") -> InlineKeyboardMarkup:
+def build_stars_wallet_redirect_keyboard(*, wallet_payment_url: str, lang: str = DEFAULT_LANGUAGE) -> InlineKeyboardMarkup:
     """Клавиатура перехода во внешний Stars wallet bot."""
     return InlineKeyboardMarkup(
         inline_keyboard=[
@@ -615,7 +616,7 @@ def build_stars_wallet_redirect_keyboard(*, wallet_payment_url: str, lang: str =
     )
 
 
-def build_wallet_bot_payment_keyboard(*, amount: int, wallet_payment_url: str, lang: str = "en") -> InlineKeyboardMarkup:
+def build_wallet_bot_payment_keyboard(*, amount: int, wallet_payment_url: str, lang: str = DEFAULT_LANGUAGE) -> InlineKeyboardMarkup:
     """Клавиатура перехода во внешний wallet bot для оплаты Stars."""
     return InlineKeyboardMarkup(
         inline_keyboard=[
@@ -624,7 +625,7 @@ def build_wallet_bot_payment_keyboard(*, amount: int, wallet_payment_url: str, l
     )
 
 
-def build_crypto_top_up_keyboard(lang: str = "en") -> InlineKeyboardMarkup:
+def build_crypto_top_up_keyboard(lang: str = DEFAULT_LANGUAGE) -> InlineKeyboardMarkup:
     """Клавиатура выбора crypto-пакета кредитов."""
     builder = InlineKeyboardBuilder()
     for amount in ALLOWED_STARS_AMOUNTS:
@@ -642,7 +643,7 @@ def build_crypto_top_up_keyboard(lang: str = "en") -> InlineKeyboardMarkup:
     return builder.as_markup()
 
 
-def build_crypto_payment_keyboard(*, payment_url: str | None, lang: str = "en") -> InlineKeyboardMarkup:
+def build_crypto_payment_keyboard(*, payment_url: str | None, lang: str = DEFAULT_LANGUAGE) -> InlineKeyboardMarkup:
     """Клавиатура оплаты crypto через NOWPayments."""
     rows = []
     if payment_url:

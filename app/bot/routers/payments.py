@@ -18,10 +18,11 @@ from app.bot.keyboards import (
     build_top_up_method_keyboard,
     get_profile_keyboard,
 )
+from app.bot.language import get_event_lang
 from app.bot.routers.profile import build_profile_text
 from app.config import is_nowpayments_configured, settings
 from app.db import UserRepository
-from app.i18n import get_user_language, t
+from app.i18n import t
 from app.services.nowpayments import NowPaymentsService
 from app.services.payments import ALLOWED_STARS_AMOUNTS, PaymentService
 from app.utils import logger
@@ -47,9 +48,9 @@ async def _set_payment_screen(state: FSMContext | None, screen: str) -> None:
 
 
 @router.callback_query(lambda cb: cb.data in {"profile:top_up_balance", "profile:topup"})
-async def show_stars_top_up_menu(callback: CallbackQuery, state: FSMContext | None = None) -> None:
+async def show_stars_top_up_menu(callback: CallbackQuery, state: FSMContext | None = None, session: AsyncSession | None = None) -> None:
     """Показать меню выбора способа оплаты."""
-    lang = get_user_language(getattr(callback.from_user, "language_code", None))
+    lang = await get_event_lang(callback, session)
     logger.info({"action": "payment_menu_opened", "user_id": callback.from_user.id})
     await safe_edit_message(
         callback.message,
@@ -61,9 +62,9 @@ async def show_stars_top_up_menu(callback: CallbackQuery, state: FSMContext | No
 
 
 @router.callback_query(lambda cb: cb.data == "pay:method:stars")
-async def show_stars_amount_menu(callback: CallbackQuery, state: FSMContext | None = None) -> None:
+async def show_stars_amount_menu(callback: CallbackQuery, state: FSMContext | None = None, session: AsyncSession | None = None) -> None:
     """Показать меню выбора количества Telegram Stars."""
-    lang = get_user_language(getattr(callback.from_user, "language_code", None))
+    lang = await get_event_lang(callback, session)
     await safe_edit_message(
         callback.message,
         t("payments.choose_stars_amount", lang),
@@ -74,9 +75,9 @@ async def show_stars_amount_menu(callback: CallbackQuery, state: FSMContext | No
 
 
 @router.callback_query(lambda cb: cb.data == "pay:back:methods")
-async def back_to_payment_methods(callback: CallbackQuery, state: FSMContext | None = None) -> None:
+async def back_to_payment_methods(callback: CallbackQuery, state: FSMContext | None = None, session: AsyncSession | None = None) -> None:
     """Вернуться к выбору способа оплаты."""
-    lang = get_user_language(getattr(callback.from_user, "language_code", None))
+    lang = await get_event_lang(callback, session)
     await safe_edit_message(
         callback.message,
         t("payments.choose_method", lang),
@@ -87,9 +88,9 @@ async def back_to_payment_methods(callback: CallbackQuery, state: FSMContext | N
 
 
 @router.callback_query(lambda cb: cb.data == "pay:back:stars_amounts")
-async def back_to_stars_amounts(callback: CallbackQuery, state: FSMContext | None = None) -> None:
+async def back_to_stars_amounts(callback: CallbackQuery, state: FSMContext | None = None, session: AsyncSession | None = None) -> None:
     """Вернуться к выбору суммы Telegram Stars."""
-    lang = get_user_language(getattr(callback.from_user, "language_code", None))
+    lang = await get_event_lang(callback, session)
     await safe_edit_message(
         callback.message,
         t("payments.choose_stars_amount", lang),
@@ -100,9 +101,9 @@ async def back_to_stars_amounts(callback: CallbackQuery, state: FSMContext | Non
 
 
 @router.callback_query(lambda cb: cb.data == "pay:back:crypto_amounts")
-async def back_to_crypto_amounts(callback: CallbackQuery, state: FSMContext | None = None) -> None:
+async def back_to_crypto_amounts(callback: CallbackQuery, state: FSMContext | None = None, session: AsyncSession | None = None) -> None:
     """Вернуться к выбору crypto-пакета."""
-    lang = get_user_language(getattr(callback.from_user, "language_code", None))
+    lang = await get_event_lang(callback, session)
     await safe_edit_message(
         callback.message,
         t("payments.choose_method", lang),
@@ -116,8 +117,8 @@ async def back_to_crypto_amounts(callback: CallbackQuery, state: FSMContext | No
 async def back_to_profile(callback: CallbackQuery, session: AsyncSession, state: FSMContext | None = None) -> None:
     """Вернуться из оплаты в профиль."""
     user_repo = UserRepository(session)
+    lang = await get_event_lang(callback, session)
     user = await user_repo.get_or_create_user_from_telegram(callback.from_user)
-    lang = get_user_language(user.language_code)
     total_spent_credits = await user_repo.get_total_spent_credits(user.id)
     await safe_edit_message(
         callback.message,
@@ -130,9 +131,9 @@ async def back_to_profile(callback: CallbackQuery, session: AsyncSession, state:
 
 
 @router.callback_query(lambda cb: cb.data == "pay:crypto")
-async def show_crypto_packages(callback: CallbackQuery, state: FSMContext | None = None) -> None:
+async def show_crypto_packages(callback: CallbackQuery, state: FSMContext | None = None, session: AsyncSession | None = None) -> None:
     """Показать crypto-пакеты кредитов."""
-    lang = get_user_language(getattr(callback.from_user, "language_code", None))
+    lang = await get_event_lang(callback, session)
     if not is_nowpayments_configured():
         logger.info({"action": "crypto_not_configured", "user_id": callback.from_user.id})
         await callback.answer(t("payments.crypto_not_configured", lang), show_alert=True)
@@ -191,7 +192,7 @@ def build_wallet_return_url(payload: str) -> str | None:
 @router.callback_query(lambda cb: cb.data.startswith("pay:stars:"))
 async def choose_stars_amount(callback: CallbackQuery, session: AsyncSession, state: FSMContext | None = None) -> None:
     """Create a Telegram Stars order and redirect to the external wallet bot."""
-    lang = get_user_language(getattr(callback.from_user, "language_code", None))
+    lang = await get_event_lang(callback, session)
     amount = _parse_stars_amount(callback.data)
     logger.info({"action": "stars_amount_selected", "user_id": callback.from_user.id, "amount": amount})
     if amount not in ALLOWED_STARS_AMOUNTS:
@@ -242,7 +243,7 @@ async def choose_stars_amount(callback: CallbackQuery, session: AsyncSession, st
 @router.callback_query(lambda cb: cb.data.startswith("pay:crypto:"))
 async def choose_crypto_amount(callback: CallbackQuery, session: AsyncSession, state: FSMContext | None = None) -> None:
     """Создать NOWPayments checkout link и показать пользователю кнопку оплаты."""
-    lang = get_user_language(getattr(callback.from_user, "language_code", None))
+    lang = await get_event_lang(callback, session)
     amount = _parse_crypto_amount(callback.data)
     if amount not in ALLOWED_STARS_AMOUNTS:
         await callback.answer(t("payments.invalid_amount", lang), show_alert=True)

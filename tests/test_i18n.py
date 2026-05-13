@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import os
+from pathlib import Path
 
 
 os.environ.setdefault("BOT_TOKEN", "test-bot-token")
@@ -11,6 +12,7 @@ os.environ.setdefault("PUBLIC_BASE_URL", "https://example.com")
 
 import app.i18n as i18n
 from app.i18n import SUPPORTED_LANGUAGES, TRANSLATIONS, get_user_language, t
+from app.i18n.translations import FLOW_I18N_TRANSLATIONS
 
 
 PAYMENT_TRANSLATION_KEYS = {
@@ -69,6 +71,37 @@ GENERATED_PARAMS_UI_KEYS = {
     "requirements.image",
 }
 
+FLOW_I18N_KEYS = {
+    "generation.repeat_title",
+    "generation.send_image_for_model",
+    "generation.send_images_for_model",
+    "generation.send_video_for_model",
+    "generation.send_audio_for_model",
+    "generation.changed_mind_back_to_settings",
+    "generation.waiting_for_image_error",
+    "generation.waiting_for_video_error",
+    "generation.waiting_for_audio_error",
+    "generation.started_count",
+    "generation.started_background",
+    "generation.model_label",
+    "generation.prompt_request",
+    "generation.back_to_settings",
+    "common.continue",
+    "common.back_to_settings",
+    "common.back",
+    "common.profile",
+    "common.generations",
+    "errors.waiting_image",
+    "errors.waiting_video",
+    "errors.waiting_audio",
+    "errors.text_required",
+    "errors.model_unavailable",
+    "errors.insufficient_balance",
+    "settings.model_settings",
+    "settings.choose_parameters",
+    "settings.current_values",
+}
+
 
 def test_supported_languages_match_translation_catalog() -> None:
     assert len(SUPPORTED_LANGUAGES) == 10
@@ -97,6 +130,33 @@ def test_all_languages_have_generated_params_ui_translation_keys() -> None:
         assert GENERATED_PARAMS_UI_KEYS <= set(TRANSLATIONS[language])
         assert t("generation.send_audio", language)
         assert t("settings.parameter", language, parameter="Duration")
+
+
+def test_all_languages_have_generation_flow_i18n_keys() -> None:
+    for language in SUPPORTED_LANGUAGES:
+        assert FLOW_I18N_KEYS <= set(TRANSLATIONS[language])
+        assert FLOW_I18N_KEYS <= set(FLOW_I18N_TRANSLATIONS[language])
+        assert t("generation.send_image_for_model", language, model="MiniMax Image 01 Image To Image")
+
+
+def test_generation_routers_do_not_embed_forbidden_user_facing_phrases() -> None:
+    forbidden_phrases = (
+        "Send an image",
+        "If you changed your mind",
+        "Back to settings",
+        "Continue",
+        "Model:",
+    )
+    repo_root = Path(__file__).resolve().parents[1]
+    router_files = [
+        repo_root / "app" / "bot" / "routers" / "generations.py",
+        repo_root / "app" / "bot" / "routers" / "profile.py",
+        repo_root / "app" / "bot" / "routers" / "payments.py",
+    ]
+    source = "\n".join(path.read_text(encoding="utf-8") for path in router_files)
+
+    for phrase in forbidden_phrases:
+        assert phrase not in source
 
 
 def test_get_user_language_returns_english_for_none() -> None:

@@ -46,7 +46,8 @@ class UserRepository:
         user.username = telegram_user.username
         user.first_name = telegram_user.first_name
         user.last_name = telegram_user.last_name
-        user.language_code = getattr(telegram_user, "language_code", None)
+        if not user.language_code:
+            user.language_code = getattr(telegram_user, "language_code", None)
         user.is_bot = telegram_user.is_bot
         user.is_premium = getattr(telegram_user, "is_premium", None)
         user.last_seen_at = datetime.now(timezone.utc)
