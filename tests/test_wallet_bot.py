@@ -31,6 +31,7 @@ from wallet_bot.main import (  # noqa: E402
 from app.bot.routers.payments import build_wallet_payment_url  # noqa: E402
 from app.db.base import Base  # noqa: E402
 from app.db.models import PaymentOrder, PaymentOrderStatus, User  # noqa: E402
+from app.i18n import t  # noqa: E402
 from app.services.payments import PaymentService  # noqa: E402
 
 
@@ -133,12 +134,12 @@ async def test_start_with_valid_deep_link_creates_order_and_sends_stars_invoice(
     assert message.answers == []
     assert len(message.invoices) == 1
     invoice = message.invoices[0]
-    assert invoice["title"] == "100 credits"
-    assert invoice["description"] == "Top up 100 credits"
+    assert invoice["title"] == t("wallet.invoice_title", "en", amount=100)
+    assert invoice["description"] == t("wallet.invoice_description", "en", amount=100)
     assert invoice["provider_token"] == ""
     assert invoice["currency"] == "XTR"
     assert parse_amount_from_invoice_payload(invoice["payload"]) == 100
-    assert invoice["prices"][0].label == "100 credits"
+    assert invoice["prices"][0].label == t("wallet.invoice_label", "en", amount=100)
     assert invoice["prices"][0].amount == 100
     async with session_factory() as session:
         result = await session.execute(select(PaymentOrder).where(PaymentOrder.user_id == 702))
@@ -167,7 +168,7 @@ async def test_start_with_existing_main_bot_order_payload_sends_stars_invoice(se
     assert message.answers == []
     assert len(message.invoices) == 1
     invoice = message.invoices[0]
-    assert invoice["title"] == "300 credits"
+    assert invoice["title"] == t("wallet.invoice_title", "en", amount=300)
     assert invoice["payload"] == payload
     assert invoice["prices"][0].amount == 300
     async with session_factory() as session:
@@ -183,7 +184,7 @@ async def test_start_with_invalid_amount_sends_invalid_payment_link_and_creates_
     await start_command(message, SimpleNamespace(args=None), settings, session_factory)
 
     assert message.invoices == []
-    assert message.answers == [{"text": "❌ Payment link is invalid\n\nReturn to the main bot and create a new invoice.", "reply_markup": None}]
+    assert message.answers == [{"text": t("wallet.error.invalid_payment_link", "en"), "reply_markup": None}]
     async with session_factory() as session:
         result = await session.execute(select(PaymentOrder).where(PaymentOrder.user_id == 703))
         assert result.scalars().all() == []
@@ -196,7 +197,7 @@ async def test_start_with_malformed_payload_sends_invalid_payment_link(settings)
     await start_command(message, SimpleNamespace(args=None), settings, None)
 
     assert message.invoices == []
-    assert message.answers == [{"text": "❌ Ссылка на оплату недействительна\n\nВернитесь в основной бот и создайте новый счёт.", "reply_markup": None}]
+    assert message.answers == [{"text": t("wallet.error.invalid_payment_link", "ru"), "reply_markup": None}]
 
 
 def test_main_bot_wallet_deep_link_uses_start_parameter() -> None:
@@ -227,9 +228,9 @@ async def test_pre_checkout_query_ok_only_for_existing_unpaid_order_with_matchin
     await process_pre_checkout_query(wrong_currency_query, settings, session_factory)
 
     assert accepted_query.answers == [{"ok": True, "error_message": None}]
-    assert missing_query.answers == [{"ok": False, "error_message": "❌ Payment order not found\n\nReturn to the main bot and try again."}]
-    assert mismatch_query.answers == [{"ok": False, "error_message": "❌ Счёт не найден\n\nВернитесь в основной бот и попробуйте ещё раз."}]
-    assert wrong_currency_query.answers == [{"ok": False, "error_message": "❌ Payment order not found\n\nReturn to the main bot and try again."}]
+    assert missing_query.answers == [{"ok": False, "error_message": t("wallet.error.payment_order_not_found", "en")}]
+    assert mismatch_query.answers == [{"ok": False, "error_message": t("wallet.error.payment_order_not_found", "ru")}]
+    assert wrong_currency_query.answers == [{"ok": False, "error_message": t("wallet.error.payment_order_not_found", "en")}]
 
 
 @pytest.mark.asyncio
@@ -253,14 +254,14 @@ async def test_successful_payment_marks_order_paid_and_credits_balance_once(sett
 
     assert message.invoices == []
     assert [answer["text"] for answer in message.answers] == [
-        "✅ Payment received.\n100 credits added to your balance.",
-        "✅ Payment received.\n100 credits added to your balance.",
+        t("wallet.payment_success", "en", credits=100),
+        t("wallet.payment_success", "en", credits=100),
     ]
     keyboard = message.answers[0]["reply_markup"]
     assert len(keyboard.inline_keyboard) == 1
     assert len(keyboard.inline_keyboard[0]) == 1
     button = keyboard.inline_keyboard[0][0]
-    assert button.text == "Return to generation bot"
+    assert button.text == "Return"
     assert button.url == f"https://t.me/main_bot?start=paid_{invoice_payload.replace(':', '%3A')}"
     async with session_factory() as session:
         balance_result = await session.execute(select(User.balance).where(User.id == 705))
@@ -274,4 +275,4 @@ async def test_successful_payment_marks_order_paid_and_credits_balance_once(sett
 
     await process_pre_checkout_query(paid_query, settings, session_factory)
 
-    assert paid_query.answers == [{"ok": False, "error_message": "❌ Payment order not found\n\nReturn to the main bot and try again."}]
+    assert paid_query.answers == [{"ok": False, "error_message": t("wallet.error.payment_order_not_found", "en")}]

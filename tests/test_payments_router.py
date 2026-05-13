@@ -20,6 +20,7 @@ from app.bot.routers import payments
 from app.db.base import Base
 from app.db.models import PaymentOrder, PaymentOrderStatus, User
 from app.db.repositories import PaymentRepository
+from app.i18n import t
 
 
 class FakeMessage:
@@ -112,11 +113,11 @@ async def test_top_up_button_opens_stars_menu() -> None:
 
     await payments.show_stars_top_up_menu(callback, state)
 
-    assert message.edits[-1] == "Выберите способ оплаты:"
+    assert message.edits[-1] == t("payments.choose_method", "ru")
     keyboard = message.edit_markups[-1]
     buttons = [row[0] for row in keyboard.inline_keyboard]
     assert [button.callback_data for button in buttons] == ["pay:method:stars", "pay:crypto", "pay:back:profile"]
-    assert [button.text for button in buttons] == ["⭐ Telegram Stars", "₿ Crypto", "⬅️ Назад в профиль"]
+    assert [button.text for button in buttons] == ["⭐ Telegram Stars", "₿ Crypto", "⬅️ Профиль"]
     assert (await state.get_data())["payment_screen"] == "methods"
     assert callback.answers[-1] is None
 
@@ -129,7 +130,7 @@ async def test_stars_method_opens_amount_menu() -> None:
 
     await payments.show_stars_amount_menu(callback, state)
 
-    assert message.edits[-1] == "Выберите количество Telegram Stars:"
+    assert message.edits[-1] == t("payments.choose_stars_amount", "ru")
     keyboard = message.edit_markups[-1]
     assert len(keyboard.inline_keyboard) == 4
     assert [len(row) for row in keyboard.inline_keyboard[:3]] == [2, 2, 2]
@@ -167,7 +168,7 @@ async def test_crypto_button_shows_package_menu(monkeypatch) -> None:
 
     await payments.show_crypto_packages(callback)
 
-    assert message.edits[-1] == "Выберите способ оплаты:"
+    assert message.edits[-1] == t("payments.choose_method", "ru")
     keyboard = message.edit_markups[-1]
     assert len(keyboard.inline_keyboard) == 4
     assert [len(row) for row in keyboard.inline_keyboard[:3]] == [2, 2, 2]
@@ -224,7 +225,7 @@ async def test_methods_stars_back_returns_methods() -> None:
     callback = FakeCallback(user_id=822, message=message, data="pay:back:methods")
     await payments.back_to_payment_methods(callback, state)
 
-    assert message.edits[-1] == "Выберите способ оплаты:"
+    assert message.edits[-1] == t("payments.choose_method", "ru")
     keyboard = message.edit_markups[-1]
     buttons = [row[0] for row in keyboard.inline_keyboard]
     assert [button.callback_data for button in buttons] == ["pay:method:stars", "pay:crypto", "pay:back:profile"]
@@ -241,7 +242,7 @@ async def test_repeated_back_ignores_message_is_not_modified() -> None:
     await payments.back_to_payment_methods(callback, state)
     await payments.back_to_payment_methods(callback, state)
 
-    assert message.edits == ["Выберите способ оплаты:"]
+    assert message.edits == [t("payments.choose_method", "ru")]
     assert callback.answers == [None, None]
     assert (await state.get_data())["payment_screen"] == "methods"
 
@@ -253,7 +254,7 @@ async def test_crypto_button_shows_coming_soon_when_nowpayments_unconfigured(mon
 
     await payments.show_crypto_packages(callback)
 
-    assert callback.answers[-1] == "💳 Оплата временно недоступна\n\nПопробуйте позже или выберите другой способ."
+    assert callback.answers[-1] == t("error_ux.payment_unavailable", "ru")
     assert callback.answer_alerts[-1] is True
 
 
@@ -266,7 +267,7 @@ async def test_crypto_button_does_not_crash_when_api_key_empty(monkeypatch) -> N
 
     await payments.show_crypto_packages(callback)
 
-    assert callback.answers[-1] == "💳 Оплата временно недоступна\n\nПопробуйте позже или выберите другой способ."
+    assert callback.answers[-1] == t("error_ux.payment_unavailable", "ru")
     assert callback.answer_alerts[-1] is True
 
 
@@ -320,16 +321,10 @@ async def test_crypto_amount_callback_creates_nowpayments_order_without_creditin
         assert order.nowpayments_payment_id == "np-router-1"
         assert order.metadata_["payment_url"] == "https://nowpayments.test/invoice/np-router-1"
         assert balance == 0
-        assert message.edits[-1] == (
-            "₿ Crypto payment\n\n"
-            "Credits: 100\n"
-            "Amount: $1.30\n\n"
-            "Payment is processed securely by NOWPayments.\n"
-            "Click the button below to pay."
-        )
+        assert message.edits[-1] == t("payments.crypto_payment_details", "ru", credits=100, price_amount="1.30")
         assert "Address" not in message.edits[-1]
         keyboard = message.edit_markups[-1]
-        assert keyboard.inline_keyboard[0][0].text == "Оплатить через NOWPayments"
+        assert keyboard.inline_keyboard[0][0].text == "Оплатить"
         assert keyboard.inline_keyboard[0][0].url == "https://nowpayments.test/invoice/np-router-1"
         assert keyboard.inline_keyboard[1][0].callback_data == "pay:back:crypto_amounts"
         assert callback.answers[-1] is None
@@ -346,8 +341,8 @@ async def test_back_to_profile_restores_profile_screen(session_factory) -> None:
         assert message.edits[-1].startswith("👤 <b>Профиль</b>")
         assert "История" not in message.edits[-1]
         keyboard = message.edit_markups[-1]
-        assert keyboard.inline_keyboard[0][0].text == "💳 Пополнить баланс"
-        assert keyboard.inline_keyboard[1][0].text == "📎 Переключить способ отправки"
+        assert keyboard.inline_keyboard[0][0].text == "💳 Пополнить"
+        assert keyboard.inline_keyboard[1][0].text == f"⚙️ {t('profile.toggle_delivery', 'ru')}"
         assert len(keyboard.inline_keyboard) == 2
         assert all("Назад" not in row[0].text for row in keyboard.inline_keyboard)
         assert callback.answers[-1] is None
@@ -366,9 +361,9 @@ async def test_stars_amount_callback_creates_order_and_sends_wallet_url(session_
 
         order = (await session.execute(select(PaymentOrder).where(PaymentOrder.user_id == 814))).scalar_one()
         assert message.invoices == []
-        assert message.edits == ["Вы выбрали: 300 ⭐\nНажмите кнопку ниже, чтобы перейти к оплате."]
+        assert message.edits == ["⭐ 300 Stars\n\nНажмите ниже, чтобы оплатить."]
         keyboard = message.edit_markups[-1]
-        assert keyboard.inline_keyboard[0][0].text == "Перейти к оплате ⭐"
+        assert keyboard.inline_keyboard[0][0].text == "Оплатить ⭐"
         wallet_url = keyboard.inline_keyboard[0][0].url
         parsed_url = urlparse(wallet_url)
         payload_from_url = parse_qs(parsed_url.query)["start"][0]
@@ -429,7 +424,7 @@ async def test_stars_amount_requires_wallet_bot_username(session_factory, monkey
         assert result.scalars().all() == []
         assert message.invoices == []
         assert message.edits == []
-        assert callback.answers[-1] == "💳 Оплата временно недоступна\n\nПопробуйте позже или выберите другой способ."
+        assert callback.answers[-1] == t("error_ux.payment_unavailable", "ru")
         assert callback.answer_alerts[-1] is True
         assert any(
             isinstance(record.msg, dict)
@@ -461,5 +456,5 @@ async def test_stars_amount_callback_rejects_invalid_amount(session_factory) -> 
 
         await payments.choose_stars_amount(callback, session)
 
-        assert callback.answers[-1] == "⚙️ Некорректные настройки\n\nИзмените параметры модели и попробуйте снова."
+        assert callback.answers[-1] == "⚙️ Проверьте настройки\n\nИзмените их и попробуйте снова."
         assert callback.answer_alerts[-1] is True

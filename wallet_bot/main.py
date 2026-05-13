@@ -94,13 +94,13 @@ def parse_amount_from_invoice_payload(payload: str) -> Optional[int]:
     return int(match.group("amount"))
 
 
-def build_return_keyboard(settings: WalletSettings, payload: str | None = None) -> InlineKeyboardMarkup:
+def build_return_keyboard(settings: WalletSettings, payload: str | None = None, lang: str = DEFAULT_LANGUAGE) -> InlineKeyboardMarkup:
     start_payload = f"paid_{quote(payload, safe='')}" if payload else "payment_success"
     return InlineKeyboardMarkup(
         inline_keyboard=[
             [
                 InlineKeyboardButton(
-                    text="Return to generation bot",
+                    text=t("wallet.return_button", lang),
                     url=f"https://t.me/{settings.normalized_main_bot_username}?start={start_payload}",
                 )
             ]
@@ -228,13 +228,14 @@ async def start_command(
         async with session_factory() as session:
             order = await create_wallet_payment_order(session, user_id=user_id, amount=amount)
 
+    lang = get_wallet_user_language(message.from_user)
     await message.answer_invoice(
-        title=f"{amount} credits",
-        description=f"Top up {amount} credits",
+        title=t("wallet.invoice_title", lang, amount=amount),
+        description=t("wallet.invoice_description", lang, amount=amount),
         payload=order.payload,
         provider_token="",
         currency="XTR",
-        prices=[LabeledPrice(label=f"{amount} credits", amount=amount)],
+        prices=[LabeledPrice(label=t("wallet.invoice_label", lang, amount=amount), amount=amount)],
     )
     logger.info(
         {
@@ -314,9 +315,10 @@ async def process_successful_payment(
             "amount": successful_payment.total_amount,
         }
     )
+    lang = get_wallet_user_language(message.from_user)
     await message.answer(
-        f"✅ Payment received.\n{order.credits} credits added to your balance.",
-        reply_markup=build_return_keyboard(settings, successful_payment.invoice_payload),
+        t("wallet.payment_success", lang, credits=order.credits),
+        reply_markup=build_return_keyboard(settings, successful_payment.invoice_payload, lang),
     )
 
 

@@ -21,6 +21,7 @@ from app.bot.keyboards import build_main_menu_keyboard, get_button_text
 from app.bot.states import GenerationStates
 from app.db.base import Base
 from app.db.models import PaymentOrderStatus, User
+from app.i18n import t
 from app.services.payments import PaymentService
 
 
@@ -133,8 +134,8 @@ async def test_cancel_command_resets_generation_flow_and_shows_main_menu(session
 
         assert state.state is None
         assert state.data == {}
-        assert message.answers[0] == "Сценарий генерации сброшен. Вы вернулись в главное меню."
-        assert message.answers[1] == "Выберите нужный раздел."
+        assert message.answers[0] == t("generation.scenario_reset", "ru")
+        assert message.answers[1] == t("main.choose_section", "ru")
         _assert_main_menu_keyboard(message.answer_markups[0])
         _assert_main_menu_keyboard(message.answer_markups[1])
 
@@ -412,7 +413,7 @@ async def test_menu_command_always_shows_main_menu(session_factory) -> None:
 
         await start.menu_command(message, state, session)
 
-        assert message.answers[-1] == "Выберите нужный раздел."
+        assert message.answers[-1] == t("main.choose_section", "ru")
         _assert_main_menu_keyboard(message.answer_markups[-1])
 
 
@@ -425,8 +426,8 @@ async def test_generations_button_resets_generation_flow_before_opening_menu() -
     await generations.show_generation_menu(message, state)
 
     assert state.state == GenerationStates.choosing_generation_type
-    assert message.answers[0] == "Сценарий генерации сброшен. Вы вернулись в главное меню."
-    assert "Выберите тип генерации:" in message.answers[1]
+    assert message.answers[0] == t("generation.scenario_reset", "ru")
+    assert f"{t('generation.choose_type', 'ru')}:" in message.answers[1]
     _assert_main_menu_keyboard(message.answer_markups[0])
 
 
@@ -452,6 +453,6 @@ async def test_main_menu_buttons_reset_generation_flow_before_navigation(
 
         assert state.state is None
         assert state.data == {}
-        assert message.answers[0] == "Сценарий генерации сброшен. Вы вернулись в главное меню."
+        assert message.answers[0] == t("generation.scenario_reset", "ru")
         _assert_main_menu_keyboard(message.answer_markups[0])
         assert expected_text in message.answers[1]

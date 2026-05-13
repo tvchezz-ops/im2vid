@@ -249,7 +249,7 @@ def test_build_paginated_keyboard_middle_page_has_prev_and_next() -> None:
         back_callback="back",
     )
 
-    assert keyboard.inline_keyboard[-2][0].text == "⬅️ Prev"
+    assert keyboard.inline_keyboard[-2][0].text == t("pagination.prev", "en")
     assert keyboard.inline_keyboard[-2][0].callback_data == "page:0"
     assert keyboard.inline_keyboard[-2][1].text == "Page 2/3"
     assert keyboard.inline_keyboard[-2][2].text == "Next ➡️"
@@ -502,7 +502,7 @@ def test_build_generation_confirm_keyboard_uses_new_callbacks() -> None:
 def test_build_back_to_settings_reply_keyboard_uses_expected_text() -> None:
     keyboard = build_back_to_settings_reply_keyboard("ru")
 
-    assert keyboard.keyboard[0][0].text == "⬅️ Назад к настройкам"
+    assert keyboard.keyboard[0][0].text == f"⬅️ {t('generation.back_to_settings', 'ru')}"
 
 
 def test_build_main_menu_keyboard_uses_expected_layout() -> None:
@@ -523,7 +523,7 @@ def test_build_profile_keyboard_has_no_history_button() -> None:
     keyboard = get_profile_keyboard(send_results_as_files=False, lang="ru")
     button_texts = [button.text for row in keyboard.inline_keyboard for button in row]
 
-    assert button_texts == ["💳 Пополнить баланс", "📎 Переключить способ отправки"]
+    assert button_texts == [f"💳 {t('profile.top_up', 'ru')}", f"⚙️ {t('profile.toggle_delivery', 'ru')}"]
     assert "📜 История генераций" not in button_texts
 
 
@@ -591,12 +591,12 @@ def test_build_crypto_top_up_keyboard_uses_two_column_amount_layout() -> None:
     assert len(rows) == 4
     assert [len(row) for row in rows[:3]] == [2, 2, 2]
     assert [button.text for row in rows[:3] for button in row] == [
-        "100 credits",
-        "300 credits",
-        "500 credits",
-        "1000 credits",
-        "3000 credits",
-        "5000 credits",
+        t("payments.credit_amount", "ru", amount=100),
+        t("payments.credit_amount", "ru", amount=300),
+        t("payments.credit_amount", "ru", amount=500),
+        t("payments.credit_amount", "ru", amount=1000),
+        t("payments.credit_amount", "ru", amount=3000),
+        t("payments.credit_amount", "ru", amount=5000),
     ]
     assert [button.callback_data for row in rows[:3] for button in row] == [
         "pay:crypto:100",
@@ -615,7 +615,7 @@ def test_build_top_up_method_keyboard_uses_payment_methods() -> None:
     keyboard = build_top_up_method_keyboard("ru")
     buttons = [row[0] for row in keyboard.inline_keyboard]
 
-    assert [button.text for button in buttons] == ["⭐ Telegram Stars", "₿ Crypto", "⬅️ Назад в профиль"]
+    assert [button.text for button in buttons] == ["⭐ Telegram Stars", "₿ Crypto", f"⬅️ {t('main.profile', 'ru')}"]
     assert [button.callback_data for button in buttons] == ["pay:method:stars", "pay:crypto", "pay:back:profile"]
 
 
@@ -625,7 +625,7 @@ def test_build_stars_wallet_redirect_keyboard_uses_single_wallet_url() -> None:
         lang="ru",
     )
 
-    assert keyboard.inline_keyboard[0][0].text == "Перейти к оплате ⭐"
+    assert keyboard.inline_keyboard[0][0].text == f"{t('payments.open_wallet_bot', 'ru')} ⭐"
     assert keyboard.inline_keyboard[0][0].url == "https://t.me/wallet_bot?start=stars_token"
     assert keyboard.inline_keyboard[1][0].text == "⬅️ Назад"
     assert keyboard.inline_keyboard[1][0].callback_data == "pay:back:stars_amounts"
@@ -638,5 +638,5 @@ def test_build_wallet_bot_payment_keyboard_uses_single_pay_url_button() -> None:
     )
 
     assert len(keyboard.inline_keyboard) == 1
-    assert keyboard.inline_keyboard[0][0].text == "Go to payment"
+    assert keyboard.inline_keyboard[0][0].text == t("payments.open_wallet_bot", "en")
     assert keyboard.inline_keyboard[0][0].url == "https://t.me/wallet_bot?start=500credits"

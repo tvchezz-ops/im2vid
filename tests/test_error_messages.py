@@ -9,7 +9,7 @@ os.environ.setdefault("WAVESPEED_API_KEY", "test-api-key")
 os.environ.setdefault("PUBLIC_BASE_URL", "https://example.com")
 
 from app.bot.error_messages import build_error_keyboard, build_user_error_message, log_error_code
-from app.i18n import SUPPORTED_LANGUAGES, TRANSLATIONS
+from app.i18n import SUPPORTED_LANGUAGES, TRANSLATIONS, t
 
 
 ERROR_CODES = tuple(f"E{number:03d}" for number in range(1, 13))
@@ -66,16 +66,16 @@ def test_e006_maps_to_balance_message_and_recovery_buttons() -> None:
     message = build_user_error_message("E006", "ru")
     keyboard = build_error_keyboard("E006", "ru")
 
-    assert message == "💳 Недостаточно кредитов\n\nПополните баланс в профиле, чтобы продолжить."
+    assert message == t("error_ux.insufficient_balance", "ru")
     assert keyboard is not None
-    assert flatten_keyboard_texts(keyboard) == ["💳 Пополнить баланс", "👤 Профиль"]
+    assert flatten_keyboard_texts(keyboard) == ["💳 Пополнить", "👤 Профиль"]
     assert [button.callback_data for row in keyboard.inline_keyboard for button in row] == ["profile:topup", "profile:open"]
 
 
 def test_e008_timeout_message_has_no_internal_code() -> None:
     message = build_user_error_message("E008", "en")
 
-    assert message == "⏱️ Generation took too long\n\nCredits for this attempt were returned. Please try again later."
+    assert message == t("error_ux.timeout", "en")
     assert "E008" not in message
 
 

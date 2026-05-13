@@ -180,7 +180,7 @@ def test_translate_uses_selected_language() -> None:
 def test_translate_falls_back_to_english_for_missing_language_key() -> None:
     assert t("main.profile", "pt-BR") == "Perfil"
     assert t("main.profile", "ja") == "Profile"
-    assert t("payments.choose_method", "ja") == "Choose a payment method:"
+    assert t("payments.choose_method", "ja") == "💳 Balance top-up\n\nChoose a payment method."
 
 
 def test_translate_falls_back_to_english_for_missing_supported_language_key(monkeypatch) -> None:
@@ -190,7 +190,7 @@ def test_translate_falls_back_to_english_for_missing_supported_language_key(monk
 
     monkeypatch.setattr(i18n, "TRANSLATIONS", patched_translations)
 
-    assert i18n.t("payments.choose_method", "ru") == "Choose a payment method:"
+    assert i18n.t("payments.choose_method", "ru") == "💳 Balance top-up\n\nChoose a payment method."
 
 
 def test_translate_falls_back_to_english_for_missing_key() -> None:

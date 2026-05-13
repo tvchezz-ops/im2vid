@@ -22,6 +22,7 @@ from app.bot.keyboards import (
     build_setting_options_keyboard,
 )
 from app.bot.routers import generations
+from app.i18n import t
 from app.services.generation_service import (
     GENERATION_TYPES,
     MODEL_REGISTRY,
@@ -306,7 +307,7 @@ async def test_ui_shows_placeholder_when_provider_has_no_models(monkeypatch) -> 
 
     await generations.choose_provider(callback, state)
 
-    assert message.edits[-1] == "У этого провайдера пока нет подключённых моделей"
+    assert message.edits[-1] == t("generation.no_models_in_provider", "ru")
     callbacks = _iter_callback_data(message.edit_markups[-1])
     assert "gen:back:sections" in callbacks
 

@@ -11,6 +11,7 @@ from types import SimpleNamespace
 
 import pytest
 import pytest_asyncio
+from aiogram.exceptions import TelegramBadRequest
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 
@@ -25,6 +26,7 @@ from app.db.base import Base
 from app.db.models import GenerationRequest, GenerationRequestStatus, User
 from app.db.repositories import GenerationRepository, UserRepository
 from app.bot.states import GenerationStates
+from app.i18n import t
 from app.services.generation_service import GenerationModel, GenerationSetting, MODEL_REGISTRY, SettingOption
 from app.utils import WavespeedFailedError, WavespeedTimeoutError
 
@@ -296,7 +298,7 @@ async def test_show_generation_menu_starts_with_generation_type_selection() -> N
     await generations.show_generation_menu(message, state, None)
 
     assert state.state == GenerationStates.choosing_generation_type
-    assert "Choose generation type:" in message.answers[-1]
+    assert f"{t('generation.choose_type', 'en')}:" in message.answers[-1]
     assert "Text to Video" in message.answers[-1]
     keyboard = message.answer_markups[-1]
     callback_data = [row[0].callback_data for row in keyboard.inline_keyboard[:-1]]
@@ -324,7 +326,7 @@ async def test_show_generation_menu_ignores_active_generation_count(session_fact
         await generations.show_generation_menu(message, state, session)
 
         assert state.state == GenerationStates.choosing_generation_type
-        assert "Выберите тип генерации:" in message.answers[-1]
+        assert f"{t('generation.choose_type', 'ru')}:" in message.answers[-1]
         removed_warning_fragment = "Можно запускать" + " не больше"
         assert not any(removed_warning_fragment in answer for answer in message.answers)
 
@@ -391,9 +393,9 @@ async def test_confirm_generation_allows_four_generations_with_existing_active_r
         await await_background_generation_tasks()
 
         assert menu_state.state == GenerationStates.choosing_generation_type
-        assert "Выберите тип генерации:" in menu_message.answers[-1]
+        assert f"{t('generation.choose_type', 'ru')}:" in menu_message.answers[-1]
         assert state.state is None
-        assert callback.message.answers[-1] == "Генерация запущена в фоне. Результат придёт сюда автоматически."
+        assert callback.message.answers[-1] == t("generation.started", "ru")
         assert len(submit_calls) == 4
         assert len(batch_calls["generation_predictions"]) == 4
         assert await get_user_balance(session, 422) == 32
@@ -450,7 +452,7 @@ async def test_choose_generation_section_shows_models_for_type() -> None:
     assert state.state == GenerationStates.choosing_generation_type
     assert state.data["selected_generation_type"] == "image_edit"
     assert state.data["selected_provider"] is None
-    assert message.edits[-1] == "Выберите модель:"
+    assert message.edits[-1] == f"{t('generation.choose_model', 'ru')}:"
 
 
 @pytest.mark.asyncio
@@ -464,7 +466,7 @@ async def test_choose_all_models_shows_provider_list() -> None:
     assert state.state == GenerationStates.choosing_provider
     assert state.data["selected_generation_type"] == "all"
     assert state.data["selected_provider"] is None
-    assert message.edits[-1] == "Выберите провайдера:"
+    assert message.edits[-1] == t("generation.choose_provider", "ru")
 
 
 @pytest.mark.asyncio
@@ -477,7 +479,7 @@ async def test_choose_provider_shows_provider_models() -> None:
 
     assert state.state == GenerationStates.choosing_provider
     assert state.data["selected_provider"] == "google"
-    assert message.edits[-1] == "Выберите модель:"
+    assert message.edits[-1] == f"{t('generation.choose_model', 'ru')}:"
 
 
 @pytest.mark.asyncio
@@ -501,7 +503,7 @@ async def test_back_to_generation_models_returns_to_provider_filtered_models() -
     await generations.back_to_generation_models(callback, state)
 
     assert state.state == GenerationStates.choosing_provider
-    assert message.edits[-1] == "Выберите модель:"
+    assert message.edits[-1] == f"{t('generation.choose_model', 'ru')}:"
     assert state.data["model_key"] is None
     assert state.data["prompt"] is None
 
@@ -517,8 +519,8 @@ async def test_back_to_generation_types_from_provider_screen() -> None:
     assert state.state == GenerationStates.choosing_generation_type
     assert state.data["selected_generation_type"] is None
     assert state.data["selected_provider"] is None
-    assert "Выберите тип генерации:" in message.edits[-1]
-    assert "Text → Video" in message.edits[-1]
+    assert f"{t('generation.choose_type', 'ru')}:" in message.edits[-1]
+    assert t("generation.section_title.text_to_video", "ru") in message.edits[-1]
 
 
 @pytest.mark.asyncio
@@ -530,7 +532,7 @@ async def test_unknown_generation_callback_shows_fallback_alert_screen() -> None
     await generations.handle_unknown_generation_callback(callback, state)
 
     assert state.state == GenerationStates.choosing_generation_type
-    assert "Выберите тип генерации:" in message.edits[-1]
+    assert f"{t('generation.choose_type', 'ru')}:" in message.edits[-1]
 
 
 @pytest.mark.asyncio
@@ -547,7 +549,8 @@ async def test_open_setting_selector_and_choose_setting_value_for_model_with_set
     await generations.open_setting_selector(open_callback, state)
 
     assert state.data["current_setting_key"] == "aspect_ratio"
-    assert "Параметр: <b>Формат</b>" in message.edits[-1]
+    assert "<b>Формат</b>" in message.edits[-1]
+    assert t("generation.setting_choose_value", "ru") in message.edits[-1]
 
     choose_callback = FakeCallback(user_id=450, message=message, data="gen:set:aspect_ratio:8")
     await generations.choose_setting_value(choose_callback, state)
@@ -572,7 +575,7 @@ async def test_open_setting_selector_for_text_setting_switches_to_text_input() -
 
         assert state.state == GenerationStates.waiting_for_setting_text
         assert state.data["current_setting_key"] == "note"
-        assert "Параметр: <b>Заметка</b>" in message.edits[-1]
+        assert t("generation.setting_parameter", "ru", parameter="Заметка") in message.edits[-1]
     finally:
         remove_text_setting_model()
 
@@ -596,7 +599,7 @@ async def test_process_text_setting_value_saves_text_and_returns_to_settings() -
 
         assert state.state == GenerationStates.choosing_settings
         assert state.data["user_settings"]["note"] == "blur, noise"
-        assert message.answers[0] == "Значение сохранено."
+        assert message.answers[0] == t("generation.value_saved", "ru")
     finally:
         remove_text_setting_model()
 
@@ -633,7 +636,7 @@ async def test_continue_after_settings_shows_lipsync_media_prompt() -> None:
     await generations.continue_after_settings(callback, state)
 
     assert state.state == GenerationStates.waiting_for_image
-    assert "Загрузите видео с лицом" in message.edits[-1]
+    assert message.edits[-1] == t("generation.flow.lipsync.initial", "ru")
 
 @pytest.mark.asyncio
 async def test_continue_after_settings_for_text_to_image_goes_to_prompt() -> None:
@@ -644,7 +647,7 @@ async def test_continue_after_settings_for_text_to_image_goes_to_prompt() -> Non
     await generations.continue_after_settings(callback, state)
 
     assert state.state == GenerationStates.waiting_for_prompt
-    assert message.edits[-1] == "Опишите изображение, которое хотите создать."
+    assert message.edits[-1] == t("generation.flow.text_to_image.initial", "ru")
 
 @pytest.mark.asyncio
 async def test_continue_after_settings_for_video_edit_goes_to_video_step() -> None:
@@ -655,7 +658,11 @@ async def test_continue_after_settings_for_video_edit_goes_to_video_step() -> No
     await generations.continue_after_settings(callback, state)
 
     assert state.state == GenerationStates.waiting_for_video
-    assert message.edits[-1] == "Отправьте видео для модели Google Veo3.1 Fast Video Extend."
+    assert message.edits[-1] == t(
+        "generation.send_video_for_model",
+        "ru",
+        model="Google Veo3.1 Fast Video Extend",
+    )
 
 
 @pytest.mark.asyncio
@@ -674,11 +681,11 @@ async def test_generation_image_step_uses_db_language_without_mixing(session_fac
         await generations.continue_after_settings(callback, state, session)
 
         combined_text = "\n".join(message.edits + message.answers)
-        assert "Отправьте изображение для модели Alibaba Wan 2.7 Image To Video." in combined_text
-        assert "Если передумали" in combined_text
+        assert t("generation.send_image_for_model", "ru", model="Alibaba Wan 2.7 Image To Video") in combined_text
+        assert t("generation.changed_mind_back_to_settings", "ru") in combined_text
         assert "Send an image" not in combined_text
         assert "If you changed your mind" not in combined_text
-        assert message.answer_markups[-1].keyboard[0][0].text == "⬅️ Назад к настройкам"
+        assert message.answer_markups[-1].keyboard[0][0].text == f"⬅️ {t('generation.back_to_settings', 'ru')}"
 
 
 @pytest.mark.asyncio
@@ -697,11 +704,11 @@ async def test_generation_image_step_english_user_has_no_russian_phrases(session
         await generations.continue_after_settings(callback, state, session)
 
         combined_text = "\n".join(message.edits + message.answers)
-        assert "Send an image for model Alibaba Wan 2.7 Image To Video." in combined_text
-        assert "If you changed your mind" in combined_text
+        assert t("generation.send_image_for_model", "en", model="Alibaba Wan 2.7 Image To Video") in combined_text
+        assert t("generation.changed_mind_back_to_settings", "en") in combined_text
         assert "Отправьте" not in combined_text
         assert "Если передумали" not in combined_text
-        assert message.answer_markups[-1].keyboard[0][0].text == "⬅️ Back to settings"
+        assert message.answer_markups[-1].keyboard[0][0].text == f"⬅️ {t('generation.back_to_settings', 'en')}"
 
 
 @pytest.mark.asyncio
@@ -713,10 +720,12 @@ async def test_continue_after_settings_for_multi_image_model_goes_to_images_step
     await generations.continue_after_settings(callback, state)
 
     assert state.state == GenerationStates.waiting_for_images
-    assert message.edits[-1] == (
-        "Отправьте изображения для модели Google Nano Banana Pro Edit Ultra.\n"
-        "Можно загрузить от 1 до 10 файлов.\n"
-        "После загрузки нажмите ✅ Продолжить."
+    assert message.edits[-1] == t(
+        "generation.send_images_for_model",
+        "ru",
+        model="Google Nano Banana Pro Edit Ultra",
+        min_count=1,
+        max_count=10,
     )
 
 
@@ -734,7 +743,7 @@ async def test_continue_after_multi_image_upload_requires_minimum_images() -> No
     await generations.continue_after_multi_image_upload(message, state)
 
     assert state.state is None
-    assert message.answers[-1] == "🖼️ Нужно изображение\n\nОтправьте фото или файл изображения."
+    assert message.answers[-1] == t("generation.invalid_wait_image", "ru")
 
 
 @pytest.mark.asyncio
@@ -761,7 +770,7 @@ async def test_process_generation_images_appends_uploaded_media(monkeypatch) -> 
     assert state.data["input_media_paths"] == ["/tmp/photo-file-id.png"]
     assert state.data["input_media_file_ids"] == ["photo-file-id"]
     assert state.data["input_media_items"][0]["public_url"] == "https://example.com/photo-file-id.png"
-    assert "Загружено 1 из 10." in message.answers[-1]
+    assert t("generation.images_uploaded_progress", "ru", count=1, max_count=10) in message.answers[-1]
 
 
 @pytest.mark.asyncio
@@ -806,7 +815,7 @@ async def test_legacy_nano_banana_and_seedream_generation_flow_still_reaches_con
 
         await generations.process_generation_images(upload_message, state)
 
-        assert f"Загружено {max_images_text}." in upload_message.answers[-1]
+        assert t("generation.images_uploaded_progress", "ru", count=1, max_count=10) in upload_message.answers[-1]
 
         continue_message = FakeMessage(chat_id=479)
         continue_message.text = "✅ Продолжить"
@@ -853,7 +862,7 @@ async def test_multi_image_upload_survives_back_to_settings_and_appends_from_cur
         await generations.process_generation_images(upload_message, state)
 
     assert len(state.data["input_media_urls"]) == 3
-    assert "Загружено 3 из 10." in upload_message.answers[-1]
+    assert t("generation.images_uploaded_progress", "ru", count=3, max_count=10) in upload_message.answers[-1]
 
     back_message = FakeMessage(chat_id=480)
     back_message.text = "⬅️ Назад к настройкам"
@@ -867,8 +876,8 @@ async def test_multi_image_upload_survives_back_to_settings_and_appends_from_cur
     await generations.continue_after_settings(callback, state)
 
     assert state.state == GenerationStates.waiting_for_images
-    assert "Загружено 3 из 10." in continue_message.answers[-1]
-    assert continue_message.answer_markups[-1].keyboard[1][0].text == "🗑 Очистить изображения"
+    assert t("generation.images_uploaded_progress", "ru", count=3, max_count=10) in continue_message.answers[-1]
+    assert continue_message.answer_markups[-1].keyboard[1][0].text == f"🗑 {t('common.clear_images', 'ru')}"
 
     fourth_message = FakeMessage(chat_id=480)
     fourth_message.photo = [SimpleNamespace(file_id="photo-4")]
@@ -876,7 +885,7 @@ async def test_multi_image_upload_survives_back_to_settings_and_appends_from_cur
 
     assert len(state.data["input_media_urls"]) == 4
     assert state.data["input_media_urls"][-1] == "https://example.com/photo-4.png"
-    assert "Загружено 4 из 10." in fourth_message.answers[-1]
+    assert t("generation.images_uploaded_progress", "ru", count=4, max_count=10) in fourth_message.answers[-1]
 
 
 async def await_media_group_task(message: FakeMessage) -> None:
@@ -921,7 +930,7 @@ async def test_media_group_album_adds_three_images_with_single_ui_message(monkey
         "https://example.com/album-photo-3.png",
     ]
     assert sum(len(message.answers) for message in messages) == 1
-    assert messages[0].answers[-1] == "Загружено 3 из 10. Отправьте ещё изображение или нажмите ✅ Продолжить."
+    assert messages[0].answers[-1] == t("generation.images_uploaded_progress", "ru", count=3, max_count=10)
 
 
 @pytest.mark.asyncio
@@ -970,7 +979,7 @@ async def test_media_group_album_respects_max_images(monkeypatch) -> None:
         "https://example.com/limit-photo-2.png",
     ]
     assert sum(len(message.answers) for message in messages) == 1
-    assert messages[0].answers[-1] == "Достигнут лимит 10 изображений."
+    assert messages[0].answers[-1] == t("generation.image_limit_reached", "ru", count=10)
 
 
 @pytest.mark.asyncio
@@ -1050,7 +1059,7 @@ async def test_single_image_media_group_uses_first_image_only(monkeypatch) -> No
     assert state.state == GenerationStates.waiting_for_prompt
     assert state.data["input_media_urls"] == ["https://example.com/single-photo-1.png"]
     assert state.data["input_media_file_ids"] == ["single-photo-1"]
-    assert any("Для этой модели нужно только одно изображение. Использовано первое." in answer for answer in messages[0].answers)
+    assert any(t("generation.single_image_album_first_used", "ru") in answer for answer in messages[0].answers)
 
 
 @pytest.mark.asyncio
@@ -1067,7 +1076,7 @@ async def test_send_confirmation_screen_shows_lipsync_incomplete_error(session_f
             edit=False,
         )
 
-        assert message.answers[-1] == "❌ Не тот формат файла\n\nОтправьте файл в нужном формате и попробуйте снова."
+        assert message.answers[-1] == t("error_ux.invalid_input", "ru")
 
 
 @pytest.mark.asyncio
@@ -1108,7 +1117,7 @@ async def test_process_generation_image_saves_lipsync_video_as_input_media() -> 
     assert state.state == GenerationStates.waiting_for_prompt
     assert state.data["input_media"] == {"type": "video", "file_id": "video-file-id"}
     assert state.data["input_image_file_id"] is None
-    assert "аудиофайл" in message.answers[-1].lower()
+    assert message.answers[-1] == t("generation.flow.lipsync.second", "ru")
 
 
 @pytest.mark.asyncio
@@ -1151,7 +1160,7 @@ async def test_process_generation_image_rejects_video_for_image_flow() -> None:
 
     await generations.process_generation_image(message, state)
 
-    assert message.answers[-1] == "🖼️ Нужно изображение\n\nОтправьте фото или файл изображения."
+    assert message.answers[-1] == t("generation.invalid_wait_image", "ru")
 
 @pytest.mark.asyncio
 async def test_process_generation_video_accepts_video_document(monkeypatch) -> None:
@@ -1202,7 +1211,7 @@ async def test_process_generation_video_for_lipsync_requests_audio(monkeypatch) 
 
     assert state.state == GenerationStates.waiting_for_audio
     assert state.data["input_media_items"][0]["public_url"] == "https://example.com/video-file-id.mp4"
-    assert "аудиофайл" in message.answers[-1].lower()
+    assert message.answers[-1] == t("generation.send_audio_for_lipsync", "ru")
 
 
 @pytest.mark.asyncio
@@ -1251,7 +1260,7 @@ async def test_waiting_for_audio_accepts_audio_inputs(session_factory, monkeypat
         assert state.state == GenerationStates.waiting_for_confirmation
         assert state.data["input_audio_url"].endswith(".mp3")
         assert state.data["input_audio_file_id"] == media_object.file_id
-        assert "Озвучка" in message.answers[-1]
+        assert t("generation.voiceover_label", "ru", prompt=t("generation.audio_file", "ru")) in message.answers[-1]
 
 
 @pytest.mark.asyncio
@@ -1270,7 +1279,7 @@ async def test_waiting_for_audio_rejects_audio_larger_than_docs_limit(session_fa
         await generations.process_generation_audio(message, state, session)
 
         assert state.state is None
-        assert "слишком большой" in message.answers[-1]
+        assert message.answers[-1] == t("generation.audio_too_large", "ru")
 
 
 @pytest.mark.asyncio
@@ -1322,7 +1331,7 @@ async def test_waiting_for_audio_rejects_text_with_audio_file_error(session_fact
 
         await generations.invalid_generation_audio(message, state)
 
-        assert message.answers[-1] == "🎵 Нужно аудио\n\nОтправьте голосовое сообщение или аудиофайл."
+        assert message.answers[-1] == t("generation.unsupported_audio_type", "ru")
 
 
 @pytest.mark.asyncio
@@ -1337,7 +1346,7 @@ async def test_waiting_for_audio_uses_default_20mb_limit_without_docs_max(sessio
             await generations.process_generation_audio(message, state, session)
 
             assert state.state is None
-            assert "слишком большой" in message.answers[-1]
+            assert message.answers[-1] == t("generation.audio_too_large", "ru")
     finally:
         remove_audio_no_limit_model()
 
@@ -1348,7 +1357,7 @@ def test_raw_english_docs_description_is_not_displayed_for_ru_setting_text() -> 
     text = generations.build_setting_value_text(model, "duration", "5", "ru")
 
     assert "The duration of the generated media" not in text
-    assert "Отправьте новое числовое значение" in text
+    assert t("settings.enter_number_value", "ru") in text
 
 
 def test_settings_screen_shows_generated_or_fallback_settings_without_media_fields() -> None:
@@ -1372,31 +1381,34 @@ def test_settings_screen_shows_generated_or_fallback_settings_without_media_fiel
 def test_describe_model_requirements_for_lipsync_audio_model() -> None:
     text = generations.describe_model_requirements(MODEL_REGISTRY["kwaivgi_kling_lipsync_audio_to_video"], "ru")
 
-    assert "Видео с лицом" in text
-    assert "Аудиофайл" in text
+    assert text == (
+        f"<b>{t('requirements.title', 'ru')}</b>\n\n"
+        f"• {t('requirements.video_with_face', 'ru')}\n"
+        f"• {t('requirements.audio', 'ru')}"
+    )
 
 
 def test_describe_model_requirements_for_text_to_video_model() -> None:
     text = generations.describe_model_requirements(MODEL_REGISTRY["google_veo3"], "ru")
 
-    assert "Текстовое описание" in text
-    assert "Изображение" not in text
+    assert f"• {t('requirements.prompt', 'ru')}" in text
+    assert t("requirements.image", "ru") not in text
     assert "Видео" not in text
-    assert "Аудиофайл" not in text
+    assert t("requirements.audio", "ru") not in text
 
 
 def test_describe_model_requirements_for_image_to_video_model() -> None:
     text = generations.describe_model_requirements(MODEL_REGISTRY["alibaba_wan_2_6_image_to_video_flash"], "ru")
 
-    assert "Изображение" in text
-    assert "Текстовое описание" in text
+    assert f"• {t('requirements.image', 'ru')}" in text
+    assert f"• {t('requirements.prompt', 'ru')}" in text
 
 
 def test_describe_model_requirements_for_video_extend_model() -> None:
     text = generations.describe_model_requirements(MODEL_REGISTRY["google_veo3_1_fast_video_extend"], "ru")
 
-    assert "Видео" in text
-    assert "Описание продолжения" in text
+    assert f"• {t('requirements.video', 'ru')}" in text
+    assert f"• {t('requirements.prompt', 'ru')}" in text
 
 
 def test_describe_model_requirements_translated_ru_and_en_keys() -> None:
@@ -1406,24 +1418,24 @@ def test_describe_model_requirements_translated_ru_and_en_keys() -> None:
     en_text = generations.describe_model_requirements(model, "en")
 
     assert "📥 Требуется:" in ru_text
-    assert "Референсные изображения" in ru_text
-    assert "Текстовое описание" in ru_text
+    assert f"• {t('requirements.reference_images', 'ru')}" in ru_text
+    assert f"• {t('requirements.prompt', 'ru')}" in ru_text
     assert "📥 Required:" in en_text
-    assert "Reference images" in en_text
-    assert "Text description" in en_text
+    assert f"• {t('requirements.reference_images', 'en')}" in en_text
+    assert f"• {t('requirements.prompt', 'en')}" in en_text
 
 
 def test_insufficient_balance_message_is_localized() -> None:
-    assert generations.build_insufficient_balance_message("ru") == "💳 Недостаточно кредитов\n\nПополните баланс в профиле, чтобы продолжить."
-    assert generations.build_insufficient_balance_message("en") == "💳 Not enough credits\n\nTop up your balance in Profile to continue."
+    assert generations.build_insufficient_balance_message("ru") == t("error_ux.insufficient_balance", "ru")
+    assert generations.build_insufficient_balance_message("en") == t("error_ux.insufficient_balance", "en")
 
 
 def test_insufficient_balance_keyboard_contains_topup_and_profile_buttons() -> None:
     keyboard = generations.build_insufficient_balance_keyboard("ru")
 
-    assert keyboard.inline_keyboard[0][0].text == "💳 Пополнить баланс"
+    assert keyboard.inline_keyboard[0][0].text == t("error_ux.button.top_up", "ru")
     assert keyboard.inline_keyboard[0][0].callback_data == "profile:topup"
-    assert keyboard.inline_keyboard[1][0].text == "👤 Профиль"
+    assert keyboard.inline_keyboard[1][0].text == t("error_ux.button.profile", "ru")
     assert keyboard.inline_keyboard[1][0].callback_data == "profile:open"
 
 
@@ -1442,7 +1454,8 @@ def test_settings_screen_inserts_requirements_before_current_values() -> None:
 
     text = generations.build_settings_text(model, {}, "ru")
 
-    assert text.index("📥 Требуется:") < text.index("Текущие значения")
+    current_settings = t("settings.current_values", "ru", values="")
+    assert text.index(t("requirements.title", "ru")) < text.index(current_settings.split("\n\n", 1)[0])
 
 @pytest.mark.asyncio
 async def test_process_generation_video_rejects_photo_for_video_flow() -> None:
@@ -1452,7 +1465,7 @@ async def test_process_generation_video_rejects_photo_for_video_flow() -> None:
 
     await generations.process_generation_video(message, state)
 
-    assert message.answers[-1] == "🎬 Нужно видео\n\nОтправьте видео или video-файл."
+    assert message.answers[-1] == t("generation.invalid_wait_video", "ru")
 
 @pytest.mark.asyncio
 async def test_process_prompt_rejects_file_when_text_prompt_expected(session_factory) -> None:
@@ -1471,7 +1484,7 @@ async def test_process_prompt_rejects_file_when_text_prompt_expected(session_fac
 
         await generations.process_prompt(message, state, session)
 
-        assert message.answers[-1] == "✍️ Нужно описание\n\nНапишите, что нужно создать или изменить."
+        assert message.answers[-1] == t("error_ux.prompt_required", "ru")
 
 
 @pytest.mark.asyncio
@@ -1662,8 +1675,8 @@ async def test_back_to_settings_from_waiting_for_prompt_restores_settings_and_lo
     assert state.data["selected_model_key"] == "alibaba_wan_2_6_text_to_image"
     assert state.data["selected_settings"] == {}
     assert message.answer_markups[0].keyboard[0][0].text == "🎨 Генерации"
-    assert message.answers[0] == "Возвращаю к настройкам модели."
-    assert message.answers[1].startswith("Настройки модели:")
+    assert message.answers[0] == t("generation.back_to_model_settings", "ru")
+    assert message.answers[1].startswith(t("generation.settings_header", "ru", model="Alibaba Wan 2.6 Text To Image").split("<b>")[0])
     assert any(
         isinstance(record.msg, dict)
         and record.msg.get("action") == "back_to_settings"
@@ -1708,7 +1721,7 @@ async def test_clear_uploaded_images_clears_urls_and_deletes_temp_paths(tmp_path
     assert state.data["input_image_file_id"] is None
     assert not first_path.exists()
     assert not second_path.exists()
-    assert message.answers[-1] == "Изображения очищены. Отправьте изображения заново."
+    assert message.answers[-1] == t("generation.images_cleared", "ru")
 
 
 @pytest.mark.asyncio
@@ -1733,8 +1746,8 @@ async def test_back_to_settings_from_waiting_for_prompt_without_model_shows_sect
         "selected_provider": None,
     }
     assert message.answer_markups[0].keyboard[0][0].text == "🎨 Генерации"
-    assert message.answers[0] == "Возвращаю к выбору разделов генерации."
-    assert "Выберите тип генерации:" in message.answers[1]
+    assert message.answers[0] == t("generation.back_to_sections", "ru")
+    assert f"{t('generation.choose_type', 'ru')}:" in message.answers[1]
 
 
 @pytest.mark.asyncio
@@ -1987,7 +2000,7 @@ async def test_confirm_generation_allows_new_flow_while_background_task_runs(ses
             await generations.show_generation_menu(message, state, session)
 
             assert state.state == GenerationStates.choosing_generation_type
-            assert "Выберите тип генерации:" in message.answers[-1]
+            assert f"{t('generation.choose_type', 'ru')}:" in message.answers[-1]
         finally:
             release_polling.set()
             await await_background_generation_tasks()
@@ -2192,7 +2205,7 @@ async def test_completed_generation_with_empty_outputs_sends_error_and_refunds(s
         assert await get_user_balance(session, 305) == 5
         assert await get_generation_status(session, generation.id) == GenerationRequestStatus.FAILED
 
-    assert bot.messages[-1] == "📦 Не удалось отправить результат\n\nМы вернули кредиты. Попробуйте запустить генерацию ещё раз."
+    assert bot.messages[-1] == t("error_ux.delivery_failed", "ru")
 
 
 @pytest.mark.asyncio
@@ -2245,7 +2258,7 @@ async def test_send_generation_outputs_exception_is_not_silent(session_factory, 
         assert await get_user_balance(session, 306) == 5
         assert await get_generation_status(session, generation.id) == GenerationRequestStatus.FAILED
 
-    assert bot.messages[-1] == "📦 Не удалось отправить результат\n\nМы вернули кредиты. Попробуйте запустить генерацию ещё раз."
+    assert bot.messages[-1] == t("error_ux.delivery_failed", "ru")
     assert any(
         isinstance(record.msg, dict)
         and record.msg.get("action") == "background_generation_task_failed"
@@ -2468,9 +2481,9 @@ def test_build_confirmation_text_shows_num_generations_and_total_cost() -> None:
         balance=100,
     )
 
-    assert "📦 Generation count: <code>3</code>" in text
-    assert "💰 Cost: 51 credits" in text
-    assert "💳 Balance after launch: <code>49</code>" in text
+    assert t("generation.count_label", "en", count=3) in text
+    assert t("generation.cost_label", "en", cost=51) in text
+    assert t("generation.balance_after_label", "en", balance=49) in text
 
 
 def test_build_generation_summary_message_formats_visible_settings_and_escapes_html() -> None:
@@ -2525,16 +2538,16 @@ def test_build_generation_summary_message_formats_visible_settings_and_escapes_h
 
     text = generations.build_generation_summary_message(batch, "en")
 
-    assert "✅ Your generations are ready!" in text
-    assert "🤖 Model: <b>Kling &lt;Pro&gt;</b>" in text
-    assert "🎨 Type: <b>Image to Video</b>" in text
+    assert t("generation.summary.title", "en") in text
+    assert t("generation.summary.model", "en", model="Kling &lt;Pro&gt;") in text
+    assert t("generation.summary.type", "en", generation_type="Image to Video") in text
     assert "Render &lt;b&gt;cinematic&lt;/b&gt; shot" in text
-    assert "• Generations: <code>4</code>" in text
+    assert f"• {t('settings.title.num_generations', 'en')}: <code>4</code>" in text
     assert "• Resolution: <code>1080p</code>" in text
     assert "internal_token" not in text
     assert "raw-api-key" not in text
-    assert "📥 Results received: <b>4/4</b>" in text
-    assert "💰 Credits spent: <b>24</b>" in text
+    assert t("generation.summary.results", "en", completed=4, expected=4) in text
+    assert t("generation.summary.credits", "en", credits=24) in text
 
 
 def test_build_generation_summary_message_localizes_empty_prompt_and_partial_failure() -> None:
@@ -2551,13 +2564,13 @@ def test_build_generation_summary_message_localizes_empty_prompt_and_partial_fai
 
     text = generations.build_generation_summary_message(batch, "ru")
 
-    assert "✅ Ваши генерации готовы!" in text
-    assert "Без текстового описания" in text
-    assert "• Количество генераций: <code>10</code>" in text
-    assert "📥 Получено результатов: <b>7/10</b>" in text
-    assert "⚠️ 3 генерации завершились ошибкой." in text
-    assert "💸 Возврат кредитов выполнен автоматически." in text
-    assert "💰 Потрачено кредитов: <b>119</b>" in text
+    assert t("generation.summary.title", "ru") in text
+    assert t("generation.summary.no_prompt", "ru") in text
+    assert f"• {t('settings.title.num_generations', 'ru')}: <code>10</code>" in text
+    assert t("generation.summary.results", "ru", completed=7, expected=10) in text
+    assert t("generation.summary.partial_failed", "ru", count=3) in text
+    assert t("generation.summary.refund_done", "ru") in text
+    assert t("generation.summary.credits", "ru", credits=119) in text
 
 
 def test_build_generation_summary_message_truncates_long_prompt() -> None:
@@ -2700,7 +2713,7 @@ async def test_num_generations_ten_starts_ten_submit_requests(session_factory, m
         assert len(batch_calls["submit_calls"]) == 10
         assert batch_calls["generation_costs"] == {generation_id: 17 for generation_id, _ in batch_calls["generation_predictions"]}
         assert await get_user_balance(session, 452) == 30
-        assert callback.message.answers[-1] == "Генерация запущена в фоне. Результат придёт сюда автоматически."
+        assert callback.message.answers[-1] == t("generation.started", "ru")
 
 
 def test_parallel_generation_limit_artifacts_are_absent() -> None:
@@ -2770,9 +2783,9 @@ async def test_single_generation_sends_summary_once_after_output(session_factory
 
     assert len(delivery_calls) == 1
     assert len(bot.messages) == 1
-    assert "✅ Your generations are ready!" in bot.messages[0]
+    assert t("generation.summary.title", "en") in bot.messages[0]
     assert "Prompt &lt;safe&gt;" in bot.messages[0]
-    assert "📥 Results received: <b>1/1</b>" in bot.messages[0]
+    assert t("generation.summary.results", "en", completed=1, expected=1) in bot.messages[0]
     assert bot.message_parse_modes == ["HTML"]
     assert len(bot.message_markups[0].inline_keyboard) == 1
     assert bot.message_markups[0].inline_keyboard[0][0].callback_data == f"gen:repeat:{generation.id}"
@@ -2806,7 +2819,7 @@ async def test_summary_repeat_restores_exact_alibaba_model_and_ignores_current_f
         assert state_data["prompt"] == "A cinematic image prompt"
         assert state_data["user_settings"]["num_generations"] == "2"
         assert state.state == GenerationStates.waiting_for_confirmation
-        assert callback.message.answers[0] == f"Повтор генерации: {model.title}"
+        assert callback.message.answers[0] == t("generation.repeat_title", "ru", model=model.title)
         assert any("Alibaba Wan 2.7 Text To Image Pro" in answer for answer in callback.message.answers)
 
 
@@ -2831,8 +2844,8 @@ async def test_summary_repeat_text_only_opens_confirmation(session_factory) -> N
         await generations.repeat_generation_from_summary(callback, state, session)
 
         assert state.state == GenerationStates.waiting_for_confirmation
-        assert callback.message.answers[0] == f"Повтор генерации: {model.title}"
-        assert "Проверьте генерацию:" in callback.message.answers[-1]
+        assert callback.message.answers[0] == t("generation.repeat_title", "ru", model=model.title)
+        assert t("generation.review", "ru") in callback.message.answers[-1]
         assert "A repeatable text only prompt" in callback.message.answers[-1]
 
 
@@ -2860,11 +2873,11 @@ async def test_summary_repeat_english_user_does_not_mix_russian(session_factory)
         await generations.repeat_generation_from_summary(callback, state, session)
 
         combined_text = "\n".join(callback.message.answers)
-        assert callback.message.answers[0] == f"Repeat generation: {model.title}"
-        assert "Review generation:" in combined_text
+        assert callback.message.answers[0] == t("generation.repeat_title", "en", model=model.title)
+        assert t("generation.review", "en") in combined_text
         assert "Model:" in combined_text
-        assert "Повтор генерации" not in combined_text
-        assert "Проверьте генерацию" not in combined_text
+        assert t("generation.repeat_title", "ru", model=model.title) not in combined_text
+        assert t("generation.review", "ru") not in combined_text
 
 
 @pytest.mark.asyncio
@@ -2891,7 +2904,7 @@ async def test_summary_repeat_media_model_asks_for_media_again(session_factory) 
         assert state_data["model_key"] == "alibaba_wan_2_7_image_to_video"
         assert state_data["prompt"] == "Animate this image with soft camera motion"
         assert state.state in {GenerationStates.waiting_for_image, GenerationStates.waiting_for_images}
-        assert callback.message.answers[0] == f"Повтор генерации: {model.title}"
+        assert callback.message.answers[0] == t("generation.repeat_title", "ru", model=model.title)
         assert any("Отправьте изображ" in answer for answer in callback.message.answers)
 
 
@@ -2948,8 +2961,8 @@ async def test_ten_generation_batch_sends_one_summary_after_outputs(session_fact
 
     assert len(delivery_calls) == 10
     assert len(bot.messages) == 1
-    assert "📥 Results received: <b>10/10</b>" in bot.messages[0]
-    assert "💰 Credits spent: <b>170</b>" in bot.messages[0]
+    assert t("generation.summary.results", "en", completed=10, expected=10) in bot.messages[0]
+    assert t("generation.summary.credits", "en", credits=170) in bot.messages[0]
     assert bot.message_parse_modes == ["HTML"]
     assert temp_input_path.exists() is False
 
@@ -3019,11 +3032,11 @@ async def test_batch_failure_refunds_only_one_credit_and_cleans_up_after_all_tas
 
     assert len(delivery_calls) == 7
     assert temp_input_path.exists() is False
-    assert bot.messages.count("❌ Generation failed\n\nCredits for this attempt were returned. Please try again.") == 3
-    assert "📥 Results received: <b>7/10</b>" in bot.messages[-1]
-    assert "⚠️ 3 generations failed." in bot.messages[-1]
-    assert "💸 Credits were refunded automatically." in bot.messages[-1]
-    assert "💰 Credits spent: <b>119</b>" in bot.messages[-1]
+    assert bot.messages.count(t("error_ux.generation_failed", "en")) == 3
+    assert t("generation.summary.results", "en", completed=7, expected=10) in bot.messages[-1]
+    assert t("generation.summary.partial_failed", "en", count=3) in bot.messages[-1]
+    assert t("generation.summary.refund_done", "en") in bot.messages[-1]
+    assert t("generation.summary.credits", "en", credits=119) in bot.messages[-1]
 
 
 @pytest.mark.asyncio
@@ -3175,7 +3188,7 @@ async def test_send_generation_outputs_notifies_when_file_too_large(monkeypatch,
 
     assert delivered.delivered_successfully is False
     assert delivered.use_r2 is True
-    assert bot.messages[-1] == "Could not upload the file. Please try again later"
+    assert bot.messages[-1] == t("download.upload_failed", "en")
     assert bot.documents == []
 
 
@@ -3195,7 +3208,7 @@ async def test_send_generation_outputs_returns_use_r2_for_files_over_safe_limit(
     assert delivered.delivered_successfully is False
     assert delivered.use_r2 is True
     assert bot.documents == []
-    assert bot.messages[-1] == "Could not upload the file. Please try again later"
+    assert bot.messages[-1] == t("download.upload_failed", "en")
 
 
 @pytest.mark.asyncio
@@ -3242,12 +3255,8 @@ async def test_send_generation_outputs_uses_r2_fallback_when_configured(monkeypa
     assert delivered.delivered_successfully is True
     assert delivered.use_r2 is True
     assert bot.documents == []
-    assert bot.messages[-1] == (
-        "⚠️ File is too large for Telegram\n\n"
-        "Uploaded to secure Cloudflare R2 storage\n\n"
-        "🔗 Download file:\nhttps://example.com/d/abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMN\n\n"
-        "🔒 Safe link\n\n"
-        "If you are unsure, you can inspect the link with any AI, an online link analyzer, or open it in a browser."
+    assert bot.messages[-1] == generations.build_large_file_r2_message(
+        "https://example.com/d/abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMN"
     )
 
 
@@ -3418,12 +3427,8 @@ async def test_send_generation_outputs_uses_r2_after_telegram_delivery_failure(m
     assert delivered.delivered_successfully is True
     assert delivered.use_r2 is True
     assert bot.documents == []
-    assert bot.messages[-1] == (
-        "⚠️ File is too large for Telegram\n\n"
-        "Uploaded to secure Cloudflare R2 storage\n\n"
-        "🔗 Download file:\nhttps://example.com/d/retry-fallback-token\n\n"
-        "🔒 Safe link\n\n"
-        "If you are unsure, you can inspect the link with any AI, an online link analyzer, or open it in a browser."
+    assert bot.messages[-1] == generations.build_large_file_r2_message(
+        "https://example.com/d/retry-fallback-token"
     )
 
 
@@ -3451,7 +3456,7 @@ async def test_send_generation_outputs_reports_error_when_r2_upload_fails(monkey
     assert delivered.delivered_successfully is False
     assert delivered.use_r2 is True
     assert bot.documents == []
-    assert bot.messages[-1] == "Could not upload the file. Please try again later"
+    assert bot.messages[-1] == t("download.upload_failed", "en")
 
 
 @pytest.mark.asyncio
@@ -3491,7 +3496,7 @@ async def test_send_generation_outputs_reports_error_when_r2_returns_empty_url(m
     assert delivered.delivered_successfully is False
     assert delivered.use_r2 is True
     assert bot.documents == []
-    assert bot.messages[-1] == "Could not upload the file. Please try again later"
+    assert bot.messages[-1] == t("download.upload_failed", "en")
 
 
 @pytest.mark.asyncio
@@ -3518,7 +3523,7 @@ async def test_send_generation_outputs_reports_plain_message_when_telegram_deliv
     assert delivered.delivered_successfully is False
     assert delivered.use_r2 is False
     assert bot.documents == []
-    assert bot.messages[-1] == "The file is ready, but Telegram could not deliver it"
+    assert bot.messages[-1] == t("download.telegram_failed", "en")
 
 
 @pytest.mark.asyncio
@@ -3917,4 +3922,4 @@ async def test_poll_generation_result_marks_delivery_failed_when_document_delive
         assert await get_generation_status(session, generation.id) == GenerationRequestStatus.DELIVERY_FAILED
         assert await get_user_balance(session, 501) == 5
 
-    assert bot.messages[-1] == "📦 Не удалось отправить результат\n\nМы вернули кредиты. Попробуйте запустить генерацию ещё раз."
+    assert bot.messages[-1] == t("error_ux.delivery_failed", "ru")

@@ -18,6 +18,7 @@ from app.config import settings
 from app.db.base import Base
 from app.db.models import PaymentOrderStatus, User
 from app.db.repositories import PaymentRepository
+from app.i18n import t
 from app.services.nowpayments_webhook import process_nowpayments_ipn
 
 
@@ -153,7 +154,7 @@ async def test_nowpayments_finished_webhook_credits_user_once(session_factory, m
     assert order.status == PaymentOrderStatus.PAID.value
     assert order.metadata_["nowpayments_status"] == "finished"
     assert order.metadata_["last_ipn"]["payment_status"] == "finished"
-    assert bot.messages == [(502, "✅ Crypto payment received. 100 credits added.")]
+    assert bot.messages == [(502, t("payments.crypto_received", "en", credits=100))]
     assert len(bot.messages) == 1
     actions = [record.msg.get("action") for record in caplog.records if isinstance(record.msg, dict)]
     assert "nowpayments_ipn_received" in actions

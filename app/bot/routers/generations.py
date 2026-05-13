@@ -459,8 +459,14 @@ def describe_model_requirements(model: GenerationModel, lang: str = DEFAULT_LANG
     requirement_keys: list[str] = []
     generation_type = model.generation_type
 
+    if generation_type == "lipsync":
+        requirement_keys.extend(["requirements.video_with_face", "requirements.audio"])
+        lines = [f"<b>{escape(t('requirements.title', lang))}</b>", ""]
+        lines.extend(f"• {escape(t(requirement_key, lang))}" for requirement_key in dict.fromkeys(requirement_keys))
+        return "\n".join(lines)
+
     if _requirement_is_required(model, "video") or model.requires_video:
-        requirement_keys.append("requirements.video_with_face" if generation_type == "lipsync" else "requirements.video")
+        requirement_keys.append("requirements.video")
     if _requirement_is_required(model, "images") or model.requires_image:
         if generation_type == "reference_to_video":
             requirement_keys.append("requirements.reference_images")
@@ -477,8 +483,8 @@ def describe_model_requirements(model: GenerationModel, lang: str = DEFAULT_LANG
 
     if not requirement_keys:
         return ""
-    lines = [f"<b>{escape(t('requirements.title', lang))}</b>"]
-    lines.extend(f"- {escape(t(requirement_key, lang))}" for requirement_key in dict.fromkeys(requirement_keys))
+    lines = [f"<b>{escape(t('requirements.title', lang))}</b>", ""]
+    lines.extend(f"• {escape(t(requirement_key, lang))}" for requirement_key in dict.fromkeys(requirement_keys))
     return "\n".join(lines)
 
 

@@ -49,7 +49,7 @@ BUTTON_ICONS = {
     "common.download_file": "🔗",
     "common.change_settings": "⚙️",
     "profile.top_up": "💳",
-    "profile.toggle_delivery": "📎",
+    "profile.toggle_delivery": "⚙️",
     "payments.back_to_profile": "⬅️",
     "payments.pay_here": "⭐",
     "generation.text_to_image": "🖼",
@@ -634,7 +634,7 @@ def build_crypto_top_up_keyboard(lang: str = DEFAULT_LANGUAGE) -> InlineKeyboard
     builder = InlineKeyboardBuilder()
     for amount in ALLOWED_STARS_AMOUNTS:
         builder.button(
-            text=f"{amount} credits",
+            text=t("payments.credit_amount", lang, amount=amount),
             callback_data=validate_callback_length(f"pay:crypto:{amount}"),
         )
     builder.adjust(2)

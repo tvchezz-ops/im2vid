@@ -17,6 +17,7 @@ from app.bot.routers import profile
 from app.bot.keyboards import get_button_text
 from app.bot.states import GenerationStates
 from app.db.base import Base
+from app.i18n import t
 
 
 class FakeMessage:
@@ -90,7 +91,7 @@ async def session_factory(tmp_path):
 
 
 @pytest.mark.asyncio
-async def test_show_profile_displays_delivery_mode_and_toggle_button(session_factory) -> None:
+async def test_show_profile_displays_clean_summary_and_settings_button(session_factory) -> None:
     async with session_factory() as session:
         state = FakeState()
         message = FakeMessage(user_id=601)
@@ -105,11 +106,13 @@ async def test_show_profile_displays_delivery_mode_and_toggle_button(session_fac
         assert "Дата регистрации" not in message.answers[-1]
         assert "Последняя активность" not in message.answers[-1]
         assert "История" not in message.answers[-1]
-        assert "📦 Способ отправки: Обычный формат" in message.answers[-1]
-        assert "💰 Потрачено кредитов: 0" in message.answers[-1]
+        assert f"💳 {t('profile.balance', 'ru')}: 5" in message.answers[-1]
+        assert f"🎨 {t('profile.total_generations', 'ru')}: 0" in message.answers[-1]
+        assert f"🏆 {t('profile.credits_spent', 'ru')}: 0" in message.answers[-1]
+        assert t('profile.delivery_mode', 'ru') not in message.answers[-1]
         keyboard = message.answer_markups[-1]
-        assert keyboard.inline_keyboard[0][0].text == "💳 Пополнить баланс"
-        assert keyboard.inline_keyboard[1][0].text == "📎 Переключить способ отправки"
+        assert keyboard.inline_keyboard[0][0].text == f"💳 {t('profile.top_up', 'ru')}"
+        assert keyboard.inline_keyboard[1][0].text == f"⚙️ {t('profile.toggle_delivery', 'ru')}"
         assert len(keyboard.inline_keyboard) == 2
         assert all(row[0].text != "📜 История генераций" for row in keyboard.inline_keyboard)
         assert all("Назад" not in row[0].text for row in keyboard.inline_keyboard)
@@ -123,10 +126,11 @@ async def test_toggle_delivery_mode_updates_profile_message(session_factory) -> 
 
         await profile.toggle_delivery_mode(callback, session)
 
-        assert callback.answers[-1] == "Настройка обновлена"
-        assert "📦 Способ отправки: Файлом без сжатия" in message.edits[-1]
+        assert callback.answers[-1] == t("profile.setting_updated", "ru")
+        assert f"🏆 {t('profile.credits_spent', 'ru')}: 0" in message.edits[-1]
+        assert t('profile.delivery_mode', 'ru') not in message.edits[-1]
         keyboard = message.edit_markups[-1]
-        assert keyboard.inline_keyboard[1][0].text == "📎 Переключить способ отправки"
+        assert keyboard.inline_keyboard[1][0].text == f"⚙️ {t('profile.toggle_delivery', 'ru')}"
         assert len(keyboard.inline_keyboard) == 2
         assert all("Назад" not in row[0].text for row in keyboard.inline_keyboard)
 
