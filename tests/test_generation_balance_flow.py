@@ -549,7 +549,7 @@ async def test_open_setting_selector_and_choose_setting_value_for_model_with_set
     await generations.open_setting_selector(open_callback, state)
 
     assert state.data["current_setting_key"] == "aspect_ratio"
-    assert "<b>Формат</b>" in message.edits[-1]
+    assert t("settings.parameter", "ru", parameter="Формат") in message.edits[-1]
     assert t("generation.setting_choose_value", "ru") in message.edits[-1]
 
     choose_callback = FakeCallback(user_id=450, message=message, data="gen:set:aspect_ratio:8")
@@ -575,7 +575,7 @@ async def test_open_setting_selector_for_text_setting_switches_to_text_input() -
 
         assert state.state == GenerationStates.waiting_for_setting_text
         assert state.data["current_setting_key"] == "note"
-        assert t("generation.setting_parameter", "ru", parameter="Заметка") in message.edits[-1]
+        assert t("settings.parameter", "ru", parameter="Заметка") in message.edits[-1]
     finally:
         remove_text_setting_model()
 
@@ -2486,6 +2486,24 @@ def test_build_confirmation_text_shows_num_generations_and_total_cost() -> None:
     assert t("generation.balance_after_label", "en", balance=49) in text
 
 
+def test_generation_started_message_includes_model_and_quantity() -> None:
+    text = t("generation.started_count", "en", model="Kling Pro", count=2)
+
+    assert "Generation started" in text
+    assert "Model: Kling Pro" in text
+    assert "Quantity: 2" in text
+    assert "Results will appear here automatically." in text
+
+
+def test_generation_started_message_is_localized_ru() -> None:
+    text = t("generation.started_count", "ru", model="Kling Pro", count=2)
+
+    assert "Генерация запущена" in text
+    assert "Модель: Kling Pro" in text
+    assert "Количество: 2" in text
+    assert "Results will appear" not in text
+
+
 def test_build_generation_summary_message_formats_visible_settings_and_escapes_html() -> None:
     model = GenerationModel(
         key="summary_test_model",
@@ -2541,6 +2559,8 @@ def test_build_generation_summary_message_formats_visible_settings_and_escapes_h
     assert t("generation.summary.title", "en") in text
     assert t("generation.summary.model", "en", model="Kling &lt;Pro&gt;") in text
     assert t("generation.summary.type", "en", generation_type="Image to Video") in text
+    assert "Prompt:" in text
+    assert "Settings:" in text
     assert "Render &lt;b&gt;cinematic&lt;/b&gt; shot" in text
     assert f"• {t('settings.title.num_generations', 'en')}: <code>4</code>" in text
     assert "• Resolution: <code>1080p</code>" in text
@@ -2548,6 +2568,40 @@ def test_build_generation_summary_message_formats_visible_settings_and_escapes_h
     assert "raw-api-key" not in text
     assert t("generation.summary.results", "en", completed=4, expected=4) in text
     assert t("generation.summary.credits", "en", credits=24) in text
+
+
+def test_setting_input_screen_explains_current_value_and_clear_hint() -> None:
+    model = GenerationModel(
+        key="setting_input_test_model",
+        title="Settings Test",
+        provider="wavespeed",
+        generation_type="text_to_image",
+        endpoint="/api/v3/test/settings",
+        docs_url="https://example.com/docs",
+        description="Settings test model",
+        max_images=0,
+        requires_prompt=True,
+        requires_image=False,
+        requires_video=False,
+        requires_audio=False,
+        outputs="image",
+        user_settings={
+            "negative_prompt": GenerationSetting(
+                key="negative_prompt",
+                title="Negative prompt",
+                type="text",
+                default="",
+                options=(),
+            ),
+        },
+    )
+    text = generations.build_setting_value_text(model, "negative_prompt", "", "en")
+
+    assert "⚙️ Setting:" in text
+    assert "Current:" in text
+    assert "Send a new value in the next message." in text
+    assert "Send <code>-</code> to clear it." in text
+    assert "Choose a value" not in text
 
 
 def test_build_generation_summary_message_localizes_empty_prompt_and_partial_failure() -> None:

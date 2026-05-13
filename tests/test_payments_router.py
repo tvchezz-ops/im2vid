@@ -456,5 +456,5 @@ async def test_stars_amount_callback_rejects_invalid_amount(session_factory) -> 
 
         await payments.choose_stars_amount(callback, session)
 
-        assert callback.answers[-1] == "⚙️ Проверьте настройки\n\nИзмените их и попробуйте снова."
+        assert callback.answers[-1] == t("error_ux.invalid_settings", "ru")
         assert callback.answer_alerts[-1] is True

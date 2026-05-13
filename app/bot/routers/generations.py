@@ -547,7 +547,6 @@ def build_setting_value_text(model: GenerationModel, setting_key: str, current_v
     if setting.type in {"text", "number"}:
         prompt_key = "settings.enter_number_value" if setting.type == "number" else "settings.enter_text_value"
         return (
-            f"{t('settings.model_settings', lang, model=escape(model.title))}\n\n"
             f"{t('settings.parameter', lang, parameter=escape(setting_title))}\n"
             f"{t('settings.current_value', lang, value=escape(current_value))}\n\n"
             f"{t(prompt_key, lang)}\n"
@@ -4626,10 +4625,7 @@ async def confirm_generation(callback: CallbackQuery, state: FSMContext, session
         await state.clear()
 
         await callback.message.edit_text(
-            (
-                f"{t('generation.started_count', lang, count=num_generations)}\n\n"
-                f"{t('generation.model_label', lang, model=escape(model_title))}"
-            ),
+            t("generation.started_count", lang, model=escape(model_title), count=num_generations),
             parse_mode="HTML",
         )
         await callback.message.answer(

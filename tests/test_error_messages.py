@@ -92,3 +92,42 @@ def test_ru_and_en_error_messages_do_not_mix_languages() -> None:
 def test_every_error_ux_key_exists_for_all_supported_languages() -> None:
     for language in SUPPORTED_LANGUAGES:
         assert ERROR_UX_KEYS <= set(TRANSLATIONS[language])
+
+
+def test_error_ux_messages_include_explanation_and_next_step() -> None:
+    error_codes = ("E001", "E002", "E003", "E004", "E005", "E006", "E007", "E008", "E009", "E010", "E011", "E012")
+
+    for language in SUPPORTED_LANGUAGES:
+        for error_code in error_codes:
+            message = build_user_error_message(error_code, language)
+            paragraphs = [part for part in message.split("\n\n") if part.strip()]
+
+            assert len(paragraphs) >= 2
+            assert "\n" in paragraphs[-1]
+
+
+def test_refund_errors_explain_credits_are_returned() -> None:
+    assert "Credits for this attempt have already been returned." in build_user_error_message("E007", "en")
+    assert "Credits for this attempt have already been returned." in build_user_error_message("E008", "en")
+    assert "Credits for this attempt have already been returned." in build_user_error_message("E009", "en")
+    assert "Кредиты за эту попытку уже возвращены." in build_user_error_message("E007", "ru")
+    assert "Кредиты за эту попытку уже возвращены." in build_user_error_message("E008", "ru")
+    assert "Кредиты за эту попытку уже возвращены." in build_user_error_message("E009", "ru")
+
+
+def test_delivery_error_explains_telegram_delivery_issue() -> None:
+    en_message = build_user_error_message("E009", "en")
+    ru_message = build_user_error_message("E009", "ru")
+
+    assert "Telegram could not deliver it" in en_message
+    assert "Telegram не смог его доставить" in ru_message
+
+
+def test_ru_and_en_error_messages_keep_language_boundaries() -> None:
+    ru_message = build_user_error_message("E007", "ru")
+    en_message = build_user_error_message("E007", "en")
+
+    assert "Generation failed" not in ru_message
+    assert "Try changing the prompt" not in ru_message
+    assert "Генерация не получилась" not in en_message
+    assert "Кредиты за эту попытку" not in en_message
