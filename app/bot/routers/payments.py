@@ -10,6 +10,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from urllib.parse import quote
 
+from app.bot.error_messages import build_user_error_message
 from app.bot.keyboards import (
     build_crypto_payment_keyboard,
     build_crypto_top_up_keyboard,
@@ -136,7 +137,7 @@ async def show_crypto_packages(callback: CallbackQuery, state: FSMContext | None
     lang = await get_event_lang(callback, session)
     if not is_nowpayments_configured():
         logger.info({"action": "crypto_not_configured", "user_id": callback.from_user.id})
-        await callback.answer(t("payments.crypto_not_configured", lang), show_alert=True)
+        await callback.answer(build_user_error_message("payments.crypto_not_configured", lang), show_alert=True)
         return
     await safe_edit_message(
         callback.message,
@@ -196,7 +197,7 @@ async def choose_stars_amount(callback: CallbackQuery, session: AsyncSession, st
     amount = _parse_stars_amount(callback.data)
     logger.info({"action": "stars_amount_selected", "user_id": callback.from_user.id, "amount": amount})
     if amount not in ALLOWED_STARS_AMOUNTS:
-        await callback.answer(t("payments.invalid_amount", lang), show_alert=True)
+        await callback.answer(build_user_error_message("payments.invalid_amount", lang), show_alert=True)
         return
 
     try:
@@ -209,7 +210,7 @@ async def choose_stars_amount(callback: CallbackQuery, session: AsyncSession, st
                     "amount": amount,
                 }
             )
-            await callback.answer(t("payments.stars_wallet_not_configured", lang), show_alert=True)
+            await callback.answer(build_user_error_message("payments.stars_wallet_not_configured", lang), show_alert=True)
             return
         order = await PaymentService(session).create_stars_order(callback.from_user.id, amount)
         wallet_payment_url = build_wallet_payment_url_for_payload(wallet_bot_username, order.payload)
@@ -237,7 +238,7 @@ async def choose_stars_amount(callback: CallbackQuery, session: AsyncSession, st
                 "error": exc.__class__.__name__,
             }
         )
-        await callback.answer(t("payments.invoice_error", lang), show_alert=True)
+        await callback.answer(build_user_error_message("payments.invoice_error", lang), show_alert=True)
 
 
 @router.callback_query(lambda cb: cb.data.startswith("pay:crypto:"))
@@ -246,11 +247,11 @@ async def choose_crypto_amount(callback: CallbackQuery, session: AsyncSession, s
     lang = await get_event_lang(callback, session)
     amount = _parse_crypto_amount(callback.data)
     if amount not in ALLOWED_STARS_AMOUNTS:
-        await callback.answer(t("payments.invalid_amount", lang), show_alert=True)
+        await callback.answer(build_user_error_message("payments.invalid_amount", lang), show_alert=True)
         return
     if not is_nowpayments_configured():
         logger.info({"action": "crypto_not_configured", "user_id": callback.from_user.id})
-        await callback.answer(t("payments.crypto_not_configured", lang), show_alert=True)
+        await callback.answer(build_user_error_message("payments.crypto_not_configured", lang), show_alert=True)
         return
 
     try:
@@ -277,4 +278,4 @@ async def choose_crypto_amount(callback: CallbackQuery, session: AsyncSession, s
                 "error": exc.__class__.__name__,
             }
         )
-        await callback.answer(t("payments.invoice_error", lang), show_alert=True)
+        await callback.answer(build_user_error_message("payments.invoice_error", lang), show_alert=True)

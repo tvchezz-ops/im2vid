@@ -7,6 +7,7 @@ from aiogram.fsm.context import FSMContext
 from aiogram.types import CallbackQuery, Message
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.bot.error_messages import build_error_keyboard, build_user_error_message
 from app.bot.keyboards import get_main_menu_keyboard, get_profile_keyboard, is_localized_button_text
 from app.bot.language import get_event_lang
 from app.bot.routers.generations import is_generation_flow_state, reset_generation_flow
@@ -50,7 +51,7 @@ async def show_profile(message: Message, state: FSMContext, session: AsyncSessio
         user = await user_repo.get_or_create_user_from_telegram(message.from_user)
         
         if not user:
-            await message.answer(f"❌ {t('profile.user_not_found', lang)}")
+            await message.answer(build_user_error_message("profile.user_not_found", lang), reply_markup=build_error_keyboard("profile.user_not_found", lang))
             return
         
         total_spent_credits = await user_repo.get_total_spent_credits(user.id)
@@ -66,7 +67,7 @@ async def show_profile(message: Message, state: FSMContext, session: AsyncSessio
     except Exception as e:
         logger.exception("Error in show_profile: %s", e)
         lang = await get_event_lang(message, session)
-        await message.answer(f"❌ {t('profile.load_error', lang)}")
+        await message.answer(build_user_error_message("profile.load_error", lang), reply_markup=build_error_keyboard("profile.load_error", lang))
 
 
 @router.callback_query(lambda cb: cb.data == "back_to_menu")
@@ -87,7 +88,7 @@ async def open_profile_callback(callback: CallbackQuery, session: AsyncSession):
     lang = await get_event_lang(callback, session)
     user = await user_repo.get_or_create_user_from_telegram(callback.from_user)
     if user is None:
-        await callback.answer(t("profile.user_not_found", lang), show_alert=True)
+        await callback.answer(build_user_error_message("profile.user_not_found", lang), show_alert=True)
         return
     total_spent_credits = await user_repo.get_total_spent_credits(user.id)
     await callback.message.edit_text(
@@ -107,7 +108,7 @@ async def toggle_delivery_mode(callback: CallbackQuery, session: AsyncSession):
     new_value = await user_repo.toggle_user_delivery_preference(callback.from_user.id)
     user = await user_repo.get_user_profile(callback.from_user.id)
     if user is None:
-        await callback.answer(t("profile.user_not_found", lang), show_alert=True)
+        await callback.answer(build_user_error_message("profile.user_not_found", lang), show_alert=True)
         return
     user.send_results_as_files = new_value
     total_spent_credits = await user_repo.get_total_spent_credits(callback.from_user.id)

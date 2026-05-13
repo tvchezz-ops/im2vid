@@ -6,6 +6,7 @@ from typing import Any, Callable, Iterable, Sequence
 from aiogram.types import InlineKeyboardButton, InlineKeyboardMarkup, KeyboardButton, ReplyKeyboardMarkup
 from aiogram.utils.keyboard import InlineKeyboardBuilder
 
+from app.bot.error_messages import build_error_keyboard
 from app.i18n import DEFAULT_LANGUAGE, SUPPORTED_LANGUAGES, get_user_language, t
 from app.services.payments import ALLOWED_STARS_AMOUNTS
 from app.services.generation_service import (
@@ -490,12 +491,15 @@ def build_generation_confirm_keyboard(lang: str = DEFAULT_LANGUAGE) -> InlineKey
 
 def build_insufficient_balance_keyboard(lang: str = DEFAULT_LANGUAGE) -> InlineKeyboardMarkup:
     """Inline-кнопки для сценария нехватки кредитов."""
-    return InlineKeyboardMarkup(
-        inline_keyboard=[
-            [InlineKeyboardButton(text=get_button_text("profile.top_up", lang), callback_data="profile:topup")],
-            [InlineKeyboardButton(text=get_button_text("main.profile", lang), callback_data="profile:open")],
-        ]
-    )
+    keyboard = build_error_keyboard("E006", lang)
+    if keyboard is None:
+        return InlineKeyboardMarkup(
+            inline_keyboard=[
+                [InlineKeyboardButton(text=get_button_text("profile.top_up", lang), callback_data="profile:topup")],
+                [InlineKeyboardButton(text=get_button_text("main.profile", lang), callback_data="profile:open")],
+            ]
+        )
+    return keyboard
 
 
 def build_back_to_settings_keyboard(lang: str = DEFAULT_LANGUAGE) -> ReplyKeyboardMarkup:

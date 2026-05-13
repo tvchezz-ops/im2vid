@@ -253,7 +253,7 @@ async def test_crypto_button_shows_coming_soon_when_nowpayments_unconfigured(mon
 
     await payments.show_crypto_packages(callback)
 
-    assert callback.answers[-1] == "₿ Crypto payments are not configured yet."
+    assert callback.answers[-1] == "💳 Оплата временно недоступна\n\nПопробуйте позже или выберите другой способ."
     assert callback.answer_alerts[-1] is True
 
 
@@ -266,7 +266,7 @@ async def test_crypto_button_does_not_crash_when_api_key_empty(monkeypatch) -> N
 
     await payments.show_crypto_packages(callback)
 
-    assert callback.answers[-1] == "₿ Crypto payments are not configured yet."
+    assert callback.answers[-1] == "💳 Оплата временно недоступна\n\nПопробуйте позже или выберите другой способ."
     assert callback.answer_alerts[-1] is True
 
 
@@ -429,7 +429,7 @@ async def test_stars_amount_requires_wallet_bot_username(session_factory, monkey
         assert result.scalars().all() == []
         assert message.invoices == []
         assert message.edits == []
-        assert callback.answers[-1] == "Оплата через Telegram Stars временно недоступна."
+        assert callback.answers[-1] == "💳 Оплата временно недоступна\n\nПопробуйте позже или выберите другой способ."
         assert callback.answer_alerts[-1] is True
         assert any(
             isinstance(record.msg, dict)
@@ -461,5 +461,5 @@ async def test_stars_amount_callback_rejects_invalid_amount(session_factory) -> 
 
         await payments.choose_stars_amount(callback, session)
 
-        assert callback.answers[-1] == "Недоступное количество Telegram Stars."
+        assert callback.answers[-1] == "⚙️ Некорректные настройки\n\nИзмените параметры модели и попробуйте снова."
         assert callback.answer_alerts[-1] is True

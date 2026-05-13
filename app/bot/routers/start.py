@@ -10,6 +10,7 @@ from aiogram.fsm.context import FSMContext
 from aiogram.types import Message
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.bot.error_messages import build_error_keyboard, build_user_error_message, log_error_code
 from app.bot.keyboards import get_main_menu_keyboard, is_localized_button_text
 from app.bot.routers.generations import is_generation_flow_state, reset_generation_flow
 from app.bot.routers.profile import build_profile_text
@@ -173,8 +174,9 @@ async def start_payment_return_command(
             )
     except Exception as e:
         logger.exception("Error in payment return start command: %s", e)
+        log_error_code("E010", {"action": "payment_return_start_error", "error": e.__class__.__name__})
         lang = get_user_language(getattr(message.from_user, "language_code", None))
-        await message.answer(t("main.start_error", lang))
+        await message.answer(build_user_error_message("main.start_error", lang), reply_markup=build_error_keyboard("main.start_error", lang))
 
 
 @router.message(Command("start"))
@@ -204,8 +206,9 @@ async def start_command(
         await _send_start_welcome(message, user, lang)
     except Exception as e:
         logger.exception("Error in start command: %s", e)
+        log_error_code("E010", {"action": "start_command_error", "error": e.__class__.__name__})
         lang = get_user_language(getattr(message.from_user, "language_code", None))
-        await message.answer(t("main.start_error", lang))
+        await message.answer(build_user_error_message("main.start_error", lang), reply_markup=build_error_keyboard("main.start_error", lang))
 
 
 @router.message(Command("menu"))

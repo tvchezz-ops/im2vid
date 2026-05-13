@@ -18,6 +18,7 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_asyn
 
 from app.db.models import PaymentOrder, PaymentOrderStatus, PaymentProvider
 from app.db.repositories import PaymentRepository
+from app.i18n import DEFAULT_LANGUAGE, get_user_language, t
 
 
 logger = logging.getLogger(__name__)
@@ -66,6 +67,10 @@ def parse_amount_from_start_payload(payload: Optional[str]) -> Optional[int]:
         return int(match.group("amount"))
 
     return None
+
+
+def get_wallet_user_language(actor) -> str:
+    return get_user_language(getattr(actor, "language_code", None) or DEFAULT_LANGUAGE)
 
 
 def extract_start_payload(message: Message, command: CommandObject | None = None) -> str:
@@ -216,7 +221,7 @@ async def start_command(
                 "user_id": message.from_user.id if message.from_user else None,
             }
         )
-        await message.answer("Invalid payment link.")
+        await message.answer(t("wallet.error.invalid_payment_link", get_wallet_user_language(message.from_user)))
         return
 
     if order is None:
@@ -267,7 +272,10 @@ async def process_pre_checkout_query(
             "amount": pre_checkout_query.total_amount,
         }
     )
-    await pre_checkout_query.answer(ok=False, error_message="Payment order not found")
+    await pre_checkout_query.answer(
+        ok=False,
+        error_message=t("wallet.error.payment_order_not_found", get_wallet_user_language(pre_checkout_query.from_user)),
+    )
 
 
 @router.message(F.successful_payment)

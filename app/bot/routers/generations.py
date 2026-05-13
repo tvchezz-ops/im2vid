@@ -39,6 +39,7 @@ from app.bot.keyboards import (
     PAGINATION_NOOP_CALLBACK,
     resolve_model_key_from_token,
 )
+from app.bot.error_messages import build_error_keyboard, build_user_error_message, log_error_code
 from app.bot.language import get_event_lang
 from app.bot.states import GenerationStates
 from app.config import settings
@@ -183,11 +184,11 @@ class ErrorCode:
 
 
 def format_user_error(code: str, message: str, lang: str = DEFAULT_LANGUAGE) -> str:
-    return t("errors.formatted", lang, code=code, message=message)
+    return build_user_error_message(code, lang)
 
 
 def build_insufficient_balance_message(lang: str = DEFAULT_LANGUAGE) -> str:
-    return t("generation.insufficient_balance_start", lang)
+    return build_user_error_message(ErrorCode.E006_INSUFFICIENT_BALANCE, lang)
 
 
 @dataclass(frozen=True)
@@ -583,39 +584,36 @@ def build_confirmation_text(
 
 
 def build_partial_generation_failed_message(lang: str = DEFAULT_LANGUAGE) -> str:
-    return t("errors.formatted", lang, code=ErrorCode.E007_WAVESPEED_FAILED, message=t("errors.partial_generation_failed", lang))
+    return build_user_error_message(ErrorCode.E007_WAVESPEED_FAILED, lang)
 
 
 def build_generated_but_delivery_failed_message(lang: str = DEFAULT_LANGUAGE) -> str:
-    return t("errors.formatted", lang, code=ErrorCode.E010_INTERNAL_ERROR, message=t("errors.generated_delivery_failed_refund", lang))
+    return build_user_error_message(ErrorCode.E009_TELEGRAM_DELIVERY_FAILED, lang)
 
 
 def build_telegram_delivery_failed_refund_message(lang: str = DEFAULT_LANGUAGE) -> str:
-    return t("errors.formatted", lang, code=ErrorCode.E009_TELEGRAM_DELIVERY_FAILED, message=t("errors.telegram_delivery_failed_refund", lang))
+    return build_user_error_message(ErrorCode.E009_TELEGRAM_DELIVERY_FAILED, lang)
 
 
 def build_empty_outputs_failed_message(lang: str = DEFAULT_LANGUAGE) -> str:
-    return t("errors.formatted", lang, code=ErrorCode.E010_INTERNAL_ERROR, message=t("errors.empty_outputs_failed_refund", lang))
+    return build_user_error_message(ErrorCode.E009_TELEGRAM_DELIVERY_FAILED, lang)
 
 
 def get_user_friendly_error_message(error: Exception, result: Optional[WavespeedResult] = None, lang: str = DEFAULT_LANGUAGE) -> str:
     """Вернуть безопасное и понятное сообщение об ошибке для пользователя."""
     if isinstance(error, WavespeedTimeoutError):
-        return f"⏱ {t('errors.formatted', lang, code=ErrorCode.E008_WAVESPEED_TIMEOUT, message=t('errors.timeout_refund', lang)).removeprefix('❌ ')}"
+        return build_user_error_message(ErrorCode.E008_WAVESPEED_TIMEOUT, lang)
 
     if isinstance(error, WavespeedFailedError) or (result is not None and result.status == "failed"):
-        return (
-            f"{t('errors.formatted', lang, code=ErrorCode.E007_WAVESPEED_FAILED, message=t('errors.generation_failed_refund', lang))}\n\n"
-            f"{t('errors.rejected_by_provider', lang)}"
-        )
+        return build_user_error_message(ErrorCode.E007_WAVESPEED_FAILED, lang)
 
     if isinstance(error, TelegramBadRequest):
-        return t("errors.formatted", lang, code=ErrorCode.E009_TELEGRAM_DELIVERY_FAILED, message=t("errors.telegram_delivery_failed", lang))
+        return build_user_error_message(ErrorCode.E009_TELEGRAM_DELIVERY_FAILED, lang)
 
     if isinstance(error, (WavespeedNetworkError, aiohttp.ClientError, TimeoutError)):
-        return t("errors.formatted", lang, code=ErrorCode.E010_INTERNAL_ERROR, message=t("errors.result_network_failure", lang))
+        return build_user_error_message(ErrorCode.E009_TELEGRAM_DELIVERY_FAILED, lang)
 
-    return t("errors.formatted", lang, code=ErrorCode.E010_INTERNAL_ERROR, message=t("errors.internal_retry", lang))
+    return build_user_error_message(ErrorCode.E010_INTERNAL_ERROR, lang)
 
 
 class OutputDeliveryTooLargeError(Exception):
@@ -655,7 +653,7 @@ def get_media_input_prompt_text(*, is_lipsync: bool, lang: str = DEFAULT_LANGUAG
 
 def get_lipsync_incomplete_error_text(lang: str = DEFAULT_LANGUAGE) -> str:
     """Вернуть единое сообщение о неполных входных данных lipsync."""
-    return f"❌ {t('generation.lipsync_incomplete', lang)}"
+    return build_user_error_message("generation.lipsync_incomplete", lang)
 
 
 def is_audio_input_payload(value: Any) -> bool:
@@ -861,18 +859,15 @@ def get_waiting_state_for_input_type(required_input_type: str):
 
 
 def build_invalid_input_message(required_input_type: str, generation_type: str, *, received_type: Optional[str] = None, lang: str = DEFAULT_LANGUAGE) -> str:
-    flow_texts = get_flow_texts(generation_type, lang)
     if required_input_type == "text":
-        return t("errors.formatted", lang, code=ErrorCode.E001_INVALID_INPUT_TYPE, message=t("errors.prompt_text_only", lang))
+        return build_user_error_message("errors.prompt_text_only", lang)
     if required_input_type == "image":
-        if received_type == "video":
-            return t("errors.formatted", lang, code=ErrorCode.E001_INVALID_INPUT_TYPE, message=flow_texts.invalid_specific_media)
-        return t("errors.formatted", lang, code=ErrorCode.E001_INVALID_INPUT_TYPE, message=flow_texts.invalid_media)
+        return build_user_error_message(ErrorCode.E003_MISSING_IMAGE, lang)
     if required_input_type == "video":
-        if received_type == "image":
-            return t("errors.formatted", lang, code=ErrorCode.E001_INVALID_INPUT_TYPE, message=flow_texts.invalid_specific_media)
-        return t("errors.formatted", lang, code=ErrorCode.E001_INVALID_INPUT_TYPE, message=flow_texts.invalid_media)
-    return t("errors.formatted", lang, code=ErrorCode.E001_INVALID_INPUT_TYPE, message=t("errors.invalid_input_generic", lang))
+        return build_user_error_message(ErrorCode.E004_MISSING_VIDEO, lang)
+    if required_input_type == "audio":
+        return build_user_error_message("errors.waiting_audio", lang)
+    return build_user_error_message(ErrorCode.E001_INVALID_INPUT_TYPE, lang)
 
 
 def log_generation_error(
@@ -884,16 +879,16 @@ def log_generation_error(
     status: str = "failed",
     details: Optional[str] = None,
 ) -> None:
-    logger.error(
+    log_error_code(
+        error_code,
         {
             "action": "generation_error",
-            "error_code": error_code,
             "generation_id": generation_id,
             "user_id": user_id,
             "model_key": model_key,
             "status": status,
             "details": details,
-        }
+        },
     )
 
 
@@ -1640,23 +1635,23 @@ async def restore_generation_repeat_flow(callback: CallbackQuery, state: FSMCont
     lang = await get_event_lang(callback, session)
     generation = await GenerationRepository(session).get_by_id(generation_id)
     if generation is None:
-        await callback.answer(t("errors.model_unavailable", lang), show_alert=True)
+        await callback.answer(build_user_error_message("errors.model_unavailable", lang), show_alert=True)
         return False
     if generation.user_id != callback.from_user.id:
-        await callback.answer(t("errors.model_unavailable", lang), show_alert=True)
+        await callback.answer(build_user_error_message("errors.model_unavailable", lang), show_alert=True)
         return False
     try:
         model = get_generation_model(generation.model_key)
     except ValueError:
-        await callback.answer(t("errors.model_unavailable", lang), show_alert=True)
+        await callback.answer(build_user_error_message("errors.model_unavailable", lang), show_alert=True)
         return False
     if not model.is_enabled:
-        await callback.answer(t("errors.model_unavailable", lang), show_alert=True)
+        await callback.answer(build_user_error_message("errors.model_unavailable", lang), show_alert=True)
         return False
     try:
         user_settings = validate_model_settings(model.key, generation.settings or {})
     except ValueError:
-        await callback.answer(t("errors.invalid_model_settings", lang), show_alert=True)
+        await callback.answer(build_user_error_message("errors.invalid_model_settings", lang), show_alert=True)
         return False
 
     await reset_generation_state(state)
@@ -3305,7 +3300,20 @@ async def show_generation_menu(message: Message, state: FSMContext, session: Opt
         logger.debug(f"Generation menu shown for user {message.from_user.id}")
     except Exception as e:
         logger.exception("Error in show_generation_menu: %s", e)
-        await message.answer(t("generation.menu_open_error", await get_event_lang(message, session)))
+        lang = await get_event_lang(message, session)
+        await message.answer(build_user_error_message("main.menu_open_error", lang), reply_markup=build_error_keyboard("main.menu_open_error", lang))
+
+
+@router.callback_query(lambda cb: cb.data == "gen:retry")
+async def recover_to_generation_menu(callback: CallbackQuery, state: FSMContext, session: Optional[AsyncSession] = None):
+    """Open the generation menu from an Error UX recovery button."""
+    lang = await get_event_lang(callback, session)
+    await reset_generation_state(state)
+    await state.set_state(GenerationStates.choosing_generation_type)
+    await state.update_data(selected_generation_type=None, selected_provider=None, user_language=lang)
+    if callback.message is not None:
+        await render_models_screen(callback.message, lang)
+    await callback.answer()
 
 
 @router.callback_query(lambda cb: cb.data.startswith(MODEL_PREFIX))
@@ -3347,7 +3355,7 @@ async def repeat_generation_from_summary(callback: CallbackQuery, state: FSMCont
     try:
         generation_id = uuid.UUID(raw_generation_id)
     except (TypeError, ValueError):
-        await callback.answer(t("errors.model_unavailable", await get_event_lang(callback, session)), show_alert=True)
+        await callback.answer(build_user_error_message("errors.model_unavailable", await get_event_lang(callback, session)), show_alert=True)
         return
     restored = await restore_generation_repeat_flow(callback, state, session, generation_id)
     if restored:
@@ -3404,7 +3412,7 @@ async def show_generation_models_page(callback: CallbackQuery, state: FSMContext
     lang = await get_event_lang(callback, session)
     models = list_models_by_type(generation_type)
     if not models:
-        await callback.answer(t("generation.no_models_in_section", lang), show_alert=True)
+        await callback.answer(build_user_error_message("generation.no_models_in_section", lang), show_alert=True)
         return
 
     await state.set_state(GenerationStates.choosing_generation_type)
@@ -3467,7 +3475,7 @@ async def choose_provider(callback: CallbackQuery, state: FSMContext, session: O
     lang = await get_event_lang(callback, session)
     provider, page = parse_provider_page(callback.data)
     if provider not in list_providers():
-        await callback.answer(t("generation.provider_unavailable", lang), show_alert=True)
+        await callback.answer(build_user_error_message("generation.provider_unavailable", lang), show_alert=True)
         return
     models = list_models_by_provider(provider)
     if not models:
@@ -3576,7 +3584,7 @@ async def open_setting_selector(callback: CallbackQuery, state: FSMContext, sess
     lang = get_state_language(state_data, callback.from_user)
     setting_key = callback.data.removeprefix(SETTINGS_OPEN_PREFIX)
     if not setting_key:
-        await callback.answer(t("generation.setting_not_found", lang), show_alert=True)
+        await callback.answer(build_user_error_message("generation.setting_not_found", lang), show_alert=True)
         return
     model_key = state_data.get("model_key")
     if not model_key:
@@ -3585,7 +3593,7 @@ async def open_setting_selector(callback: CallbackQuery, state: FSMContext, sess
         return
     model = get_generation_model(model_key)
     if setting_key not in model.user_settings:
-        await callback.answer(t("generation.setting_not_found", lang), show_alert=True)
+        await callback.answer(build_user_error_message("generation.setting_not_found", lang), show_alert=True)
         return
     setting = model.user_settings[setting_key]
     await state.update_data(current_setting_key=setting_key)
@@ -3673,11 +3681,11 @@ async def choose_setting_value(callback: CallbackQuery, state: FSMContext, sessi
     lang = get_state_language(state_data, callback.from_user)
     setting_payload = callback.data.removeprefix(SETTINGS_VALUE_PREFIX)
     if ":" not in setting_payload:
-        await callback.answer(t("generation.invalid_value", lang), show_alert=True)
+        await callback.answer(build_user_error_message("generation.invalid_value", lang), show_alert=True)
         return
     setting_key, option_index_raw = setting_payload.rsplit(":", 1)
     if not option_index_raw.isdigit():
-        await callback.answer(t("generation.invalid_value", lang), show_alert=True)
+        await callback.answer(build_user_error_message("generation.invalid_value", lang), show_alert=True)
         return
     model_key = state_data.get("model_key")
     if not model_key:
@@ -3687,14 +3695,14 @@ async def choose_setting_value(callback: CallbackQuery, state: FSMContext, sessi
 
     model = get_generation_model(model_key)
     if setting_key not in model.user_settings:
-        await callback.answer(t("generation.setting_not_found", lang), show_alert=True)
+        await callback.answer(build_user_error_message("generation.setting_not_found", lang), show_alert=True)
         return
 
     user_settings = get_model_state_settings(state_data, model_key)
     option_index = int(option_index_raw)
     options = model.user_settings[setting_key].options
     if option_index < 0 or option_index >= len(options):
-        await callback.answer(t("generation.invalid_value", lang), show_alert=True)
+        await callback.answer(build_user_error_message("generation.invalid_value", lang), show_alert=True)
         return
     selected_value = str(options[option_index].value)
     user_settings[setting_key] = selected_value
@@ -4131,7 +4139,7 @@ async def process_generation_audio(message: Message, state: FSMContext, session:
         return
     if not is_supported_audio_input(message):
         await message.answer(
-            format_user_error(ErrorCode.E001_INVALID_INPUT_TYPE, t("generation.unsupported_audio_type", lang), lang),
+            build_user_error_message("generation.unsupported_audio_type", lang),
             reply_markup=build_back_to_settings_keyboard(lang),
         )
         return
@@ -4140,7 +4148,7 @@ async def process_generation_audio(message: Message, state: FSMContext, session:
     file_size = get_audio_input_file_size(message)
     if max_size_bytes is not None and file_size is not None and file_size > max_size_bytes:
         await message.answer(
-            format_user_error(ErrorCode.E001_INVALID_INPUT_TYPE, t("generation.audio_too_large", lang), lang),
+            build_user_error_message("generation.audio_too_large", lang),
             reply_markup=build_back_to_settings_keyboard(lang),
         )
         return
@@ -4149,7 +4157,7 @@ async def process_generation_audio(message: Message, state: FSMContext, session:
     audio_file_id = audio_payload.get("file_id")
     if not audio_file_id:
         await message.answer(
-            format_user_error(ErrorCode.E001_INVALID_INPUT_TYPE, t("generation.unsupported_audio_type", lang), lang),
+            build_user_error_message("generation.unsupported_audio_type", lang),
             reply_markup=build_back_to_settings_keyboard(lang),
         )
         return
@@ -4203,7 +4211,7 @@ async def invalid_generation_audio(message: Message, state: FSMContext):
     state_data = await state.get_data()
     lang = get_state_language(state_data, message.from_user)
     await message.answer(
-        format_user_error(ErrorCode.E001_INVALID_INPUT_TYPE, t("generation.waiting_for_audio_error", lang), lang),
+        build_user_error_message("generation.waiting_for_audio_error", lang),
         reply_markup=build_back_to_settings_keyboard(lang),
     )
 
@@ -4240,10 +4248,10 @@ async def process_prompt(
             prompt = get_input_audio_or_text_display(input_audio_or_text, lang)
             if not input_audio_or_text:
                 message_key = "generation.send_audio_for_lipsync" if model.requires_audio else "generation.lipsync_need_text"
-                await message.answer(format_user_error(ErrorCode.E001_INVALID_INPUT_TYPE, t(message_key, lang), lang))
+                await message.answer(t(message_key, lang) if message_key == "generation.send_audio_for_lipsync" else build_user_error_message(message_key, lang))
                 return
             if model.requires_audio and not is_audio_input_payload(input_audio_or_text):
-                await message.answer(format_user_error(ErrorCode.E001_INVALID_INPUT_TYPE, t("generation.send_audio_for_lipsync", lang), lang))
+                await message.answer(t("generation.send_audio_for_lipsync", lang))
                 return
             if model.requires_prompt and not is_text_input_payload(input_audio_or_text):
                 await message.answer(format_user_error(ErrorCode.E002_MISSING_PROMPT, get_flow_texts(model.generation_type, lang).missing_prompt, lang))
@@ -4727,7 +4735,7 @@ async def handle_unknown_generation_callback(callback: CallbackQuery, state: FSM
     lang = await get_event_lang(callback, session)
     await state.set_state(GenerationStates.choosing_generation_type)
     await state.update_data(selected_generation_type=None, selected_provider=None, user_language=lang)
-    await callback.answer(t("generation.legacy_button", lang), show_alert=True)
+    await callback.answer(build_user_error_message("generation.legacy_button", lang), show_alert=True)
     await callback.message.edit_text(
         build_generation_types_screen_text(lang),
         reply_markup=build_generation_sections_keyboard(lang),

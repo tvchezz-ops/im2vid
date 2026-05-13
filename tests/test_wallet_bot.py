@@ -35,8 +35,8 @@ from app.services.payments import PaymentService  # noqa: E402
 
 
 class FakeMessage:
-    def __init__(self, user_id: int = 1, text: str | None = None):
-        self.from_user = SimpleNamespace(id=user_id)
+    def __init__(self, user_id: int = 1, text: str | None = None, language_code: str | None = None):
+        self.from_user = SimpleNamespace(id=user_id, language_code=language_code)
         self.text = text
         self.answers: list[dict[str, object]] = []
         self.invoices: list[dict[str, object]] = []
@@ -50,8 +50,8 @@ class FakeMessage:
 
 
 class FakePreCheckoutQuery:
-    def __init__(self, user_id: int, invoice_payload: str, total_amount: int, currency: str = "XTR"):
-        self.from_user = SimpleNamespace(id=user_id)
+    def __init__(self, user_id: int, invoice_payload: str, total_amount: int, currency: str = "XTR", language_code: str | None = None):
+        self.from_user = SimpleNamespace(id=user_id, language_code=language_code)
         self.invoice_payload = invoice_payload
         self.total_amount = total_amount
         self.currency = currency
@@ -178,12 +178,12 @@ async def test_start_with_existing_main_bot_order_payload_sends_stars_invoice(se
 
 @pytest.mark.asyncio
 async def test_start_with_invalid_amount_sends_invalid_payment_link_and_creates_no_order(settings, session_factory) -> None:
-    message = FakeMessage(user_id=703, text="/start pay_250")
+    message = FakeMessage(user_id=703, text="/start pay_250", language_code="en")
 
     await start_command(message, SimpleNamespace(args=None), settings, session_factory)
 
     assert message.invoices == []
-    assert message.answers == [{"text": "Invalid payment link.", "reply_markup": None}]
+    assert message.answers == [{"text": "❌ Payment link is invalid\n\nReturn to the main bot and create a new invoice.", "reply_markup": None}]
     async with session_factory() as session:
         result = await session.execute(select(PaymentOrder).where(PaymentOrder.user_id == 703))
         assert result.scalars().all() == []
@@ -191,12 +191,12 @@ async def test_start_with_invalid_amount_sends_invalid_payment_link_and_creates_
 
 @pytest.mark.asyncio
 async def test_start_with_malformed_payload_sends_invalid_payment_link(settings) -> None:
-    message = FakeMessage(user_id=706, text="/start 100")
+    message = FakeMessage(user_id=706, text="/start 100", language_code="ru")
 
     await start_command(message, SimpleNamespace(args=None), settings, None)
 
     assert message.invoices == []
-    assert message.answers == [{"text": "Invalid payment link.", "reply_markup": None}]
+    assert message.answers == [{"text": "❌ Ссылка на оплату недействительна\n\nВернитесь в основной бот и создайте новый счёт.", "reply_markup": None}]
 
 
 def test_main_bot_wallet_deep_link_uses_start_parameter() -> None:
@@ -217,9 +217,9 @@ async def test_pre_checkout_query_ok_only_for_existing_unpaid_order_with_matchin
     invoice_payload = message.invoices[0]["payload"]
 
     accepted_query = FakePreCheckoutQuery(user_id=704, invoice_payload=invoice_payload, total_amount=300)
-    missing_query = FakePreCheckoutQuery(user_id=704, invoice_payload="missing", total_amount=300)
-    mismatch_query = FakePreCheckoutQuery(user_id=704, invoice_payload=invoice_payload, total_amount=500)
-    wrong_currency_query = FakePreCheckoutQuery(user_id=704, invoice_payload=invoice_payload, total_amount=300, currency="USD")
+    missing_query = FakePreCheckoutQuery(user_id=704, invoice_payload="missing", total_amount=300, language_code="en")
+    mismatch_query = FakePreCheckoutQuery(user_id=704, invoice_payload=invoice_payload, total_amount=500, language_code="ru")
+    wrong_currency_query = FakePreCheckoutQuery(user_id=704, invoice_payload=invoice_payload, total_amount=300, currency="USD", language_code="en")
 
     await process_pre_checkout_query(accepted_query, settings, session_factory)
     await process_pre_checkout_query(missing_query, settings, session_factory)
@@ -227,9 +227,9 @@ async def test_pre_checkout_query_ok_only_for_existing_unpaid_order_with_matchin
     await process_pre_checkout_query(wrong_currency_query, settings, session_factory)
 
     assert accepted_query.answers == [{"ok": True, "error_message": None}]
-    assert missing_query.answers == [{"ok": False, "error_message": "Payment order not found"}]
-    assert mismatch_query.answers == [{"ok": False, "error_message": "Payment order not found"}]
-    assert wrong_currency_query.answers == [{"ok": False, "error_message": "Payment order not found"}]
+    assert missing_query.answers == [{"ok": False, "error_message": "❌ Payment order not found\n\nReturn to the main bot and try again."}]
+    assert mismatch_query.answers == [{"ok": False, "error_message": "❌ Счёт не найден\n\nВернитесь в основной бот и попробуйте ещё раз."}]
+    assert wrong_currency_query.answers == [{"ok": False, "error_message": "❌ Payment order not found\n\nReturn to the main bot and try again."}]
 
 
 @pytest.mark.asyncio
@@ -274,4 +274,4 @@ async def test_successful_payment_marks_order_paid_and_credits_balance_once(sett
 
     await process_pre_checkout_query(paid_query, settings, session_factory)
 
-    assert paid_query.answers == [{"ok": False, "error_message": "Payment order not found"}]
+    assert paid_query.answers == [{"ok": False, "error_message": "❌ Payment order not found\n\nReturn to the main bot and try again."}]

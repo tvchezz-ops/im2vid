@@ -436,7 +436,7 @@ async def test_submit_failure_refunds_debited_credits(session_factory, monkeypat
 
         assert await get_user_balance(session, 423) == 100
         assert state.state is None
-        assert any("не удалось запустить генерацию" in answer for answer in callback.message.answers)
+        assert any("Что-то пошло не так" in answer for answer in callback.message.answers)
 
 
 @pytest.mark.asyncio
@@ -734,7 +734,7 @@ async def test_continue_after_multi_image_upload_requires_minimum_images() -> No
     await generations.continue_after_multi_image_upload(message, state)
 
     assert state.state is None
-    assert message.answers[-1] == "❌ Ошибка E003: нужно загрузить минимум 1 изображение."
+    assert message.answers[-1] == "🖼️ Нужно изображение\n\nОтправьте фото или файл изображения."
 
 
 @pytest.mark.asyncio
@@ -1067,7 +1067,7 @@ async def test_send_confirmation_screen_shows_lipsync_incomplete_error(session_f
             edit=False,
         )
 
-        assert message.answers[-1] == "❌ Для lipsync нужно изображение/видео и текст или аудио."
+        assert message.answers[-1] == "❌ Не тот формат файла\n\nОтправьте файл в нужном формате и попробуйте снова."
 
 
 @pytest.mark.asyncio
@@ -1151,7 +1151,7 @@ async def test_process_generation_image_rejects_video_for_image_flow() -> None:
 
     await generations.process_generation_image(message, state)
 
-    assert message.answers[-1] == "❌ Ошибка E001: Нужно отправить изображение, не видео."
+    assert message.answers[-1] == "🖼️ Нужно изображение\n\nОтправьте фото или файл изображения."
 
 @pytest.mark.asyncio
 async def test_process_generation_video_accepts_video_document(monkeypatch) -> None:
@@ -1322,7 +1322,7 @@ async def test_waiting_for_audio_rejects_text_with_audio_file_error(session_fact
 
         await generations.invalid_generation_audio(message, state)
 
-        assert message.answers[-1] == "❌ Ошибка E001: Я жду аудио. Отправьте голосовое сообщение, аудиофайл или документ с форматом audio/*."
+        assert message.answers[-1] == "🎵 Нужно аудио\n\nОтправьте голосовое сообщение или аудиофайл."
 
 
 @pytest.mark.asyncio
@@ -1414,16 +1414,8 @@ def test_describe_model_requirements_translated_ru_and_en_keys() -> None:
 
 
 def test_insufficient_balance_message_is_localized() -> None:
-    assert generations.build_insufficient_balance_message("ru") == (
-        "❌ Недостаточно кредитов для запуска генерации.\n\n"
-        "💳 Для продолжения пополните баланс:\n"
-        "Профиль → Пополнить баланс"
-    )
-    assert generations.build_insufficient_balance_message("en") == (
-        "❌ Not enough credits to start generation.\n\n"
-        "💳 To continue, top up your balance:\n"
-        "Profile → Add balance"
-    )
+    assert generations.build_insufficient_balance_message("ru") == "💳 Недостаточно кредитов\n\nПополните баланс в профиле, чтобы продолжить."
+    assert generations.build_insufficient_balance_message("en") == "💳 Not enough credits\n\nTop up your balance in Profile to continue."
 
 
 def test_insufficient_balance_keyboard_contains_topup_and_profile_buttons() -> None:
@@ -1460,7 +1452,7 @@ async def test_process_generation_video_rejects_photo_for_video_flow() -> None:
 
     await generations.process_generation_video(message, state)
 
-    assert message.answers[-1] == "❌ Ошибка E001: Нужно отправить видео, не изображение."
+    assert message.answers[-1] == "🎬 Нужно видео\n\nОтправьте видео или video-файл."
 
 @pytest.mark.asyncio
 async def test_process_prompt_rejects_file_when_text_prompt_expected(session_factory) -> None:
@@ -1479,7 +1471,7 @@ async def test_process_prompt_rejects_file_when_text_prompt_expected(session_fac
 
         await generations.process_prompt(message, state, session)
 
-        assert message.answers[-1] == "❌ Ошибка E001: на этом этапе нужен только текстовый prompt."
+        assert message.answers[-1] == "✍️ Нужно описание\n\nНапишите, что нужно создать или изменить."
 
 
 @pytest.mark.asyncio
@@ -2200,7 +2192,7 @@ async def test_completed_generation_with_empty_outputs_sends_error_and_refunds(s
         assert await get_user_balance(session, 305) == 5
         assert await get_generation_status(session, generation.id) == GenerationRequestStatus.FAILED
 
-    assert bot.messages[-1] == "❌ Ошибка E010: провайдер завершил генерацию, но не вернул файл результата. Кредит возвращён."
+    assert bot.messages[-1] == "📦 Не удалось отправить результат\n\nМы вернули кредиты. Попробуйте запустить генерацию ещё раз."
 
 
 @pytest.mark.asyncio
@@ -2253,7 +2245,7 @@ async def test_send_generation_outputs_exception_is_not_silent(session_factory, 
         assert await get_user_balance(session, 306) == 5
         assert await get_generation_status(session, generation.id) == GenerationRequestStatus.FAILED
 
-    assert bot.messages[-1] == "❌ Ошибка E010: результат был сгенерирован, но бот не смог его доставить. Кредит возвращён."
+    assert bot.messages[-1] == "📦 Не удалось отправить результат\n\nМы вернули кредиты. Попробуйте запустить генерацию ещё раз."
     assert any(
         isinstance(record.msg, dict)
         and record.msg.get("action") == "background_generation_task_failed"
@@ -3027,7 +3019,7 @@ async def test_batch_failure_refunds_only_one_credit_and_cleans_up_after_all_tas
 
     assert len(delivery_calls) == 7
     assert temp_input_path.exists() is False
-    assert bot.messages.count("❌ Error E007: one of the generations failed. Its generation cost was refunded.") == 3
+    assert bot.messages.count("❌ Generation failed\n\nCredits for this attempt were returned. Please try again.") == 3
     assert "📥 Results received: <b>7/10</b>" in bot.messages[-1]
     assert "⚠️ 3 generations failed." in bot.messages[-1]
     assert "💸 Credits were refunded automatically." in bot.messages[-1]
@@ -3925,4 +3917,4 @@ async def test_poll_generation_result_marks_delivery_failed_when_document_delive
         assert await get_generation_status(session, generation.id) == GenerationRequestStatus.DELIVERY_FAILED
         assert await get_user_balance(session, 501) == 5
 
-    assert bot.messages[-1] == "❌ Ошибка E009: файл готов, но Telegram не смог его доставить. Кредит возвращён."
+    assert bot.messages[-1] == "📦 Не удалось отправить результат\n\nМы вернули кредиты. Попробуйте запустить генерацию ещё раз."
