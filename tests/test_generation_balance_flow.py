@@ -1112,7 +1112,8 @@ async def test_continue_after_settings_shows_lipsync_media_prompt() -> None:
     await generations.continue_after_settings(callback, state)
 
     assert state.state == GenerationStates.waiting_for_image
-    assert message.edits[-1] == t("generation.flow.lipsync.initial", "ru")
+    assert message.answers[-1] == f"{t('generation.flow.lipsync.initial', 'ru')}\n\n{t('generation.changed_mind_back_to_settings', 'ru')}"
+    assert len(message.answers) == 1
 
 @pytest.mark.asyncio
 async def test_continue_after_settings_for_text_to_image_goes_to_prompt() -> None:
@@ -1123,7 +1124,30 @@ async def test_continue_after_settings_for_text_to_image_goes_to_prompt() -> Non
     await generations.continue_after_settings(callback, state)
 
     assert state.state == GenerationStates.waiting_for_prompt
-    assert message.edits[-1] == t("generation.flow.text_to_image.initial", "ru")
+    assert message.answers == [t("generation.flow.text_to_image.initial", "ru")]
+    assert message.answers[-1].count("К настройкам можно вернуться в любой момент.") == 1
+    assert message.answer_markups[-1].keyboard[0][0].text == f"⬅️ {t('generation.back_to_settings', 'ru')}"
+
+
+@pytest.mark.asyncio
+async def test_continue_after_settings_for_text_to_image_has_single_english_helper(session_factory) -> None:
+    async with session_factory() as session:
+        user = await create_user(session, user_id=4701, balance=100)
+        user.language_code = "en"
+        await session.commit()
+
+        state = FakeState({"model_key": "alibaba_wan_2_6_text_to_image", "model_generation_type": "text_to_image"})
+        message = FakeMessage(chat_id=4701)
+        callback = FakeCallback(user_id=4701, message=message, data="gen:continue")
+        callback.from_user.language_code = "ru"
+        message.from_user.language_code = "ru"
+
+        await generations.continue_after_settings(callback, state, session)
+
+        assert state.state == GenerationStates.waiting_for_prompt
+        assert message.answers == [t("generation.flow.text_to_image.initial", "en")]
+        assert message.answers[-1].count("You can return to settings at any time.") == 1
+        assert "К настройкам можно вернуться" not in message.answers[-1]
 
 @pytest.mark.asyncio
 async def test_continue_after_settings_for_video_edit_goes_to_video_step() -> None:
@@ -1134,11 +1158,13 @@ async def test_continue_after_settings_for_video_edit_goes_to_video_step() -> No
     await generations.continue_after_settings(callback, state)
 
     assert state.state == GenerationStates.waiting_for_video
-    assert message.edits[-1] == t(
+    expected_prompt = t(
         "generation.send_video_for_model",
         "ru",
         model="Google Veo3.1 Fast Video Extend",
     )
+    assert message.answers[-1] == f"{expected_prompt}\n\n{t('generation.changed_mind_back_to_settings', 'ru')}"
+    assert len(message.answers) == 1
 
 
 @pytest.mark.asyncio
@@ -1160,8 +1186,10 @@ async def test_generation_image_step_uses_db_language_without_mixing(session_fac
         model = generations.get_generation_model("alibaba_wan_2_7_image_to_video")
         assert t("generation.send_image_for_model", "ru", model=get_model_display_title(model, "ru")) in combined_text
         assert t("generation.changed_mind_back_to_settings", "ru") in combined_text
+        assert combined_text.count(t("generation.changed_mind_back_to_settings", "ru")) == 1
         assert "Send an image" not in combined_text
         assert "If you changed your mind" not in combined_text
+        assert len(message.answers) == 1
         assert message.answer_markups[-1].keyboard[0][0].text == f"⬅️ {t('generation.back_to_settings', 'ru')}"
 
 
@@ -1184,8 +1212,10 @@ async def test_generation_image_step_english_user_has_no_russian_phrases(session
         model = generations.get_generation_model("alibaba_wan_2_7_image_to_video")
         assert t("generation.send_image_for_model", "en", model=get_model_display_title(model, "en")) in combined_text
         assert t("generation.changed_mind_back_to_settings", "en") in combined_text
+        assert combined_text.count(t("generation.changed_mind_back_to_settings", "en")) == 1
         assert "Отправьте" not in combined_text
         assert "Если передумали" not in combined_text
+        assert len(message.answers) == 1
         assert message.answer_markups[-1].keyboard[0][0].text == f"⬅️ {t('generation.back_to_settings', 'en')}"
 
 
@@ -1198,13 +1228,15 @@ async def test_continue_after_settings_for_multi_image_model_goes_to_images_step
     await generations.continue_after_settings(callback, state)
 
     assert state.state == GenerationStates.waiting_for_images
-    assert message.edits[-1] == t(
+    expected_prompt = t(
         "generation.send_images_for_model",
         "ru",
         model="Google Nano Banana Pro Edit Ultra",
         min_count=1,
         max_count=10,
     )
+    assert message.answers[-1] == f"{expected_prompt}\n\n{t('generation.changed_mind_back_to_settings', 'ru')}"
+    assert len(message.answers) == 1
 
 
 @pytest.mark.asyncio
@@ -1661,6 +1693,7 @@ async def test_process_generation_video_accepts_video_document(monkeypatch) -> N
     assert state.state == GenerationStates.waiting_for_prompt
     assert state.data["input_media"] == {"type": "video", "count": 1}
     assert state.data["input_media_items"][0]["public_url"] == "https://example.com/video-doc-id.mp4"
+    assert message.answers[-1].count(t("generation.changed_mind_back_to_settings", "ru")) == 1
 
 
 @pytest.mark.asyncio
@@ -3511,6 +3544,7 @@ async def test_summary_repeat_media_model_asks_for_media_again(session_factory) 
         assert state.state in {GenerationStates.waiting_for_image, GenerationStates.waiting_for_images}
         assert callback.message.answers[0] == t("generation.repeat_title", "ru", model=get_model_display_title(model, "ru"))
         assert any("Отправьте изображ" in answer for answer in callback.message.answers)
+        assert "\n".join(callback.message.answers).count(t("generation.changed_mind_back_to_settings", "ru")) == 1
 
 
 @pytest.mark.asyncio

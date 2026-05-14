@@ -1481,15 +1481,22 @@ async def prompt_for_generation_input(message: Message, *, edit: bool, is_lipsyn
     """Показать шаг загрузки media-входа с reply keyboard возврата к настройкам."""
     lang = lang or get_actor_language(getattr(message, "from_user", None))
     prompt_text = get_media_input_prompt_text(is_lipsync=is_lipsync, lang=lang)
-    if edit:
-        await message.edit_text(prompt_text, reply_markup=None)
-    else:
-        await message.answer(prompt_text)
-
-    await message.answer(
-        t("generation.changed_mind_back_to_settings", lang),
+    await send_step_prompt_message(
+        message,
+        f"{prompt_text}\n\n{t('generation.changed_mind_back_to_settings', lang)}",
         reply_markup=build_back_to_settings_keyboard(lang),
+        edit=edit,
     )
+
+
+async def send_step_prompt_message(message: Message, text: str, *, reply_markup: Any, edit: bool) -> None:
+    """Send one prompt message with reply keyboard, clearing stale inline controls when needed."""
+    if edit:
+        try:
+            await message.edit_reply_markup(reply_markup=None)
+        except TelegramBadRequest:
+            pass
+    await message.answer(text, reply_markup=reply_markup)
 
 
 def build_generation_types_screen_text(lang: str = DEFAULT_LANGUAGE) -> str:
@@ -1633,14 +1640,11 @@ async def prompt_for_generation_image(message: Message, *, edit: bool, model: Ge
     """Показать шаг загрузки изображения с reply keyboard возврата к настройкам."""
     lang = lang or get_actor_language(getattr(message, "from_user", None))
     prompt_text = t("generation.send_image_for_model", lang, model=get_model_display_title(model, lang))
-    if edit:
-        await message.edit_text(prompt_text, reply_markup=None)
-    else:
-        await message.answer(prompt_text)
-
-    await message.answer(
-        t("generation.changed_mind_back_to_settings", lang),
+    await send_step_prompt_message(
+        message,
+        f"{prompt_text}\n\n{t('generation.changed_mind_back_to_settings', lang)}",
         reply_markup=build_back_to_settings_keyboard(lang),
+        edit=edit,
     )
 
 
@@ -1653,14 +1657,11 @@ async def prompt_for_generation_images(message: Message, *, edit: bool, model: G
         min_count=model.min_images,
         max_count=model.max_images,
     )
-    if edit:
-        await message.edit_text(prompt_text, reply_markup=None)
-    else:
-        await message.answer(prompt_text)
-
-    await message.answer(
-        t("generation.changed_mind_back_to_settings", lang),
+    await send_step_prompt_message(
+        message,
+        f"{prompt_text}\n\n{t('generation.changed_mind_back_to_settings', lang)}",
         reply_markup=build_media_upload_reply_keyboard(show_continue=True, lang=lang),
+        edit=edit,
     )
 
 
@@ -1668,14 +1669,11 @@ async def prompt_for_generation_video(message: Message, *, edit: bool, model: Ge
     """Показать шаг загрузки видео с reply keyboard возврата к настройкам."""
     lang = lang or get_actor_language(getattr(message, "from_user", None))
     prompt_text = t("generation.send_video_for_lipsync", lang) if model.generation_type == "lipsync" else t("generation.send_video_for_model", lang, model=get_model_display_title(model, lang))
-    if edit:
-        await message.edit_text(prompt_text, reply_markup=None)
-    else:
-        await message.answer(prompt_text)
-
-    await message.answer(
-        t("generation.changed_mind_back_to_settings", lang),
+    await send_step_prompt_message(
+        message,
+        f"{prompt_text}\n\n{t('generation.changed_mind_back_to_settings', lang)}",
         reply_markup=build_back_to_settings_keyboard(lang),
+        edit=edit,
     )
 
 
@@ -1683,14 +1681,11 @@ async def prompt_for_generation_audio(message: Message, *, edit: bool, model: Ge
     """Показать шаг загрузки аудио с reply keyboard возврата к настройкам."""
     lang = lang or get_actor_language(getattr(message, "from_user", None))
     prompt_text = t("generation.send_audio_for_lipsync", lang) if model.generation_type == "lipsync" else t("generation.send_audio_for_model", lang, model=get_model_display_title(model, lang))
-    if edit:
-        await message.edit_text(prompt_text, reply_markup=None)
-    else:
-        await message.answer(prompt_text)
-
-    await message.answer(
-        t("generation.send_audio_description", lang),
+    await send_step_prompt_message(
+        message,
+        f"{prompt_text}\n\n{t('generation.send_audio_description', lang)}",
         reply_markup=build_back_to_settings_keyboard(lang),
+        edit=edit,
     )
 
 
@@ -3975,10 +3970,11 @@ async def continue_after_settings(callback: CallbackQuery, state: FSMContext, se
             user_id=callback.from_user.id,
             incoming_text_type=get_incoming_text_type(is_callback=True),
         )
-        await callback.message.edit_text(get_prompt_for_generation_type(model.generation_type, lang), reply_markup=None)
-        await callback.message.answer(
-            t("generation.back_to_settings_hint", lang),
+        await send_step_prompt_message(
+            callback.message,
+            get_prompt_for_generation_type(model.generation_type, lang),
             reply_markup=build_back_to_settings_keyboard(lang),
+            edit=True,
         )
     elif required_input_type == "image":
         if model.supports_multiple_images and model.input_media_field == "images":
@@ -3991,14 +3987,15 @@ async def continue_after_settings(callback: CallbackQuery, state: FSMContext, se
                     count=len(existing_urls),
                     max_count=model.max_images,
                 )
-                await callback.message.edit_text(progress_text, reply_markup=None)
-                await callback.message.answer(
+                await send_step_prompt_message(
+                    callback.message,
                     progress_text,
                     reply_markup=build_media_upload_reply_keyboard(
                         show_continue=True,
                         lang=lang,
                         show_clear_images=True,
                     ),
+                    edit=True,
                 )
             else:
                 await prompt_for_generation_images(callback.message, edit=True, model=model, lang=lang)
