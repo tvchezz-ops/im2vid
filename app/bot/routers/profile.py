@@ -20,7 +20,7 @@ router = Router()
 
 
 def format_delivery_mode(send_results_as_files: bool, lang: str = "en") -> str:
-    return t("profile.delivery_file", lang) if send_results_as_files else t("profile.delivery_normal", lang)
+    return t("profile.delivery_status_file", lang) if send_results_as_files else t("profile.delivery_status_normal", lang)
 
 
 def build_profile_text(user, total_spent_credits: int, lang: str = "en") -> str:
@@ -29,6 +29,7 @@ def build_profile_text(user, total_spent_credits: int, lang: str = "en") -> str:
         "\n"
         f"💳 {t('profile.balance', lang)}: {user.balance}\n"
         f"🎨 {t('profile.total_generations', lang)}: {user.total_generations}\n"
+        f"📦 {t('profile.delivery_mode', lang)}: {format_delivery_mode(user.send_results_as_files, lang)}\n"
         f"🏆 {t('profile.credits_spent', lang)}: {total_spent_credits}"
     )
 

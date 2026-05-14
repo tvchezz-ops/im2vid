@@ -51,7 +51,6 @@ BUTTON_ICONS = {
     "common.download_file": "🔗",
     "common.change_settings": "⚙️",
     "profile.top_up": "💳",
-    "profile.toggle_delivery": "⚙️",
     "payments.back_to_profile": "⬅️",
     "payments.pay_here": "⭐",
     "generation.text_to_image": "🖼",
@@ -587,10 +586,15 @@ def get_back_to_menu_inline_keyboard(lang: str = DEFAULT_LANGUAGE) -> InlineKeyb
 
 def get_profile_keyboard(*, send_results_as_files: bool, lang: str = DEFAULT_LANGUAGE) -> InlineKeyboardMarkup:
     """Инлайн-кнопки профиля пользователя."""
+    delivery_toggle_text = (
+        f"🖼 {t('profile.toggle_delivery_normal', lang)}"
+        if send_results_as_files
+        else f"📎 {t('profile.toggle_delivery_file', lang)}"
+    )
     return InlineKeyboardMarkup(
         inline_keyboard=[
             [InlineKeyboardButton(text=get_button_text("profile.top_up", lang), callback_data="profile:top_up_balance")],
-            [InlineKeyboardButton(text=get_button_text("profile.toggle_delivery", lang), callback_data="profile:toggle_delivery_mode")],
+            [InlineKeyboardButton(text=delivery_toggle_text, callback_data="profile:toggle_delivery_mode")],
         ]
     )
 

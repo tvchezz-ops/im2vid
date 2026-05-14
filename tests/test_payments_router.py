@@ -340,9 +340,10 @@ async def test_back_to_profile_restores_profile_screen(session_factory) -> None:
 
         assert message.edits[-1].startswith("👤 <b>Профиль</b>")
         assert "История" not in message.edits[-1]
+        assert "📦 Отправка: обычный формат" in message.edits[-1]
         keyboard = message.edit_markups[-1]
         assert keyboard.inline_keyboard[0][0].text == "💳 Пополнить"
-        assert keyboard.inline_keyboard[1][0].text == f"⚙️ {t('profile.toggle_delivery', 'ru')}"
+        assert keyboard.inline_keyboard[1][0].text == "📎 Отправлять файлом"
         assert len(keyboard.inline_keyboard) == 2
         assert all("Назад" not in row[0].text for row in keyboard.inline_keyboard)
         assert callback.answers[-1] is None

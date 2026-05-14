@@ -551,8 +551,20 @@ def test_build_profile_keyboard_has_no_history_button() -> None:
     keyboard = get_profile_keyboard(send_results_as_files=False, lang="ru")
     button_texts = [button.text for row in keyboard.inline_keyboard for button in row]
 
-    assert button_texts == [f"💳 {t('profile.top_up', 'ru')}", f"⚙️ {t('profile.toggle_delivery', 'ru')}"]
+    assert button_texts == [f"💳 {t('profile.top_up', 'ru')}", "📎 Отправлять файлом"]
+    assert "Настройки" not in "\n".join(button_texts)
     assert "📜 История генераций" not in button_texts
+
+
+def test_build_profile_keyboard_shows_delivery_toggle_for_current_mode() -> None:
+    from app.bot.keyboards import get_profile_keyboard
+
+    normal_keyboard = get_profile_keyboard(send_results_as_files=False, lang="en")
+    file_keyboard = get_profile_keyboard(send_results_as_files=True, lang="en")
+
+    assert normal_keyboard.inline_keyboard[1][0].text == "📎 Send as file"
+    assert file_keyboard.inline_keyboard[1][0].text == "🖼 Normal format"
+    assert normal_keyboard.inline_keyboard[1][0].callback_data == "profile:toggle_delivery_mode"
 
 
 def test_build_profile_keyboard_has_no_back_button_in_ru_or_en() -> None:

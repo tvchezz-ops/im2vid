@@ -2,7 +2,7 @@
 
 Generated from runtime `app.i18n.TRANSLATIONS`.
 
-Total localized keys: 360
+Total localized keys: 364
 
 | key | en | ru | es | pt | fr | de | ar | hi | zh | id |
 | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
@@ -304,14 +304,18 @@ Total localized keys: 360
 | payments.top_up | Top up | Пополнить | Recargar | Recarregar | Recharger | Aufladen | اشحن | टॉप अप | 充值 | Isi saldo |
 | profile.balance | Balance | Баланс | Saldo | Saldo | Solde | Guthaben | الرصيد | बैलेंस | 余额 | Saldo |
 | profile.credits_spent | Spent | Потрачено | Gastado | Gasto | Dépensé | Ausgegeben | المستخدم | खर्च | 已用 | Terpakai |
-| profile.delivery_file | Original | Оригинал | Sin compresión | Sem compressão | Sans compression | Datei | الأصل | ओरिजिनल | 原始 | Asli |
-| profile.delivery_mode | Result format | Формат результата | Formato | Formato | Format | Format | الصيغة | फ़ॉर्मैट | 格式 | Format |
-| profile.delivery_normal | Compact | Компактно | Compacto | Compacto | Léger | Kompakt | مختصر | कॉम्पैक्ट | 紧凑 | Ringkas |
+| profile.delivery_file | as file | файлом | como archivo | como arquivo | en fichier | als Datei | كملف | फ़ाइल के रूप में | 文件 | sebagai file |
+| profile.delivery_mode | Delivery | Отправка | Entrega | Envio | Envoi | Versand | الإرسال | डिलीवरी | 发送 | Pengiriman |
+| profile.delivery_normal | normal | обычный формат | normal | normal | normal | normal | عادي | सामान्य | 普通格式 | normal |
+| profile.delivery_status_file | as file | файлом | como archivo | como arquivo | en fichier | als Datei | كملف | फ़ाइल के रूप में | 文件 | sebagai file |
+| profile.delivery_status_normal | normal | обычный формат | normal | normal | normal | normal | عادي | सामान्य | 普通格式 | normal |
 | profile.load_error | ⚠️ Profile did not open<br><br>Try again in a moment. | ⚠️ Профиль не открылся<br><br>Попробуйте ещё раз позже. | ⚠️ El perfil no abrió<br><br>Inténtalo más tarde. | ⚠️ O perfil não abriu<br><br>Tente mais tarde. | ⚠️ Le profil ne s’est pas ouvert<br><br>Réessayez plus tard. | ⚠️ Profil wurde nicht geöffnet<br><br>Versuche es später erneut. | ⚠️ لم يفتح الملف<br><br>حاول لاحقاً. | ⚠️ प्रोफ़ाइल नहीं खुली<br><br>बाद में कोशिश करें. | ⚠️ 资料未打开<br><br>请稍后再试。 | ⚠️ Profil tidak terbuka<br><br>Coba lagi nanti. |
 | profile.panel_closed | Profile closed. | Профиль закрыт. | Perfil cerrado. | Perfil fechado. | Profil fermé. | Profil geschlossen. | تم إغلاق الملف. | प्रोफ़ाइल बंद. | 资料已关闭。 | Profil ditutup. |
 | profile.setting_updated | Saved | Сохранено | Guardado | Salvo | Enregistré | Gespeichert | تم الحفظ | सेव हुआ | 已保存 | Tersimpan |
 | profile.title | Profile | Профиль | Perfil | Perfil | Profil | Profil | الملف | प्रोफ़ाइल | 资料 | Profil |
-| profile.toggle_delivery | Settings | Настройки | Ajustes | Ajustes | Réglages | Einstellungen | الإعدادات | सेटिंग्स | 设置 | Pengaturan |
+| profile.toggle_delivery | Change delivery | Способ отправки | Cambiar entrega | Alterar envio | Changer l’envoi | Versand ändern | تغيير الإرسال | डिलीवरी बदलें | 切换发送方式 | Ubah pengiriman |
+| profile.toggle_delivery_file | Send as file | Отправлять файлом | Enviar como archivo | Enviar como arquivo | Envoyer en fichier | Als Datei senden | إرسال كملف | फ़ाइल के रूप में भेजें | 作为文件发送 | Kirim sebagai file |
+| profile.toggle_delivery_normal | Normal format | Обычный формат | Formato normal | Formato normal | Format normal | Normales Format | صيغة عادية | सामान्य फ़ॉर्मैट | 普通格式 | Format normal |
 | profile.top_up | Top up | Пополнить | Recargar | Recarregar | Recharger | Aufladen | اشحن | टॉप अप | 充值 | Isi saldo |
 | profile.top_up_soon | Top-up is coming soon. | Пополнение скоро появится. | Recarga próximamente. | Recarga em breve. | Recharge bientôt disponible. | Aufladen bald verfügbar. | الشحن قريباً. | टॉप-अप जल्द आएगा। | 充值即将上线。 | Isi saldo segera hadir. |
 | profile.total_generations | Generations | Генераций | Creaciones | Criações | Créations | Erstellt | الإنشاءات | बनाए गए | 生成 | Dibuat |
