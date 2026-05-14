@@ -927,7 +927,8 @@ def test_kling_specialty_models_are_in_expected_categories() -> None:
     assert get_generation_model("kwaivgi_kling_lipsync_text_to_video").hidden_reason == "missing_docs_contract"
     assert "kwaivgi_kling_effects" not in {model.key for model in list_generation_models()}
     assert get_generation_model("kwaivgi_kling_effects").is_enabled is False
-    assert "kwaivgi_kling_video_to_audio" in {model.key for model in list_models_by_type("video_to_audio")}
+    assert get_generation_model("kwaivgi_kling_video_to_audio").generation_type == "video_to_audio"
+    assert "kwaivgi_kling_video_to_audio" not in {model.key for model in list_generation_models()}
 
 
 def test_wavespeed_ai_wan_2_2_speech_to_video_accepts_audio_input() -> None:
@@ -1060,8 +1061,10 @@ def test_build_model_registry_ignores_model_when_generation_type_cannot_be_infer
     assert registry == {}
 
 
-def test_list_generation_models_returns_all_registry_models() -> None:
-    assert list_generation_models() == [model for model in MODEL_REGISTRY.values() if model.is_enabled]
+def test_list_generation_models_returns_user_visible_registry_models() -> None:
+    assert list_generation_models() == [
+        model for model in MODEL_REGISTRY.values() if model.is_enabled and model.generation_type != "video_to_audio"
+    ]
 
 
 def test_enabled_models_have_settings_or_explicit_empty_state() -> None:
@@ -1512,7 +1515,6 @@ def test_build_payload_supports_every_enabled_model(model: GenerationModel) -> N
 def test_list_generation_types_returns_only_types_present_in_registry() -> None:
     assert list_generation_types() == [
         "text_to_image",
-        "image_to_image",
         "image_edit",
         "text_to_video",
         "image_to_video",
@@ -1521,7 +1523,6 @@ def test_list_generation_types_returns_only_types_present_in_registry() -> None:
         "video_extend",
         "lipsync",
         "audio_to_video",
-        "video_to_audio",
     ]
 
 
@@ -1538,11 +1539,13 @@ def test_list_providers_returns_only_providers_with_enabled_models() -> None:
     ]
 
 
-def test_list_models_by_type_returns_only_matching_models() -> None:
+def test_list_models_by_type_returns_ui_category_models() -> None:
     models = list_models_by_type("image_edit")
 
     model_keys = {model.key for model in models}
-    assert {"google_nano_banana_pro_edit_ultra", "bytedance_seedream_v4_5_edit"}.issubset(model_keys)
+    assert {"google_nano_banana_pro_edit_ultra", "bytedance_seedream_v4_5_edit", "wan_ai_image_upscaler"}.issubset(model_keys)
+    assert list_models_by_type("image_to_image") == models
+    assert list_models_by_type("video_to_audio") == []
     assert {model.key for model in list_models_by_type("text_to_image")} >= {
         "alibaba_wan_2_6_text_to_image",
         "bytedance_seedream_v3_1",

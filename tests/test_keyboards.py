@@ -73,9 +73,20 @@ def test_build_generation_sections_keyboard_uses_expected_callback_prefix() -> N
     assert "gen:section:reference_to_video" in callback_data
     assert "gen:section:video_extend" in callback_data
     assert "gen:section:lipsync" in callback_data
-    assert "gen:section:video_to_audio" in callback_data
+    assert "gen:section:image_to_image" not in callback_data
+    assert "gen:section:video_to_audio" not in callback_data
     assert "gen:section:effects" not in callback_data
     assert all_button.callback_data == "gen:all"
+
+
+def test_generation_sections_hide_removed_category_labels() -> None:
+    keyboard = build_generation_sections_keyboard()
+    button_texts = [button.text for button in _iter_buttons(keyboard)]
+
+    assert all("Image to Image" not in text for text in button_texts)
+    assert all("Изображение в изображение" not in text for text in button_texts)
+    assert all("Video to Audio" not in text for text in button_texts)
+    assert all("Видео в аудио" not in text for text in button_texts)
 
 
 def test_build_generation_sections_keyboard_uses_only_section_callbacks_for_categories() -> None:
@@ -113,8 +124,8 @@ def test_build_providers_keyboard_uses_expected_callback_prefix() -> None:
     assert all("Wavespeed" not in button.text for button in _iter_buttons(keyboard))
 
 
-def test_image_upscaler_is_user_visible_under_image_to_image_and_wan_ai() -> None:
-    category_models = list_models_by_type("image_to_image")
+def test_image_upscaler_is_user_visible_under_image_edit_and_wan_ai() -> None:
+    category_models = list_models_by_type("image_edit")
     provider_models = list_models_by_provider("wavespeed_ai")
     category_index = next(index for index, model in enumerate(category_models) if model.key == "wan_ai_image_upscaler")
     provider_index = next(index for index, model in enumerate(provider_models) if model.key == "wan_ai_image_upscaler")
@@ -130,6 +141,12 @@ def test_image_upscaler_is_user_visible_under_image_to_image_and_wan_ai() -> Non
     assert "Image Upscaler" in category_texts
     assert "Image Upscaler" in provider_texts
     assert all("Wavespeed" not in text for text in category_texts + provider_texts)
+
+
+def test_video_to_audio_models_are_hidden_from_user_lists() -> None:
+    assert "kwaivgi_kling_video_to_audio" not in {model.key for model in list_generation_models()}
+    assert "kwaivgi_kling_video_to_audio" not in {model.key for model in list_models_by_provider("kling")}
+    assert list_models_by_type("video_to_audio") == []
 
 
 def test_image_upscaler_settings_keyboard_uses_localized_labels() -> None:

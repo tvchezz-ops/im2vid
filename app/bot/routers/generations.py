@@ -268,7 +268,7 @@ class GenerationBatchSummary:
 
 GENERATION_TYPE_LABELS = {
     "text_to_image": "🖼 Text → Image",
-    "image_to_image": "🖼 Image → Image",
+    "image_to_image": "🧩 Image Edit",
     "image_edit": "🧩 Image Edit",
     "text_to_video": "🎬 Text → Video",
     "image_to_video": "🎥 Image → Video",
@@ -279,7 +279,6 @@ GENERATION_TYPE_LABELS = {
     "motion_control": "🎚 Motion Control",
     "avatar": "👥 Avatar",
     "audio_to_video": "🎙 Audio → Video",
-    "video_to_audio": "🔊 Video → Audio",
     "effects": "✨ Effects",
     ALL_MODELS_CATEGORY: "📚 All models",
     LEGACY_ALL_MODELS_CATEGORY: "📚 All models",

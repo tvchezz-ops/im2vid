@@ -26,7 +26,7 @@ from app.services.model_registry import (
     infer_generation_type_from_slug,
     infer_provider_from_url_or_slug,
     humanize_model_title,
-    list_generation_models,
+    list_generation_models as list_registry_generation_models,
     normalize_model_key,
     normalize_generation_type,
 )
@@ -35,6 +35,24 @@ from app.utils import logger
 
 if TYPE_CHECKING:
     from app.services.wavespeed import WavespeedService
+
+
+UI_HIDDEN_GENERATION_TYPES = frozenset({"video_to_audio"})
+UI_GENERATION_TYPE_GROUPS = {
+    "image_edit": frozenset({"image_edit", "image_to_image"}),
+    "image_to_image": frozenset({"image_edit", "image_to_image"}),
+}
+
+
+def _is_user_visible_model(model: GenerationModel) -> bool:
+    return model.is_enabled and model.generation_type not in UI_HIDDEN_GENERATION_TYPES
+
+
+def _get_ui_generation_type_group(generation_type: str) -> frozenset[str]:
+    normalized_generation_type = normalize_generation_type(generation_type)
+    if normalized_generation_type in UI_HIDDEN_GENERATION_TYPES:
+        return frozenset()
+    return UI_GENERATION_TYPE_GROUPS.get(normalized_generation_type, frozenset({normalized_generation_type}))
 
 
 def get_required_input_type(generation_type: str) -> Literal["text", "image", "video", "lipsync"]:
@@ -364,12 +382,17 @@ def _filter_models(
     models = list_generation_models()
 
     if generation_type is not None:
-        generation_type = normalize_generation_type(generation_type)
-        models = [model for model in models if model.generation_type == generation_type]
+        generation_types = _get_ui_generation_type_group(generation_type)
+        models = [model for model in models if model.generation_type in generation_types]
     if provider is not None:
         models = [model for model in models if model.provider == provider]
 
     return models
+
+
+def list_generation_models() -> list[GenerationModel]:
+    """Получить модели, доступные в пользовательском каталоге."""
+    return [model for model in list_registry_generation_models() if _is_user_visible_model(model)]
 
 
 def list_generation_types() -> list[str]:
@@ -377,6 +400,8 @@ def list_generation_types() -> list[str]:
     return [
         generation_type
         for generation_type in GENERATION_TYPES
+        if generation_type not in UI_HIDDEN_GENERATION_TYPES
+        if generation_type not in {"image_to_image"}
         if _filter_models(generation_type=generation_type)
     ]
 

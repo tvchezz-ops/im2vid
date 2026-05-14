@@ -289,7 +289,13 @@ def test_categories_show_only_enabled_models() -> None:
     for generation_type in GENERATION_TYPES:
         models = list_models_by_type(generation_type)
         assert all(model.is_enabled for model in models)
-        if generation_type in enabled_types:
+        if generation_type == "image_to_image":
+            assert models
+            assert "gen:section:image_to_image" not in section_callbacks
+        elif generation_type == "video_to_audio":
+            assert models == []
+            assert "gen:section:video_to_audio" not in section_callbacks
+        elif generation_type in enabled_types:
             assert models
             assert f"gen:section:{generation_type}" in section_callbacks
         else:

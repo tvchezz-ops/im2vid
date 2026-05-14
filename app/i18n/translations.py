@@ -2450,6 +2450,9 @@ for language_code, copy in _PREMIUM_FINAL_COPY.items():
         catalog[f"generation.section_details.{section_key}"] = section_detail
     for setting_key, setting_title in _PREMIUM_SETTING_TITLES[language_code].items():
         catalog[f"settings.title.{setting_key}"] = setting_title
+    catalog["generation.image_to_image"] = catalog["generation.image_edit"]
+    catalog["generation.section_title.image_to_image"] = catalog["generation.section_title.image_edit"]
+    catalog["generation.section_details.image_to_image"] = catalog["generation.section_details.image_edit"]
 
 _PREMIUM_TERM_FIXES = {
     "es": {"profile.delivery_file": "Sin compresión", "generation.lipsync": "Sincronía labial", "generation.avatar": "Personaje", "generation.section_title.lipsync": "Sincronía labial", "generation.section_title.avatar": "Personaje"},

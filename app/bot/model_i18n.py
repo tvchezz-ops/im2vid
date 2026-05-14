@@ -77,6 +77,8 @@ def _model_kind_label(model: Any, lang: str) -> str:
             if label:
                 return label
     generation_type = str(getattr(model, "generation_type", "") or "")
+    if generation_type == "image_to_image":
+        generation_type = "image_edit"
     return _translation_or_empty(f"generation.section_title.{generation_type}", lang)
 
 
