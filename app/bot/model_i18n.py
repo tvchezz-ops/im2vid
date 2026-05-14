@@ -2,7 +2,7 @@
 from __future__ import annotations
 
 import re
-from typing import Any
+from typing import Any, Literal
 
 from app.i18n import DEFAULT_LANGUAGE, get_user_language, t
 
@@ -36,6 +36,9 @@ _TITLE_SUFFIX_PATTERNS = (
     r"\bvideo\s+to\s+audio\b",
     r"\beffects?\b",
 )
+_BUTTON_TITLE_SUFFIX_PATTERNS = (*_TITLE_SUFFIX_PATTERNS, r"\bedit\b")
+
+ModelButtonTitleContext = Literal["category_list", "all_models_provider_list", "provider_models_list"]
 
 _MODEL_KIND_BY_KEY_FRAGMENT = {
     "upscaler": "model.kind.image_upscaler",
@@ -57,13 +60,13 @@ def get_provider_display_label(provider: Any, lang: str = DEFAULT_LANGUAGE) -> s
     return provider_key.replace("_", " ").strip().title() or _translation_or_empty("provider.label.unknown", lang) or "Provider"
 
 
-def _clean_model_brand(raw_title: str, provider: str) -> str:
+def _clean_model_brand(raw_title: str, provider: str, suffix_patterns: tuple[str, ...] = _TITLE_SUFFIX_PATTERNS) -> str:
     title = raw_title.replace("Wavespeed AI", "Wan AI").replace("WaveSpeed AI", "Wan AI")
     provider_label = get_provider_display_label(provider, "en")
     for prefix in {provider_label, provider.replace("_", " ").title()}:
         if prefix and title.casefold().startswith(prefix.casefold() + " "):
             title = title[len(prefix):].strip()
-    for pattern in _TITLE_SUFFIX_PATTERNS:
+    for pattern in suffix_patterns:
         title = re.sub(pattern, " ", title, flags=re.IGNORECASE)
     title = re.sub(r"\s+", " ", title).strip(" -·")
     return title or raw_title.replace("Wavespeed AI", "Wan AI").strip()
@@ -99,3 +102,23 @@ def get_model_display_title(model: Any, lang: str = DEFAULT_LANGUAGE) -> str:
     if kind and kind.casefold() not in brand.casefold():
         return f"{brand} · {kind}"
     return brand
+
+
+def _get_model_short_title(model: Any) -> str:
+    raw_title = str(getattr(model, "title", getattr(model, "key", "")) or getattr(model, "key", ""))
+    return _clean_model_brand(raw_title, str(getattr(model, "provider", "")), _BUTTON_TITLE_SUFFIX_PATTERNS)
+
+
+def format_model_button_title(
+    model: Any,
+    lang: str = DEFAULT_LANGUAGE,
+    context: ModelButtonTitleContext = "category_list",
+) -> str:
+    """Return a model button title for the exact catalog surface."""
+    if context == "provider_models_list":
+        short_title = _get_model_short_title(model)
+        kind = _model_kind_label(model, get_user_language(lang))
+        if kind and kind.casefold() not in short_title.casefold():
+            return f"{short_title} · {kind}"
+        return short_title
+    return _get_model_short_title(model)

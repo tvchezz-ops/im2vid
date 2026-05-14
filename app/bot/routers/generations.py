@@ -53,7 +53,7 @@ from app.bot.keyboards import (
 )
 from app.bot.error_messages import build_error_keyboard, build_user_error_message, log_error_code
 from app.bot.language import get_event_lang
-from app.bot.model_i18n import get_model_display_title
+from app.bot.model_i18n import ModelButtonTitleContext, get_model_display_title
 from app.bot.states import GenerationStates
 from app.config import settings
 from app.db import GenerationRepository, GenerationRequestStatus, UserRepository
@@ -1584,19 +1584,34 @@ async def render_model_list_screen(
     page: int = 0,
     page_callback_builder: Any | None = None,
     lang: str | None = None,
+    model_title_context: ModelButtonTitleContext = "category_list",
 ) -> None:
     """Показать список моделей для выбранного типа или провайдера."""
     lang = lang or get_actor_language(getattr(message, "from_user", None))
     if edit:
         await message.edit_text(
             heading,
-            reply_markup=build_models_keyboard(models, back_callback, lang, page, page_callback_builder),
+            reply_markup=build_models_keyboard(
+                models,
+                back_callback,
+                lang,
+                page,
+                page_callback_builder,
+                title_context=model_title_context,
+            ),
             parse_mode="HTML",
         )
         return
     await message.answer(
         heading,
-        reply_markup=build_models_keyboard(models, back_callback, lang, page, page_callback_builder),
+        reply_markup=build_models_keyboard(
+            models,
+            back_callback,
+            lang,
+            page,
+            page_callback_builder,
+            title_context=model_title_context,
+        ),
         parse_mode="HTML",
     )
 
@@ -3602,6 +3617,7 @@ async def choose_provider(callback: CallbackQuery, state: FSMContext, session: O
         page=page,
         page_callback_builder=lambda target_page: f"{PROVIDER_PREFIX}{provider}:{target_page}",
         lang=lang,
+        model_title_context="provider_models_list",
     )
     await callback.answer()
 
@@ -3645,6 +3661,7 @@ async def back_to_generation_models(callback: CallbackQuery, state: FSMContext, 
             page=selected_model_page,
             page_callback_builder=lambda target_page: f"{PROVIDER_PREFIX}{selected_provider}:{target_page}",
             lang=lang,
+            model_title_context="provider_models_list",
         )
         await callback.answer()
         return

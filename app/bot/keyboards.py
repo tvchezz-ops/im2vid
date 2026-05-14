@@ -7,7 +7,7 @@ from aiogram.types import InlineKeyboardButton, InlineKeyboardMarkup, KeyboardBu
 from aiogram.utils.keyboard import InlineKeyboardBuilder
 
 from app.bot.error_messages import build_error_keyboard
-from app.bot.model_i18n import get_model_display_title, get_provider_display_label
+from app.bot.model_i18n import ModelButtonTitleContext, format_model_button_title, get_provider_display_label
 from app.i18n import DEFAULT_LANGUAGE, SUPPORTED_LANGUAGES, get_user_language, t
 from app.services.payments import ALLOWED_STARS_AMOUNTS
 from app.services.generation_service import (
@@ -605,6 +605,7 @@ def build_models_keyboard(
     page: int = 0,
     page_callback_builder: Callable[[int], str] | None = None,
     show_price: bool = False,
+    title_context: ModelButtonTitleContext = "category_list",
 ) -> InlineKeyboardMarkup:
     """Построить клавиатуру моделей с настраиваемым callback возврата."""
     model_list = list(models)
@@ -613,7 +614,7 @@ def build_models_keyboard(
         return f"gen:model:{token}"
 
     def build_model_text(model: Any) -> str:
-        button_text = get_model_display_title(model, lang)
+        button_text = format_model_button_title(model, lang, title_context)
         price_label = format_model_price_label(model, lang) if show_price else ""
         if show_price and price_label:
             button_text = f"{button_text} — {price_label}"

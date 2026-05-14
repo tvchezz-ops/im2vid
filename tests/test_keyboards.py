@@ -35,7 +35,7 @@ from app.bot.keyboards import (
     resolve_model_key_from_token,
     validate_callback_length,
 )
-from app.bot.model_i18n import get_model_display_title
+from app.bot.model_i18n import format_model_button_title
 from app.services.generation_service import list_models_by_provider, list_models_by_type
 from app.i18n import t
 from app.services.generation_service import get_generation_model
@@ -124,6 +124,69 @@ def test_build_providers_keyboard_uses_expected_callback_prefix() -> None:
     assert all("Wavespeed" not in button.text for button in _iter_buttons(keyboard))
 
 
+def test_all_models_provider_screen_shows_provider_labels() -> None:
+    keyboard = build_providers_keyboard()
+    button_texts = [button.text for button in _iter_buttons(keyboard)]
+
+    for provider_label in {"Alibaba", "ByteDance", "Google", "OpenAI", "Kling", "Grok", "MiniMax", "Wan AI"}:
+        assert provider_label in button_texts
+
+
+def test_category_model_buttons_use_short_titles_without_suffixes() -> None:
+    text_to_image_model = get_generation_model("alibaba_wan_2_7_text_to_image_pro")
+    image_edit_model = get_generation_model("bytedance_seedream_v4_5_edit")
+
+    text_to_image_keyboard = build_models_keyboard([text_to_image_model], "gen:back:sections", "ru")
+    image_edit_keyboard = build_models_keyboard([image_edit_model], "gen:back:sections", "ru")
+
+    text_to_image_button = text_to_image_keyboard.inline_keyboard[0][0].text
+    image_edit_button = image_edit_keyboard.inline_keyboard[0][0].text
+
+    assert text_to_image_button == "Wan 2.7 Pro"
+    assert "Текст в изображение" not in text_to_image_button
+    assert "Правка изображения" not in image_edit_button
+    assert "·" not in text_to_image_button
+    assert "·" not in image_edit_button
+
+
+def test_provider_model_buttons_keep_category_suffixes() -> None:
+    alibaba_models = list_models_by_provider("alibaba")
+    google_models = list_models_by_provider("google")
+    alibaba_index = next(index for index, model in enumerate(alibaba_models) if model.key == "alibaba_wan_2_7_text_to_image_pro")
+    google_index = next(index for index, model in enumerate(google_models) if model.key == "google_imagen4")
+
+    alibaba_keyboard = build_models_keyboard(
+        alibaba_models,
+        "gen:back:providers",
+        "ru",
+        page=alibaba_index // 8,
+        title_context="provider_models_list",
+    )
+    google_keyboard = build_models_keyboard(
+        google_models,
+        "gen:back:providers",
+        "ru",
+        page=google_index // 8,
+        title_context="provider_models_list",
+    )
+    alibaba_texts = [button.text for button in _iter_buttons(alibaba_keyboard)]
+    google_texts = [button.text for button in _iter_buttons(google_keyboard)]
+
+    assert any("· Текст в изображение" in text for text in alibaba_texts)
+    assert any("· Текст в изображение" in text for text in google_texts)
+
+
+def test_model_button_formatting_does_not_mutate_registry_title() -> None:
+    model = get_generation_model("alibaba_wan_2_7_text_to_image_pro")
+    original_title = model.title
+
+    assert format_model_button_title(model, "ru", "category_list") == "Wan 2.7 Pro"
+    build_models_keyboard([model], "gen:back:sections", "ru")
+    build_models_keyboard([model], "gen:back:providers", "ru", title_context="provider_models_list")
+
+    assert model.title == original_title
+
+
 def test_image_upscaler_is_user_visible_under_image_edit_and_wan_ai() -> None:
     category_models = list_models_by_type("image_edit")
     provider_models = list_models_by_provider("wavespeed_ai")
@@ -176,8 +239,8 @@ def test_build_models_keyboard_uses_passed_models_only() -> None:
     buttons = [row[0] for row in keyboard.inline_keyboard[:-1]]
 
     assert [button.text for button in buttons] == [
-        "Nano Banana Pro Edit Ultra",
-        "Seedream V4.5 Edit",
+        "Nano Banana Pro Ultra",
+        "Seedream V4.5",
     ]
     assert [button.callback_data for button in buttons] == [
         "gen:model:nano_banana",
@@ -188,7 +251,7 @@ def test_build_models_keyboard_uses_passed_models_only() -> None:
 def test_build_models_keyboard_hides_model_price() -> None:
     keyboard = build_models_keyboard([get_generation_model("nano_banana")], "gen:back:sections")
 
-    assert keyboard.inline_keyboard[0][0].text == "Google Nano Banana Pro Edit Ultra"
+    assert keyboard.inline_keyboard[0][0].text == "Nano Banana Pro Ultra"
     assert "credits" not in keyboard.inline_keyboard[0][0].text
 
 
@@ -196,14 +259,14 @@ def test_build_models_keyboard_hides_minimum_video_duration_price_in_ru() -> Non
     model = get_generation_model("alibaba_wan_2_6_text_to_video")
     keyboard = build_models_keyboard([model], "gen:back:sections", "ru")
 
-    assert keyboard.inline_keyboard[0][0].text == get_model_display_title(model, "ru")
+    assert keyboard.inline_keyboard[0][0].text == format_model_button_title(model, "ru", "category_list")
     assert "credits" not in keyboard.inline_keyboard[0][0].text
 
 
 def test_build_models_keyboard_hides_estimated_fallback_price() -> None:
     keyboard = build_models_keyboard([get_generation_model("alibaba_wan_2_6_text_to_image")], "gen:back:sections")
 
-    assert keyboard.inline_keyboard[0][0].text == "Alibaba Wan 2.6 Text To Image"
+    assert keyboard.inline_keyboard[0][0].text == "Wan 2.6"
     assert "credits" not in keyboard.inline_keyboard[0][0].text
 
 
@@ -400,10 +463,10 @@ def test_model_pagination_works_for_more_than_eight_models() -> None:
         page_callback_builder=lambda target_page: f"gen:models:text_to_image:{target_page}",
     )
 
-    assert get_model_display_title(models[0], "en") in first_page.inline_keyboard[0][0].text
-    assert get_model_display_title(models[7], "en") in first_page.inline_keyboard[7][0].text
+    assert format_model_button_title(models[0], "en", "category_list") in first_page.inline_keyboard[0][0].text
+    assert format_model_button_title(models[7], "en", "category_list") in first_page.inline_keyboard[7][0].text
     assert f"gen:model:{models[8].key}" not in _iter_callback_data(first_page)
-    assert get_model_display_title(models[8], "en") in second_page.inline_keyboard[0][0].text
+    assert format_model_button_title(models[8], "en", "category_list") in second_page.inline_keyboard[0][0].text
     assert first_page.inline_keyboard[-2][1].callback_data == "gen:models:text_to_image:1"
     assert second_page.inline_keyboard[-2][0].callback_data == "gen:models:text_to_image:0"
 
