@@ -509,6 +509,61 @@ def test_build_setting_options_keyboard_shows_size_presets_with_4k() -> None:
     assert all("Send a new" not in text for text in button_texts)
 
 
+def test_build_setting_options_keyboard_lays_out_size_presets_in_two_columns() -> None:
+    model = SimpleNamespace(
+        user_settings={
+            "size": SimpleNamespace(key="size", title="Size", type="string", default="1024*1024", options=()),
+        }
+    )
+
+    keyboard = build_setting_options_keyboard(model, "size", "1024*1024", lang="ru")
+    preset_rows = keyboard.inline_keyboard[:-1]
+    back_row = keyboard.inline_keyboard[-1]
+
+    assert [[button.text for button in row] for row in preset_rows] == [
+        ["512×512", "768×768"],
+        ["✅ 1024×1024", "1536×1536"],
+        ["2048×2048", "720×1280"],
+        ["1440×2560", "2160×3840"],
+        ["768×1344", "1024×1792"],
+        ["832×1216", "1280×720"],
+        ["2560×1440", "3840×2160"],
+        ["1344×768", "1792×1024"],
+        ["1216×832", "2560×1080"],
+        ["3440×1440", "3840×1600"],
+    ]
+    assert all(len(row) == 2 for row in preset_rows)
+    assert len(back_row) == 1
+    assert back_row[0].text == f"⬅️ {t('common.back_to_settings', 'ru')}"
+
+
+def test_build_setting_options_keyboard_allows_only_final_size_preset_row_to_be_single() -> None:
+    model = SimpleNamespace(
+        user_settings={
+            "output_size": SimpleNamespace(
+                key="output_size",
+                title="Output Size",
+                type="string",
+                default="512*512",
+                options=(
+                    SimpleNamespace(value="512*512", label="512*512"),
+                    SimpleNamespace(value="768*768", label="768*768"),
+                    SimpleNamespace(value="1024*1024", label="1024*1024"),
+                ),
+            ),
+        }
+    )
+
+    keyboard = build_setting_options_keyboard(model, "output_size", "512*512", lang="en")
+    preset_rows = keyboard.inline_keyboard[:-1]
+    back_row = keyboard.inline_keyboard[-1]
+
+    assert [len(row) for row in preset_rows] == [2, 1]
+    assert [button.text for button in preset_rows[-1]] == ["1024×1024"]
+    assert len(back_row) == 1
+    assert back_row[0].callback_data == "gen:back:settings"
+
+
 def test_build_setting_options_keyboard_hides_unsupported_size_presets() -> None:
     model = SimpleNamespace(
         user_settings={

@@ -1,7 +1,6 @@
 """Клавиатуры для бота."""
 from __future__ import annotations
 
-from math import gcd
 from typing import Any, Callable, Iterable, Sequence
 
 from aiogram.types import InlineKeyboardButton, InlineKeyboardMarkup, KeyboardButton, ReplyKeyboardMarkup
@@ -32,17 +31,17 @@ SIZE_PRESET_VALUES = (
     "1536*1536",
     "2048*2048",
     "720*1280",
-    "768*1344",
-    "832*1216",
-    "1024*1792",
     "1440*2560",
     "2160*3840",
+    "768*1344",
+    "1024*1792",
+    "832*1216",
     "1280*720",
-    "1344*768",
-    "1216*832",
-    "1792*1024",
     "2560*1440",
     "3840*2160",
+    "1344*768",
+    "1792*1024",
+    "1216*832",
     "2560*1080",
     "3440*1440",
     "3840*1600",
@@ -256,15 +255,6 @@ def format_dimension_label(value: Any) -> str:
     if dimensions is None:
         return str(value)
     return f"{dimensions[0]}×{dimensions[1]}"
-
-
-def get_dimension_aspect_ratio(value: Any) -> str | None:
-    dimensions = parse_dimension_value(value)
-    if dimensions is None:
-        return None
-    width, height = dimensions
-    divisor = gcd(width, height)
-    return f"{width // divisor}:{height // divisor}"
 
 
 def is_size_preset_setting(setting_key: str, setting: Any) -> bool:
@@ -567,11 +557,7 @@ def build_setting_options_keyboard(model: Any, setting_key: str, current_value: 
             )
         )
     if is_size_setting:
-        grouped_buttons: dict[str, list[InlineKeyboardButton]] = {}
-        for button, (value, _) in zip(option_buttons, get_setting_options_for_ui(model, setting_key)):
-            grouped_buttons.setdefault(get_dimension_aspect_ratio(value) or "other", []).append(button)
-        for buttons in grouped_buttons.values():
-            rows.extend(buttons[index:index + 2] for index in range(0, len(buttons), 2))
+        rows.extend(option_buttons[index:index + 2] for index in range(0, len(option_buttons), 2))
     elif setting_key == "num_generations":
         rows.extend(option_buttons[index:index + 2] for index in range(0, len(option_buttons), 2))
     else:
