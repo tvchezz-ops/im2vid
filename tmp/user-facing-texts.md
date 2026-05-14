@@ -2,7 +2,7 @@
 
 Generated from runtime `app.i18n.TRANSLATIONS`.
 
-Total localized keys: 364
+Total localized keys: 365
 
 | key | en | ru | es | pt | fr | de | ar | hi | zh | id |
 | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
@@ -337,6 +337,7 @@ Total localized keys: 364
 | settings.enter_number_value | Send a number in the next message. | Введите число сообщением. | Envía un número en el siguiente mensaje. | Envie um número na próxima mensagem. | Envoyez un nombre dans le prochain message. | Sende eine Zahl in der nächsten Nachricht. | أرسل رقماً في الرسالة التالية. | अगले संदेश में संख्या भेजें. | 请在下一条消息中发送数字。 | Kirim angka di pesan berikutnya. |
 | settings.enter_number_value_range | Send a number from {min} to {max}. | Введите число от {min} до {max}. | Envía un número de {min} a {max}. | Envie um número de {min} a {max}. | Envoyez un nombre de {min} à {max}. | Sende eine Zahl von {min} bis {max}. | أرسل رقماً من {min} إلى {max}. | {min} से {max} तक की संख्या भेजें. | 请发送 {min} 到 {max} 之间的数字。 | Kirim angka dari {min} sampai {max}. |
 | settings.enter_text_value | Send a new value in the next message. | Отправьте новое значение сообщением. | Envía el nuevo valor en el siguiente mensaje. | Envie o novo valor na próxima mensagem. | Envoyez la nouvelle valeur dans le prochain message. | Sende den neuen Wert in der nächsten Nachricht. | أرسل القيمة الجديدة في الرسالة التالية. | अगले संदेश में नया मान भेजें. | 请在下一条消息中发送新值。 | Kirim nilai baru di pesan berikutnya. |
+| settings.image_size_preset_prompt | 🖼 Image size<br><br>Current size:<br>{value}<br><br>Choose one of the presets below. | 🖼 Размер изображения<br><br>Текущий размер:<br>{value}<br><br>Выберите подходящий формат ниже. | 🖼 Tamaño de imagen<br><br>Tamaño actual:<br>{value}<br><br>Elige uno de los presets de abajo. | 🖼 Tamanho da imagem<br><br>Tamanho atual:<br>{value}<br><br>Escolha um dos presets abaixo. | 🖼 Taille de l'image<br><br>Taille actuelle :<br>{value}<br><br>Choisissez un préréglage ci-dessous. | 🖼 Bildgröße<br><br>Aktuelle Größe:<br>{value}<br><br>Wähle unten eine Vorlage aus. | 🖼 حجم الصورة<br><br>الحجم الحالي:<br>{value}<br><br>اختر أحد الإعدادات الجاهزة أدناه. | 🖼 इमेज साइज़<br><br>मौजूदा साइज़:<br>{value}<br><br>नीचे दिए गए presets में से चुनें. | 🖼 图片尺寸<br><br>当前尺寸：<br>{value}<br><br>从下方预设中选择。 | 🖼 Ukuran gambar<br><br>Ukuran saat ini:<br>{value}<br><br>Pilih salah satu preset di bawah. |
 | settings.model_settings | Settings: <b>{model}</b> | Настройки: <b>{model}</b> | Ajustes: <b>{model}</b> | Ajustes: <b>{model}</b> | Réglages: <b>{model}</b> | Einstellungen: <b>{model}</b> | الإعدادات: <b>{model}</b> | सेटिंग्स: <b>{model}</b> | 设置: <b>{model}</b> | Pengaturan: <b>{model}</b> |
 | settings.option.jpeg | jpeg | jpeg | Ajustes | Ajustes | Réglages | Einstellungen | الإعدادات | सेटिंग्स | 设置 | Pengaturan |
 | settings.option.png | png | png | Ajustes | Ajustes | Réglages | Einstellungen | الإعدادات | सेटिंग्स | 设置 | Pengaturan |

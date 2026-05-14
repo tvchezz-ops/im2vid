@@ -492,6 +492,48 @@ def test_build_setting_options_keyboard_uses_setting_key_and_option_index() -> N
     assert keyboard.inline_keyboard[-1][0].callback_data == "gen:back:settings"
 
 
+def test_build_setting_options_keyboard_shows_size_presets_with_4k() -> None:
+    model = SimpleNamespace(
+        user_settings={
+            "size": SimpleNamespace(key="size", title="Size", type="string", default="1024*1024", options=()),
+        }
+    )
+
+    keyboard = build_setting_options_keyboard(model, "size", "1024*1024", lang="en")
+    button_texts = [button.text for button in _iter_buttons(keyboard)]
+
+    assert "✅ 1024×1024" in button_texts
+    assert "3840×2160" in button_texts
+    assert "2160×3840" in button_texts
+    assert "⬅️ Back to settings" in button_texts
+    assert all("Send a new" not in text for text in button_texts)
+
+
+def test_build_setting_options_keyboard_hides_unsupported_size_presets() -> None:
+    model = SimpleNamespace(
+        user_settings={
+            "image_size": SimpleNamespace(
+                key="image_size",
+                title="Image Size",
+                type="string",
+                default="512*512",
+                options=(
+                    SimpleNamespace(value="512*512", label="512*512"),
+                    SimpleNamespace(value="1024*1024", label="1024*1024"),
+                ),
+            ),
+        }
+    )
+
+    keyboard = build_setting_options_keyboard(model, "image_size", "512*512", lang="en")
+    button_texts = [button.text for button in _iter_buttons(keyboard)]
+
+    assert "✅ 512×512" in button_texts
+    assert "1024×1024" in button_texts
+    assert "3840×2160" not in button_texts
+    assert "2160×3840" not in button_texts
+
+
 def test_build_setting_options_keyboard_shows_num_generations_in_two_columns() -> None:
     model = get_generation_model("nano_banana")
 

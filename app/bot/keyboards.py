@@ -1,6 +1,7 @@
 """Клавиатуры для бота."""
 from __future__ import annotations
 
+from math import gcd
 from typing import Any, Callable, Iterable, Sequence
 
 from aiogram.types import InlineKeyboardButton, InlineKeyboardMarkup, KeyboardButton, ReplyKeyboardMarkup
@@ -23,6 +24,29 @@ DEFAULT_PAGE_SIZE = 8
 PAGINATION_NOOP_CALLBACK = "gen:page:noop"
 NEGATIVE_PROMPT_SETTING_KEYS = {"exclude", "excluded_prompt", "negative", "negative_prompt", "avoid_prompt"}
 NEGATIVE_PROMPT_LEGACY_TITLES = {"exclude", "excluded prompt", "negative", "negative prompt", "avoid prompt", "исключить"}
+SIZE_PRESET_SETTING_KEYS = {"size", "resolution", "dimensions", "image_size", "output_size"}
+SIZE_PRESET_VALUES = (
+    "512*512",
+    "768*768",
+    "1024*1024",
+    "1536*1536",
+    "2048*2048",
+    "720*1280",
+    "768*1344",
+    "832*1216",
+    "1024*1792",
+    "1440*2560",
+    "2160*3840",
+    "1280*720",
+    "1344*768",
+    "1216*832",
+    "1792*1024",
+    "2560*1440",
+    "3840*2160",
+    "2560*1080",
+    "3440*1440",
+    "3840*1600",
+)
 
 SECTION_KEYS = {
     "text_to_image": "generation.text_to_image",
@@ -211,6 +235,68 @@ def _get_setting_options(options: Iterable[Any]) -> list[tuple[str, str]]:
     return normalized_options
 
 
+def normalize_dimension_value(value: Any) -> str:
+    """Normalize common WxH separators to the provider-friendly W*H value."""
+    return str(value).strip().lower().replace(" ", "").replace("×", "*").replace("x", "*")
+
+
+def parse_dimension_value(value: Any) -> tuple[int, int] | None:
+    normalized = normalize_dimension_value(value)
+    parts = normalized.split("*")
+    if len(parts) != 2 or not all(part.isdigit() for part in parts):
+        return None
+    width, height = (int(parts[0]), int(parts[1]))
+    if width <= 0 or height <= 0:
+        return None
+    return width, height
+
+
+def format_dimension_label(value: Any) -> str:
+    dimensions = parse_dimension_value(value)
+    if dimensions is None:
+        return str(value)
+    return f"{dimensions[0]}×{dimensions[1]}"
+
+
+def get_dimension_aspect_ratio(value: Any) -> str | None:
+    dimensions = parse_dimension_value(value)
+    if dimensions is None:
+        return None
+    width, height = dimensions
+    divisor = gcd(width, height)
+    return f"{width // divisor}:{height // divisor}"
+
+
+def is_size_preset_setting(setting_key: str, setting: Any) -> bool:
+    if setting_key not in SIZE_PRESET_SETTING_KEYS:
+        return False
+    options = _get_setting_options(getattr(setting, "options", ()) or ())
+    if not options:
+        return True
+    return any(parse_dimension_value(value) is not None for value, _ in options)
+
+
+def get_size_preset_options(setting: Any) -> list[tuple[str, str]]:
+    explicit_options = _get_setting_options(getattr(setting, "options", ()) or ())
+    source_options = explicit_options or [(value, value) for value in SIZE_PRESET_VALUES]
+    preset_options: list[tuple[str, str]] = []
+    seen_values: set[str] = set()
+    for value, label in source_options:
+        normalized_value = normalize_dimension_value(value)
+        if parse_dimension_value(normalized_value) is None or normalized_value in seen_values:
+            continue
+        seen_values.add(normalized_value)
+        preset_options.append((str(value).strip(), format_dimension_label(label)))
+    return preset_options
+
+
+def get_setting_options_for_ui(model: Any, setting_key: str) -> list[tuple[str, str]]:
+    setting = model.user_settings[setting_key]
+    if is_size_preset_setting(setting_key, setting):
+        return get_size_preset_options(setting)
+    return _get_setting_options(setting.options)
+
+
 def get_setting_display_title(setting_key: str, setting: Any, lang: str = DEFAULT_LANGUAGE) -> str:
     if setting_key in NEGATIVE_PROMPT_SETTING_KEYS:
         return t("settings.title.negative_prompt", lang)
@@ -258,7 +344,7 @@ def get_option_value_by_index(model: Any, setting_key: str, option_index: int) -
     setting = model.user_settings.get(setting_key)
     if setting is None:
         return None
-    options = _get_setting_options(setting.options)
+    options = get_setting_options_for_ui(model, setting_key)
     if option_index < 0 or option_index >= len(options):
         return None
     return options[option_index][0]
@@ -449,6 +535,8 @@ def build_model_settings_keyboard(model: Any, current_settings: dict[str, Any], 
     rows = []
     for setting_key, setting in get_model_setting_entries(model):
         current_value = str(current_settings.get(setting.key, setting.default))
+        if is_size_preset_setting(setting_key, setting):
+            current_value = format_dimension_label(current_value)
         setting_title = get_setting_display_title(setting_key, setting, lang)
         rows.append(
             [
@@ -465,19 +553,26 @@ def build_model_settings_keyboard(model: Any, current_settings: dict[str, Any], 
 
 def build_setting_options_keyboard(model: Any, setting_key: str, current_value: str, lang: str = DEFAULT_LANGUAGE) -> InlineKeyboardMarkup:
     """Построить клавиатуру вариантов значения настройки."""
-    setting = model.user_settings[setting_key]
     rows = []
     option_buttons = []
-    for option_index, (value, label) in enumerate(_get_setting_options(setting.options)):
-        marker = "✅ " if value == current_value else ""
-        display_label = get_setting_option_display_label(value, label, lang)
+    is_size_setting = is_size_preset_setting(setting_key, model.user_settings[setting_key])
+    normalized_current_value = normalize_dimension_value(current_value) if is_size_setting else current_value
+    for option_index, (value, label) in enumerate(get_setting_options_for_ui(model, setting_key)):
+        marker = "✅ " if normalize_dimension_value(value) == normalized_current_value else ""
+        display_label = label if is_size_setting else get_setting_option_display_label(value, label, lang)
         option_buttons.append(
             InlineKeyboardButton(
                 text=f"{marker}{display_label}",
                 callback_data=validate_callback_length(f"gen:set:{setting_key}:{option_index}"),
             )
         )
-    if setting_key == "num_generations":
+    if is_size_setting:
+        grouped_buttons: dict[str, list[InlineKeyboardButton]] = {}
+        for button, (value, _) in zip(option_buttons, get_setting_options_for_ui(model, setting_key)):
+            grouped_buttons.setdefault(get_dimension_aspect_ratio(value) or "other", []).append(button)
+        for buttons in grouped_buttons.values():
+            rows.extend(buttons[index:index + 2] for index in range(0, len(buttons), 2))
+    elif setting_key == "num_generations":
         rows.extend(option_buttons[index:index + 2] for index in range(0, len(option_buttons), 2))
     else:
         rows.extend([button] for button in option_buttons)

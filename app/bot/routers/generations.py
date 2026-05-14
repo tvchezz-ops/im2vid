@@ -35,7 +35,10 @@ from app.bot.keyboards import (
     build_provider_keyboard,
     build_setting_input_back_keyboard,
     build_setting_options_keyboard,
+    format_dimension_label,
+    get_setting_options_for_ui,
     get_main_menu_keyboard,
+    is_size_preset_setting,
     is_localized_button_text,
     PAGINATION_NOOP_CALLBACK,
     resolve_model_key_from_token,
@@ -356,10 +359,12 @@ def get_setting_display_title(setting_key: str, setting: Any, lang: str = DEFAUL
 def format_generation_settings_localized(model: GenerationModel, user_settings: dict[str, Any], lang: str = DEFAULT_LANGUAGE) -> str:
     if not model.user_settings:
         return "-"
-    return "\n".join(
-        f"- <b>{escape(get_setting_display_title(setting_key, setting, lang))}</b>: <code>{escape(str(user_settings.get(setting.key, setting.default)))}</code>"
-        for setting_key, setting in model.user_settings.items()
-    )
+    lines = []
+    for setting_key, setting in model.user_settings.items():
+        raw_value = str(user_settings.get(setting.key, setting.default))
+        display_value = format_dimension_label(raw_value) if is_size_preset_setting(setting_key, setting) else raw_value
+        lines.append(f"- <b>{escape(get_setting_display_title(setting_key, setting, lang))}</b>: <code>{escape(display_value)}</code>")
+    return "\n".join(lines)
 
 
 def get_generation_summary_setting_title(setting_key: str, setting: Any, lang: str = DEFAULT_LANGUAGE) -> str:
@@ -605,6 +610,8 @@ def build_setting_value_text(model: GenerationModel, setting_key: str, current_v
     """Собрать экран выбора конкретной настройки."""
     setting = model.user_settings[setting_key]
     setting_title = get_setting_display_title(setting_key, setting, lang)
+    if is_size_preset_setting(setting_key, setting):
+        return t("settings.image_size_preset_prompt", lang, value=escape(format_dimension_label(current_value)))
     if setting.type in FREEFORM_SETTING_TYPES:
         if setting.type in NUMERIC_SETTING_TYPES:
             prompt_text = (
@@ -3671,7 +3678,7 @@ async def open_setting_selector(callback: CallbackQuery, state: FSMContext, sess
         return
     setting = model.user_settings[setting_key]
     await state.update_data(current_setting_key=setting_key)
-    if setting.type in FREEFORM_SETTING_TYPES:
+    if setting.type in FREEFORM_SETTING_TYPES and not is_size_preset_setting(setting_key, setting):
         user_settings = get_model_state_settings(state_data, model_key)
         current_value = str(user_settings.get(setting_key, setting.default))
         next_state = GenerationStates.waiting_for_setting_number if setting.type in NUMERIC_SETTING_TYPES else GenerationStates.waiting_for_setting_text
@@ -3826,11 +3833,11 @@ async def choose_setting_value(callback: CallbackQuery, state: FSMContext, sessi
 
     user_settings = get_model_state_settings(state_data, model_key)
     option_index = int(option_index_raw)
-    options = model.user_settings[setting_key].options
+    options = get_setting_options_for_ui(model, setting_key)
     if option_index < 0 or option_index >= len(options):
         await callback.answer(build_user_error_message("generation.invalid_value", lang), show_alert=True)
         return
-    selected_value = str(options[option_index].value)
+    selected_value = str(options[option_index][0])
     user_settings[setting_key] = selected_value
     await state.update_data(user_settings=user_settings, current_setting_key=None)
     await state.set_state(GenerationStates.choosing_settings)

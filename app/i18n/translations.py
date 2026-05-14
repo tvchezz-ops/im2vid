@@ -4304,6 +4304,42 @@ _PROFILE_DELIVERY_TOGGLE_UX = {
 for language_code, catalog_updates in _PROFILE_DELIVERY_TOGGLE_UX.items():
     globals()[f"{language_code.upper()}_TRANSLATIONS"].update(catalog_updates)
 
+_SIZE_PRESET_SETTING_UX = {
+    "en": {
+        "settings.image_size_preset_prompt": "🖼 Image size\n\nCurrent size:\n{value}\n\nChoose one of the presets below.",
+    },
+    "ru": {
+        "settings.image_size_preset_prompt": "🖼 Размер изображения\n\nТекущий размер:\n{value}\n\nВыберите подходящий формат ниже.",
+    },
+    "es": {
+        "settings.image_size_preset_prompt": "🖼 Tamaño de imagen\n\nTamaño actual:\n{value}\n\nElige uno de los presets de abajo.",
+    },
+    "pt": {
+        "settings.image_size_preset_prompt": "🖼 Tamanho da imagem\n\nTamanho atual:\n{value}\n\nEscolha um dos presets abaixo.",
+    },
+    "fr": {
+        "settings.image_size_preset_prompt": "🖼 Taille de l'image\n\nTaille actuelle :\n{value}\n\nChoisissez un préréglage ci-dessous.",
+    },
+    "de": {
+        "settings.image_size_preset_prompt": "🖼 Bildgröße\n\nAktuelle Größe:\n{value}\n\nWähle unten eine Vorlage aus.",
+    },
+    "ar": {
+        "settings.image_size_preset_prompt": "🖼 حجم الصورة\n\nالحجم الحالي:\n{value}\n\nاختر أحد الإعدادات الجاهزة أدناه.",
+    },
+    "hi": {
+        "settings.image_size_preset_prompt": "🖼 इमेज साइज़\n\nमौजूदा साइज़:\n{value}\n\nनीचे दिए गए presets में से चुनें.",
+    },
+    "zh": {
+        "settings.image_size_preset_prompt": "🖼 图片尺寸\n\n当前尺寸：\n{value}\n\n从下方预设中选择。",
+    },
+    "id": {
+        "settings.image_size_preset_prompt": "🖼 Ukuran gambar\n\nUkuran saat ini:\n{value}\n\nPilih salah satu preset di bawah.",
+    },
+}
+
+for language_code, catalog_updates in _SIZE_PRESET_SETTING_UX.items():
+    globals()[f"{language_code.upper()}_TRANSLATIONS"].update(catalog_updates)
+
 TRANSLATIONS = {
     "en": EN_TRANSLATIONS,
     "ru": RU_TRANSLATIONS,

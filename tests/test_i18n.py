@@ -51,6 +51,7 @@ GENERATED_PARAMS_UI_KEYS = {
     "generation.send_audio_for_lipsync",
     "settings.enter_text_value",
     "settings.enter_number_value",
+    "settings.image_size_preset_prompt",
     "settings.clear_hint",
     "settings.current_value",
     "settings.parameter",

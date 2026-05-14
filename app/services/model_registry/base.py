@@ -3,6 +3,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field, replace
 from decimal import Decimal
+from math import gcd
 import re
 from typing import Any, Mapping, Optional
 from urllib.parse import urlparse
@@ -858,10 +859,66 @@ def _coerce_setting_options(raw_options: Any) -> tuple[SettingOption, ...]:
     return tuple(options)
 
 
+SIZE_PRESET_SETTING_KEYS = {"size", "resolution", "dimensions", "image_size", "output_size"}
+FALLBACK_SIZE_PRESETS = (
+    "512*512",
+    "768*768",
+    "1024*1024",
+    "1536*1536",
+    "2048*2048",
+    "720*1280",
+    "768*1344",
+    "832*1216",
+    "1024*1792",
+    "1440*2560",
+    "2160*3840",
+    "1280*720",
+    "1344*768",
+    "1216*832",
+    "1792*1024",
+    "2560*1440",
+    "3840*2160",
+    "2560*1080",
+    "3440*1440",
+    "3840*1600",
+)
+
+
+def _normalize_dimension_option(value: Any) -> str:
+    return str(value).strip().lower().replace(" ", "").replace("×", "*").replace("x", "*")
+
+
+def _dimension_aspect_ratio(value: Any) -> str | None:
+    normalized = _normalize_dimension_option(value)
+    parts = normalized.split("*")
+    if len(parts) != 2 or not all(part.isdigit() for part in parts):
+        return None
+    width, height = int(parts[0]), int(parts[1])
+    if width <= 0 or height <= 0:
+        return None
+    divisor = gcd(width, height)
+    return f"{width // divisor}:{height // divisor}"
+
+
+def _generated_size_options(key: str, data: Mapping[str, Any]) -> Any:
+    if key not in SIZE_PRESET_SETTING_KEYS:
+        return None
+    for source_key in ("allowed_sizes", "supported_resolutions"):
+        raw_options = data.get(source_key)
+        if raw_options:
+            return raw_options
+    aspect_ratios = data.get("aspect_ratios")
+    if aspect_ratios:
+        allowed_ratios = {str(value) for value in aspect_ratios}
+        return [value for value in FALLBACK_SIZE_PRESETS if _dimension_aspect_ratio(value) in allowed_ratios]
+    return None
+
+
 def generation_setting_from_generated(key: str, data: Mapping[str, Any]) -> GenerationSetting:
     """Build a GenerationSetting from generated Wavespeed docs metadata."""
     setting_type = _normalize_generated_setting_type(str(data.get("type", "text")))
-    options = _coerce_setting_options(data.get("options"))
+    raw_options = data.get("options") or _generated_size_options(key, data)
+    options = _coerce_setting_options(raw_options)
     if setting_type == "boolean" and not options:
         options = (
             SettingOption(value="false", label="Off"),

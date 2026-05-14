@@ -111,6 +111,8 @@ class FakeCallback:
 
 
 TEXT_SETTING_MODEL_KEY = "test_text_setting_model"
+SIZE_SETTING_MODEL_KEY = "test_size_setting_model"
+LIMITED_SIZE_SETTING_MODEL_KEY = "test_limited_size_setting_model"
 AUDIO_NO_LIMIT_MODEL_KEY = "test_audio_no_limit_model"
 
 
@@ -178,6 +180,50 @@ def install_text_setting_model() -> None:
 
 def remove_text_setting_model() -> None:
     MODEL_REGISTRY.pop(TEXT_SETTING_MODEL_KEY, None)
+
+
+def install_size_setting_model(*, limited: bool = False) -> str:
+    model_key = LIMITED_SIZE_SETTING_MODEL_KEY if limited else SIZE_SETTING_MODEL_KEY
+    options = (
+        (
+            SettingOption(value="512*512", label="512*512"),
+            SettingOption(value="1024*1024", label="1024*1024"),
+        )
+        if limited
+        else ()
+    )
+    MODEL_REGISTRY[model_key] = GenerationModel(
+        key=model_key,
+        title="Test Size Setting Model",
+        provider="google",
+        generation_type="text_to_image",
+        endpoint="https://api.wavespeed.ai/api/v3/google/test-size-setting-model",
+        docs_url="https://wavespeed.ai/docs/docs-api/google/test-size-setting-model",
+        description="Test model with size setting",
+        max_images=0,
+        requires_prompt=True,
+        requires_image=False,
+        requires_video=False,
+        requires_audio=False,
+        outputs="image",
+        required_payload_fields=("prompt",),
+        allowed_payload_fields=("prompt", "size"),
+        user_settings={
+            "size": GenerationSetting(
+                key="size",
+                title="Size",
+                type="string",
+                default="1024*1024",
+                options=options,
+            ),
+        },
+    )
+    return model_key
+
+
+def remove_size_setting_models() -> None:
+    MODEL_REGISTRY.pop(SIZE_SETTING_MODEL_KEY, None)
+    MODEL_REGISTRY.pop(LIMITED_SIZE_SETTING_MODEL_KEY, None)
 
 
 def install_audio_no_limit_model() -> None:
@@ -610,6 +656,75 @@ async def test_open_setting_selector_for_text_setting_switches_to_text_input() -
         assert message.edit_markups[-1].inline_keyboard[0][0].callback_data == "gen:back:settings"
     finally:
         remove_text_setting_model()
+
+
+@pytest.mark.asyncio
+async def test_open_size_setting_selector_uses_preset_keyboard_not_text_input() -> None:
+    model_key = install_size_setting_model()
+    try:
+        state = FakeState({"model_key": model_key, "user_settings": {"size": "1024*1024"}})
+        message = FakeMessage(chat_id=463)
+        callback = FakeCallback(user_id=463, message=message, data="gen:setting:size")
+
+        await generations.open_setting_selector(callback, state)
+
+        assert state.state == GenerationStates.choosing_setting_value
+        assert state.data["current_setting_key"] == "size"
+        assert message.edits[-1] == "🖼 Размер изображения\n\nТекущий размер:\n1024×1024\n\nВыберите подходящий формат ниже."
+        assert "Отправьте новое значение" not in message.edits[-1]
+        button_texts = [button.text for row in message.edit_markups[-1].inline_keyboard for button in row]
+        assert "3840×2160" in button_texts
+        assert "2160×3840" in button_texts
+        assert f"⬅️ {t('common.back_to_settings', 'ru')}" in button_texts
+    finally:
+        remove_size_setting_models()
+
+
+@pytest.mark.asyncio
+async def test_size_setting_callback_saves_preset_and_returns_to_settings() -> None:
+    model_key = install_size_setting_model()
+    try:
+        state = FakeState({"model_key": model_key, "user_settings": {"size": "1024*1024"}})
+        message = FakeMessage(chat_id=464)
+        open_callback = FakeCallback(user_id=464, message=message, data="gen:setting:size")
+
+        await generations.open_setting_selector(open_callback, state)
+
+        target_callback_data = next(
+            button.callback_data
+            for row in message.edit_markups[-1].inline_keyboard
+            for button in row
+            if button.text == "3840×2160"
+        )
+        choose_callback = FakeCallback(user_id=464, message=message, data=target_callback_data)
+        await generations.choose_setting_value(choose_callback, state)
+
+        assert state.state == GenerationStates.choosing_settings
+        assert state.data["current_setting_key"] is None
+        assert state.data["user_settings"]["size"] == "3840*2160"
+        settings_button_texts = [button.text for row in message.edit_markups[-1].inline_keyboard for button in row]
+        assert "Size: 3840×2160" in settings_button_texts
+    finally:
+        remove_size_setting_models()
+
+
+@pytest.mark.asyncio
+async def test_size_setting_hides_unsupported_presets() -> None:
+    model_key = install_size_setting_model(limited=True)
+    try:
+        state = FakeState({"model_key": model_key, "user_settings": {"size": "512*512"}})
+        message = FakeMessage(chat_id=465)
+        callback = FakeCallback(user_id=465, message=message, data="gen:setting:size")
+
+        await generations.open_setting_selector(callback, state)
+
+        button_texts = [button.text for row in message.edit_markups[-1].inline_keyboard for button in row]
+        assert "✅ 512×512" in button_texts
+        assert "1024×1024" in button_texts
+        assert "3840×2160" not in button_texts
+        assert "2160×3840" not in button_texts
+    finally:
+        remove_size_setting_models()
 
 
 @pytest.mark.asyncio

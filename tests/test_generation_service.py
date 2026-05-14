@@ -58,6 +58,7 @@ from app.services.model_registry.grok import GROK_MODEL_SLUGS, PROVIDER_MODELS a
 from app.services.model_registry.kling import KLING_MODEL_SLUGS, PROVIDER_MODELS as KLING_MODELS
 from app.services.model_registry.minimax import MINIMAX_MODEL_SLUGS, PROVIDER_MODELS as MINIMAX_MODELS
 from app.services.model_registry.openai import OPENAI_MODEL_SLUGS, PROVIDER_MODELS as OPENAI_MODELS
+from app.services.model_registry.base import generation_setting_from_generated
 from app.services.model_registry.wavespeed_ai import WAVESPEED_AI_MODEL_SLUGS, PROVIDER_MODELS as WAVESPEED_AI_MODELS
 from app.services.model_registry.generated_params import GENERATED_MODEL_PARAMS
 from app.services.model_registry.base import apply_generated_model_params
@@ -158,6 +159,33 @@ def test_build_payload_invalid_setting_value_raises_validation_error() -> None:
             "Test prompt for invalid setting",
             {"output_format": "bad-format"},
         )
+
+
+def test_generated_size_setting_uses_allowed_sizes_metadata() -> None:
+    setting = generation_setting_from_generated(
+        "size",
+        {
+            "type": "string",
+            "default": "1024*1024",
+            "allowed_sizes": ["512x512", "3840×2160"],
+        },
+    )
+
+    assert [option.value for option in setting.options] == ["512x512", "3840×2160"]
+
+
+def test_generated_size_setting_uses_aspect_ratio_metadata() -> None:
+    setting = generation_setting_from_generated(
+        "output_size",
+        {
+            "type": "string",
+            "aspect_ratios": ["16:9"],
+        },
+    )
+
+    values = [option.value for option in setting.options]
+    assert "3840*2160" in values
+    assert "2160*3840" not in values
 
 
 def test_build_payload_non_string_setting_value_raises_validation_error() -> None:
