@@ -33,6 +33,8 @@ _TITLE_SUFFIX_PATTERNS = (
     r"\bvideo\s+extend\b",
     r"\bmotion\s+control\b",
     r"\baudio\s+to\s+video\b",
+    r"\bspeech\s+to\s+video\b",
+    r"\bvoice\s+to\s+video\b",
     r"\bvideo\s+to\s+audio\b",
     r"\beffects?\b",
 )
@@ -82,6 +84,8 @@ def _model_kind_label(model: Any, lang: str) -> str:
     generation_type = str(getattr(model, "generation_type", "") or "")
     if generation_type == "image_to_image":
         generation_type = "image_edit"
+    if generation_type == "audio_to_video":
+        generation_type = "lipsync"
     return _translation_or_empty(f"generation.section_title.{generation_type}", lang)
 
 

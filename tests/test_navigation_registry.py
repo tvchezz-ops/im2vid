@@ -292,6 +292,9 @@ def test_categories_show_only_enabled_models() -> None:
         if generation_type == "image_to_image":
             assert models
             assert "gen:section:image_to_image" not in section_callbacks
+        elif generation_type == "audio_to_video":
+            assert models
+            assert "gen:section:audio_to_video" not in section_callbacks
         elif generation_type == "video_to_audio":
             assert models == []
             assert "gen:section:video_to_audio" not in section_callbacks

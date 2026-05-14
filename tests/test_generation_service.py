@@ -932,6 +932,13 @@ def test_kling_specialty_models_are_in_expected_categories() -> None:
 
 
 def test_wavespeed_ai_wan_2_2_speech_to_video_accepts_audio_input() -> None:
+    model = get_generation_model("wan_2_2_speech_to_video")
+
+    assert model.generation_type == "audio_to_video"
+    assert model.input_media_field == "image"
+    assert model.requires_audio is True
+    assert model.requires_prompt is False
+
     payload = build_payload(
         "wan_2_2_speech_to_video",
         ["https://example.com/avatar.png"],
@@ -1522,7 +1529,6 @@ def test_list_generation_types_returns_only_types_present_in_registry() -> None:
         "video_edit",
         "video_extend",
         "lipsync",
-        "audio_to_video",
     ]
 
 
@@ -1546,6 +1552,10 @@ def test_list_models_by_type_returns_ui_category_models() -> None:
     assert {"google_nano_banana_pro_edit_ultra", "bytedance_seedream_v4_5_edit", "wan_ai_image_upscaler"}.issubset(model_keys)
     assert list_models_by_type("image_to_image") == models
     assert list_models_by_type("video_to_audio") == []
+    assert {"kwaivgi_kling_lipsync_audio_to_video", "wan_2_2_speech_to_video"}.issubset(
+        {model.key for model in list_models_by_type("lipsync")}
+    )
+    assert "wan_2_2_speech_to_video" in {model.key for model in list_models_by_type("audio_to_video")}
     assert {model.key for model in list_models_by_type("text_to_image")} >= {
         "alibaba_wan_2_6_text_to_image",
         "bytedance_seedream_v3_1",

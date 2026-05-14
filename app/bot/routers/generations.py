@@ -278,7 +278,7 @@ GENERATION_TYPE_LABELS = {
     "lipsync": "🗣 Lipsync",
     "motion_control": "🎚 Motion Control",
     "avatar": "👥 Avatar",
-    "audio_to_video": "🎙 Audio → Video",
+    "audio_to_video": "🗣 Lipsync",
     "effects": "✨ Effects",
     ALL_MODELS_CATEGORY: "📚 All models",
     LEGACY_ALL_MODELS_CATEGORY: "📚 All models",

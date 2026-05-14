@@ -41,6 +41,8 @@ UI_HIDDEN_GENERATION_TYPES = frozenset({"video_to_audio"})
 UI_GENERATION_TYPE_GROUPS = {
     "image_edit": frozenset({"image_edit", "image_to_image"}),
     "image_to_image": frozenset({"image_edit", "image_to_image"}),
+    "lipsync": frozenset({"lipsync", "audio_to_video"}),
+    "audio_to_video": frozenset({"lipsync", "audio_to_video"}),
 }
 
 
@@ -401,7 +403,7 @@ def list_generation_types() -> list[str]:
         generation_type
         for generation_type in GENERATION_TYPES
         if generation_type not in UI_HIDDEN_GENERATION_TYPES
-        if generation_type not in {"image_to_image"}
+        if generation_type not in {"image_to_image", "audio_to_video"}
         if _filter_models(generation_type=generation_type)
     ]
 

@@ -74,6 +74,7 @@ def test_build_generation_sections_keyboard_uses_expected_callback_prefix() -> N
     assert "gen:section:video_extend" in callback_data
     assert "gen:section:lipsync" in callback_data
     assert "gen:section:image_to_image" not in callback_data
+    assert "gen:section:audio_to_video" not in callback_data
     assert "gen:section:video_to_audio" not in callback_data
     assert "gen:section:effects" not in callback_data
     assert all_button.callback_data == "gen:all"
@@ -85,6 +86,8 @@ def test_generation_sections_hide_removed_category_labels() -> None:
 
     assert all("Image to Image" not in text for text in button_texts)
     assert all("Изображение в изображение" not in text for text in button_texts)
+    assert all("Audio to Video" not in text for text in button_texts)
+    assert all("Аудио в видео" not in text for text in button_texts)
     assert all("Video to Audio" not in text for text in button_texts)
     assert all("Видео в аудио" not in text for text in button_texts)
 
@@ -152,8 +155,10 @@ def test_category_model_buttons_use_short_titles_without_suffixes() -> None:
 def test_provider_model_buttons_keep_category_suffixes() -> None:
     alibaba_models = list_models_by_provider("alibaba")
     google_models = list_models_by_provider("google")
+    wavespeed_models = list_models_by_provider("wavespeed_ai")
     alibaba_index = next(index for index, model in enumerate(alibaba_models) if model.key == "alibaba_wan_2_7_text_to_image_pro")
     google_index = next(index for index, model in enumerate(google_models) if model.key == "google_imagen4")
+    wavespeed_index = next(index for index, model in enumerate(wavespeed_models) if model.key == "wan_2_2_speech_to_video")
 
     alibaba_keyboard = build_models_keyboard(
         alibaba_models,
@@ -169,11 +174,20 @@ def test_provider_model_buttons_keep_category_suffixes() -> None:
         page=google_index // 8,
         title_context="provider_models_list",
     )
+    wavespeed_keyboard = build_models_keyboard(
+        wavespeed_models,
+        "gen:back:providers",
+        "ru",
+        page=wavespeed_index // 8,
+        title_context="provider_models_list",
+    )
     alibaba_texts = [button.text for button in _iter_buttons(alibaba_keyboard)]
     google_texts = [button.text for button in _iter_buttons(google_keyboard)]
+    wavespeed_texts = [button.text for button in _iter_buttons(wavespeed_keyboard)]
 
     assert any("· Текст в изображение" in text for text in alibaba_texts)
     assert any("· Текст в изображение" in text for text in google_texts)
+    assert any("Wan 2.2" in text and "· Липсинк" in text for text in wavespeed_texts)
 
 
 def test_model_button_formatting_does_not_mutate_registry_title() -> None:
@@ -210,6 +224,23 @@ def test_video_to_audio_models_are_hidden_from_user_lists() -> None:
     assert "kwaivgi_kling_video_to_audio" not in {model.key for model in list_generation_models()}
     assert "kwaivgi_kling_video_to_audio" not in {model.key for model in list_models_by_provider("kling")}
     assert list_models_by_type("video_to_audio") == []
+
+
+def test_audio_to_video_models_are_user_visible_under_lipsync() -> None:
+    lipsync_models = list_models_by_type("lipsync")
+    audio_to_video_models = list_models_by_type("audio_to_video")
+    lipsync_keys = {model.key for model in lipsync_models}
+
+    assert "kwaivgi_kling_lipsync_audio_to_video" in lipsync_keys
+    assert "wan_2_2_speech_to_video" in lipsync_keys
+    assert "wan_2_2_speech_to_video" in {model.key for model in list_generation_models()}
+    assert "wan_2_2_speech_to_video" in {model.key for model in audio_to_video_models}
+
+    keyboard = build_models_keyboard(lipsync_models, "gen:back:sections", "ru")
+    button_texts = [button.text for button in _iter_buttons(keyboard)]
+
+    assert all("Аудио в видео" not in text for text in button_texts)
+    assert all("Audio to Video" not in text for text in button_texts)
 
 
 def test_image_upscaler_settings_keyboard_uses_localized_labels() -> None:
