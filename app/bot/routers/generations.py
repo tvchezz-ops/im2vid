@@ -664,6 +664,15 @@ def build_confirmation_text(
     )
 
 
+def build_generation_started_message(model_title: str, count: int, lang: str = DEFAULT_LANGUAGE) -> str:
+    """Build launch message with the refund reassurance embedded once."""
+    started_text = t("generation.started_count", lang, model=escape(model_title), count=count)
+    refund_notice = t("generation.refund_notice", lang)
+    if refund_notice in started_text:
+        return started_text
+    return f"{started_text}\n\n{refund_notice}"
+
+
 def build_partial_generation_failed_message(lang: str = DEFAULT_LANGUAGE) -> str:
     return build_user_error_message(ErrorCode.E007_WAVESPEED_FAILED, lang)
 
@@ -4753,7 +4762,7 @@ async def confirm_generation(callback: CallbackQuery, state: FSMContext, session
         await state.clear()
 
         await callback.message.edit_text(
-            t("generation.started_count", lang, model=escape(model_title), count=num_generations),
+            build_generation_started_message(str(model_title or model.title), num_generations, lang),
             parse_mode="HTML",
         )
         await callback.message.answer(

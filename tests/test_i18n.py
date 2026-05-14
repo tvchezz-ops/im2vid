@@ -84,6 +84,7 @@ FLOW_I18N_KEYS = {
     "generation.waiting_for_audio_error",
     "generation.started_count",
     "generation.started_background",
+    "generation.refund_notice",
     "generation.model_label",
     "generation.prompt_request",
     "generation.back_to_settings",

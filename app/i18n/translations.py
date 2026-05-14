@@ -4340,6 +4340,43 @@ _SIZE_PRESET_SETTING_UX = {
 for language_code, catalog_updates in _SIZE_PRESET_SETTING_UX.items():
     globals()[f"{language_code.upper()}_TRANSLATIONS"].update(catalog_updates)
 
+_GENERATION_REFUND_NOTICE_UX = {
+    "en": {
+        "generation.refund_notice": "💳 If the generation fails or the result is not delivered, your credits will be refunded automatically.",
+    },
+    "ru": {
+        "generation.refund_notice": "💳 Если генерация не завершится или файл не придёт, кредиты автоматически вернутся на баланс.",
+    },
+    "es": {
+        "generation.refund_notice": "💳 Si la generación falla o el resultado no se entrega, los créditos se devolverán automáticamente.",
+    },
+    "pt": {
+        "generation.refund_notice": "💳 Se a geração falhar ou o resultado não for entregue, os créditos serão devolvidos automaticamente.",
+    },
+    "fr": {
+        "generation.refund_notice": "💳 Si la génération échoue ou si le résultat n'est pas livré, les crédits seront remboursés automatiquement.",
+    },
+    "de": {
+        "generation.refund_notice": "💳 Wenn die Generierung fehlschlägt oder das Ergebnis nicht zugestellt wird, werden deine Credits automatisch erstattet.",
+    },
+    "ar": {
+        "generation.refund_notice": "💳 إذا فشل الإنشاء أو لم يصل الناتج، فستُعاد الأرصدة تلقائياً إلى رصيدك.",
+    },
+    "hi": {
+        "generation.refund_notice": "💳 अगर जनरेशन विफल होती है या परिणाम नहीं पहुँचता, तो क्रेडिट अपने-आप बैलेंस में वापस आ जाएंगे.",
+    },
+    "zh": {
+        "generation.refund_notice": "💳 如果生成失败或结果未送达，点数会自动退回余额。",
+    },
+    "id": {
+        "generation.refund_notice": "💳 Jika generasi gagal atau hasil tidak terkirim, kredit akan otomatis dikembalikan ke saldo.",
+    },
+}
+
+for language_code, catalog_updates in _GENERATION_REFUND_NOTICE_UX.items():
+    globals()[f"{language_code.upper()}_TRANSLATIONS"].update(catalog_updates)
+    FLOW_I18N_TRANSLATIONS[language_code].update(catalog_updates)
+
 TRANSLATIONS = {
     "en": EN_TRANSLATIONS,
     "ru": RU_TRANSLATIONS,

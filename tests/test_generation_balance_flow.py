@@ -466,6 +466,7 @@ async def test_confirm_generation_allows_four_generations_with_existing_active_r
         assert menu_state.state == GenerationStates.choosing_generation_type
         assert f"{t('generation.choose_type', 'ru')}:" in menu_message.answers[-1]
         assert state.state is None
+        assert t("generation.refund_notice", "ru") in callback.message.edits[-1]
         assert callback.message.answers[-1] == t("generation.started", "ru")
         assert len(submit_calls) == 4
         assert len(batch_calls["generation_predictions"]) == 4
@@ -2802,21 +2803,40 @@ def test_build_confirmation_text_shows_num_generations_and_total_cost() -> None:
 
 
 def test_generation_started_message_includes_model_and_quantity() -> None:
-    text = t("generation.started_count", "en", model="Kling Pro", count=2)
+    text = generations.build_generation_started_message("Kling Pro", 2, "en")
 
     assert "Generation started" in text
     assert "Model: Kling Pro" in text
     assert "Quantity: 2" in text
     assert "Results will appear here automatically." in text
+    assert t("generation.refund_notice", "en") in text
+    assert text.count(t("generation.refund_notice", "en")) == 1
 
 
 def test_generation_started_message_is_localized_ru() -> None:
-    text = t("generation.started_count", "ru", model="Kling Pro", count=2)
+    text = generations.build_generation_started_message("Kling Pro", 2, "ru")
 
     assert "Генерация запущена" in text
     assert "Модель: Kling Pro" in text
     assert "Количество: 2" in text
+    assert t("generation.refund_notice", "ru") in text
     assert "Results will appear" not in text
+
+
+def test_generation_started_message_does_not_duplicate_refund_notice(monkeypatch) -> None:
+    started_text = f"Started\n\n{t('generation.refund_notice', 'en')}"
+
+    def fake_t(key: str, lang: str = "en", **kwargs):
+        if key == "generation.started_count":
+            return started_text
+        return t(key, lang, **kwargs)
+
+    monkeypatch.setattr(generations, "t", fake_t)
+
+    text = generations.build_generation_started_message("Kling Pro", 2, "en")
+
+    assert text == started_text
+    assert text.count(t("generation.refund_notice", "en")) == 1
 
 
 def test_build_generation_summary_message_formats_visible_settings_and_escapes_html() -> None:
@@ -2892,6 +2912,7 @@ def test_build_generation_summary_message_formats_visible_settings_and_escapes_h
     assert "raw-api-key" not in text
     assert t("generation.summary.results", "en", completed=4, expected=4) in text
     assert t("generation.summary.credits", "en", credits=24) in text
+    assert t("generation.refund_notice", "en") not in text
 
 
 def test_generation_summary_message_uses_ru_negative_prompt_label() -> None:
@@ -3132,6 +3153,7 @@ async def test_num_generations_ten_starts_ten_submit_requests(session_factory, m
         assert len(batch_calls["submit_calls"]) == 10
         assert batch_calls["generation_costs"] == {generation_id: 17 for generation_id, _ in batch_calls["generation_predictions"]}
         assert await get_user_balance(session, 452) == 30
+        assert t("generation.refund_notice", "ru") in callback.message.edits[-1]
         assert callback.message.answers[-1] == t("generation.started", "ru")
 
 
