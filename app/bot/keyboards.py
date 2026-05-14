@@ -24,28 +24,26 @@ PAGINATION_NOOP_CALLBACK = "gen:page:noop"
 NEGATIVE_PROMPT_SETTING_KEYS = {"exclude", "excluded_prompt", "negative", "negative_prompt", "avoid_prompt"}
 NEGATIVE_PROMPT_LEGACY_TITLES = {"exclude", "excluded prompt", "negative", "negative prompt", "avoid prompt", "исключить"}
 SIZE_PRESET_SETTING_KEYS = {"size", "resolution", "dimensions", "image_size", "output_size"}
-SIZE_PRESET_VALUES = (
-    "512*512",
-    "768*768",
-    "1024*1024",
-    "1536*1536",
-    "2048*2048",
-    "720*1280",
-    "1440*2560",
-    "2160*3840",
-    "768*1344",
-    "1024*1792",
-    "832*1216",
-    "1280*720",
-    "2560*1440",
-    "3840*2160",
-    "1344*768",
-    "1792*1024",
-    "1216*832",
-    "2560*1080",
-    "3440*1440",
-    "3840*1600",
+IMAGE_SIZE_ASPECT_RATIOS = (
+    ("1:1", "1_1", "□"),
+    ("16:9", "16_9", "▭"),
+    ("9:16", "9_16", "▯"),
+    ("4:3", "4_3", "▭"),
+    ("3:4", "3_4", "▯"),
+    ("3:2", "3_2", "▭"),
+    ("2:3", "2_3", "▯"),
 )
+IMAGE_SIZE_RATIO_KEYS = {ratio_key: ratio for ratio, ratio_key, _ in IMAGE_SIZE_ASPECT_RATIOS}
+SIZE_PRESET_VALUES_BY_RATIO = {
+    "1:1": ("512*512", "768*768", "1024*1024", "1536*1536", "2048*2048", "3072*3072", "4096*4096", "6144*6144", "8192*8192"),
+    "16:9": ("1024*576", "1280*720", "1536*864", "1920*1080", "2560*1440", "3840*2160", "5120*2880", "7680*4320", "8192*4608"),
+    "9:16": ("576*1024", "720*1280", "864*1536", "1080*1920", "1440*2560", "2160*3840", "2880*5120", "4320*7680", "4608*8192"),
+    "4:3": ("768*576", "1024*768", "1280*960", "1600*1200", "2048*1536", "3200*2400", "4096*3072", "6144*4608", "8192*6144"),
+    "3:4": ("576*768", "768*1024", "960*1280", "1200*1600", "1536*2048", "2400*3200", "3072*4096", "4608*6144", "6144*8192"),
+    "3:2": ("768*512", "1152*768", "1536*1024", "1920*1280", "2400*1600", "3000*2000", "3840*2560", "6144*4096", "8192*5461"),
+    "2:3": ("512*768", "768*1152", "1024*1536", "1280*1920", "1600*2400", "2000*3000", "2560*3840", "4096*6144", "5461*8192"),
+}
+SIZE_PRESET_VALUES = tuple(value for values in SIZE_PRESET_VALUES_BY_RATIO.values() for value in values)
 
 SECTION_KEYS = {
     "text_to_image": "generation.text_to_image",
@@ -250,6 +248,17 @@ def parse_dimension_value(value: Any) -> tuple[int, int] | None:
     return width, height
 
 
+def get_dimension_aspect_ratio(value: Any) -> str | None:
+    dimensions = parse_dimension_value(value)
+    if dimensions is None:
+        return None
+    width, height = dimensions
+    from math import gcd
+
+    divisor = gcd(width, height)
+    return f"{width // divisor}:{height // divisor}"
+
+
 def format_dimension_label(value: Any) -> str:
     dimensions = parse_dimension_value(value)
     if dimensions is None:
@@ -266,6 +275,62 @@ def is_size_preset_setting(setting_key: str, setting: Any) -> bool:
     return any(parse_dimension_value(value) is not None for value, _ in options)
 
 
+def _coerce_dimension_limit(value: Any) -> int | None:
+    if value is None:
+        return None
+    text = str(value).strip().lower()
+    if not text:
+        return None
+    dimensions = parse_dimension_value(text)
+    if dimensions is not None:
+        return max(dimensions)
+    if text.endswith("k") and text[:-1].replace(".", "", 1).isdigit():
+        return int(float(text[:-1]) * 1024)
+    digits = "".join(char for char in text if char.isdigit())
+    if not digits:
+        return None
+    return int(digits)
+
+
+def _get_allowed_aspect_ratios(model: Any, setting: Any) -> set[str] | None:
+    for attribute in ("aspect_ratios", "allowed_aspect_ratios", "supported_aspect_ratios"):
+        raw_values = getattr(setting, attribute, None)
+        if raw_values:
+            return {str(value) for value in raw_values}
+    aspect_ratio_setting = getattr(model, "user_settings", {}).get("aspect_ratio")
+    if aspect_ratio_setting is not None:
+        options = _get_setting_options(getattr(aspect_ratio_setting, "options", ()) or ())
+        if options:
+            return {value for value, _ in options}
+    return None
+
+
+def _dimension_matches_limits(value: Any, setting: Any) -> bool:
+    dimensions = parse_dimension_value(value)
+    if dimensions is None:
+        return False
+    width, height = dimensions
+    min_width = _coerce_dimension_limit(getattr(setting, "min_width", None))
+    max_width = _coerce_dimension_limit(getattr(setting, "max_width", None))
+    min_height = _coerce_dimension_limit(getattr(setting, "min_height", None))
+    max_height = _coerce_dimension_limit(getattr(setting, "max_height", None))
+    min_resolution = _coerce_dimension_limit(getattr(setting, "min_resolution", None))
+    max_resolution = _coerce_dimension_limit(getattr(setting, "max_resolution", None))
+    if min_width is not None and width < min_width:
+        return False
+    if max_width is not None and width > max_width:
+        return False
+    if min_height is not None and height < min_height:
+        return False
+    if max_height is not None and height > max_height:
+        return False
+    if min_resolution is not None and max(width, height) < min_resolution:
+        return False
+    if max_resolution is not None and max(width, height) > max_resolution:
+        return False
+    return True
+
+
 def get_size_preset_options(setting: Any) -> list[tuple[str, str]]:
     explicit_options = _get_setting_options(getattr(setting, "options", ()) or ())
     source_options = explicit_options or [(value, value) for value in SIZE_PRESET_VALUES]
@@ -280,10 +345,51 @@ def get_size_preset_options(setting: Any) -> list[tuple[str, str]]:
     return preset_options
 
 
+def get_image_size_options_for_ui(model: Any, setting_key: str) -> list[tuple[str, str]]:
+    setting = model.user_settings[setting_key]
+    explicit_options = _get_setting_options(getattr(setting, "options", ()) or ())
+    source_options = explicit_options or [(value, value) for value in SIZE_PRESET_VALUES]
+    allowed_ratios = _get_allowed_aspect_ratios(model, setting)
+    options: list[tuple[str, str]] = []
+    seen_values: set[str] = set()
+    for value, label in source_options:
+        normalized_value = normalize_dimension_value(value)
+        ratio = get_dimension_aspect_ratio(normalized_value)
+        if ratio is None or normalized_value in seen_values:
+            continue
+        if allowed_ratios is not None and ratio not in allowed_ratios:
+            continue
+        if not explicit_options and not _dimension_matches_limits(normalized_value, setting):
+            continue
+        seen_values.add(normalized_value)
+        options.append((str(value).strip(), format_dimension_label(label)))
+    return options
+
+
+def get_image_size_aspect_ratios_for_ui(model: Any, setting_key: str) -> list[tuple[str, str, str]]:
+    available_ratios = {get_dimension_aspect_ratio(value) for value, _ in get_image_size_options_for_ui(model, setting_key)}
+    return [(ratio, ratio_key, icon) for ratio, ratio_key, icon in IMAGE_SIZE_ASPECT_RATIOS if ratio in available_ratios]
+
+
+def get_image_size_options_for_ratio(model: Any, setting_key: str, ratio_key: str) -> list[tuple[str, str]]:
+    ratio = IMAGE_SIZE_RATIO_KEYS.get(ratio_key)
+    if ratio is None:
+        return []
+    return [(value, label) for value, label in get_image_size_options_for_ui(model, setting_key) if get_dimension_aspect_ratio(value) == ratio]
+
+
+def resolve_image_size_option_value(model: Any, setting_key: str, callback_value: str) -> str | None:
+    normalized_callback_value = normalize_dimension_value(callback_value)
+    for value, _ in get_image_size_options_for_ui(model, setting_key):
+        if normalize_dimension_value(value) == normalized_callback_value:
+            return value
+    return None
+
+
 def get_setting_options_for_ui(model: Any, setting_key: str) -> list[tuple[str, str]]:
     setting = model.user_settings[setting_key]
     if is_size_preset_setting(setting_key, setting):
-        return get_size_preset_options(setting)
+        return get_image_size_options_for_ui(model, setting_key)
     return _get_setting_options(setting.options)
 
 
@@ -546,6 +652,8 @@ def build_setting_options_keyboard(model: Any, setting_key: str, current_value: 
     rows = []
     option_buttons = []
     is_size_setting = is_size_preset_setting(setting_key, model.user_settings[setting_key])
+    if is_size_setting:
+        return build_image_size_aspect_ratio_keyboard(model, setting_key, lang)
     normalized_current_value = normalize_dimension_value(current_value) if is_size_setting else current_value
     for option_index, (value, label) in enumerate(get_setting_options_for_ui(model, setting_key)):
         marker = "✅ " if normalize_dimension_value(value) == normalized_current_value else ""
@@ -556,12 +664,67 @@ def build_setting_options_keyboard(model: Any, setting_key: str, current_value: 
                 callback_data=validate_callback_length(f"gen:set:{setting_key}:{option_index}"),
             )
         )
-    if is_size_setting:
-        rows.extend(option_buttons[index:index + 2] for index in range(0, len(option_buttons), 2))
-    elif setting_key == "num_generations":
+    if setting_key == "num_generations":
         rows.extend(option_buttons[index:index + 2] for index in range(0, len(option_buttons), 2))
     else:
         rows.extend([button] for button in option_buttons)
+    rows.append([InlineKeyboardButton(text=get_button_text("common.back_to_settings", lang), callback_data="gen:back:settings")])
+    return InlineKeyboardMarkup(inline_keyboard=rows)
+
+
+def build_image_size_aspect_ratio_text(current_value: str, lang: str = DEFAULT_LANGUAGE) -> str:
+    return (
+        f"🖼 {t('settings.image_size_title', lang)}\n\n"
+        f"{t('settings.current_size', lang)}:\n"
+        f"{format_dimension_label(current_value)}\n\n"
+        f"{t('settings.choose_aspect_ratio', lang)}."
+    )
+
+
+def build_image_size_resolution_text(current_value: str, ratio: str, lang: str = DEFAULT_LANGUAGE) -> str:
+    return (
+        f"🖼 {t('settings.image_size_title', lang)}\n\n"
+        f"{t('settings.aspect_ratio_label', lang)}: {ratio}\n"
+        f"{t('settings.current_size', lang)}:\n"
+        f"{format_dimension_label(current_value)}\n\n"
+        f"{t('settings.choose_resolution', lang)}."
+    )
+
+
+def build_image_size_aspect_ratio_keyboard(model: Any, setting_key: str, lang: str = DEFAULT_LANGUAGE) -> InlineKeyboardMarkup:
+    buttons = [
+        InlineKeyboardButton(
+            text=f"{icon} {ratio}",
+            callback_data=validate_callback_length(f"gen:size_ar:{setting_key}:{ratio_key}"),
+        )
+        for ratio, ratio_key, icon in get_image_size_aspect_ratios_for_ui(model, setting_key)
+    ]
+    rows = [buttons[index:index + 2] for index in range(0, len(buttons), 2)]
+    rows.append([InlineKeyboardButton(text=get_button_text("common.back_to_settings", lang), callback_data="gen:back:settings")])
+    return InlineKeyboardMarkup(inline_keyboard=rows)
+
+
+def build_image_size_resolution_keyboard(
+    model: Any,
+    setting_key: str,
+    current_value: str,
+    ratio_key: str,
+    lang: str = DEFAULT_LANGUAGE,
+) -> InlineKeyboardMarkup:
+    normalized_current_value = normalize_dimension_value(current_value)
+    buttons = []
+    for value, label in get_image_size_options_for_ratio(model, setting_key, ratio_key):
+        marker = "✅ " if normalize_dimension_value(value) == normalized_current_value else ""
+        dimensions = parse_dimension_value(value)
+        callback_value = f"{dimensions[0]}x{dimensions[1]}" if dimensions else normalize_dimension_value(value).replace("*", "x")
+        buttons.append(
+            InlineKeyboardButton(
+                text=f"{marker}{label}",
+                callback_data=validate_callback_length(f"gen:size_set:{setting_key}:{callback_value}"),
+            )
+        )
+    rows = [buttons[index:index + 2] for index in range(0, len(buttons), 2)]
+    rows.append([InlineKeyboardButton(text=t("settings.back_to_aspect_ratios", lang), callback_data=validate_callback_length(f"gen:setting:{setting_key}"))])
     rows.append([InlineKeyboardButton(text=get_button_text("common.back_to_settings", lang), callback_data="gen:back:settings")])
     return InlineKeyboardMarkup(inline_keyboard=rows)
 

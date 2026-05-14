@@ -18,6 +18,7 @@ from app.bot.keyboards import (
     build_generation_confirm_keyboard,
     build_generation_sections_keyboard,
     build_generation_summary_keyboard,
+    build_image_size_resolution_keyboard,
     build_main_menu_keyboard,
     build_model_settings_keyboard,
     build_models_keyboard,
@@ -492,7 +493,7 @@ def test_build_setting_options_keyboard_uses_setting_key_and_option_index() -> N
     assert keyboard.inline_keyboard[-1][0].callback_data == "gen:back:settings"
 
 
-def test_build_setting_options_keyboard_shows_size_presets_with_4k() -> None:
+def test_build_setting_options_keyboard_shows_size_aspect_ratios_first() -> None:
     model = SimpleNamespace(
         user_settings={
             "size": SimpleNamespace(key="size", title="Size", type="string", default="1024*1024", options=()),
@@ -502,42 +503,37 @@ def test_build_setting_options_keyboard_shows_size_presets_with_4k() -> None:
     keyboard = build_setting_options_keyboard(model, "size", "1024*1024", lang="en")
     button_texts = [button.text for button in _iter_buttons(keyboard)]
 
-    assert "✅ 1024×1024" in button_texts
-    assert "3840×2160" in button_texts
-    assert "2160×3840" in button_texts
+    assert button_texts[:7] == ["□ 1:1", "▭ 16:9", "▯ 9:16", "▭ 4:3", "▯ 3:4", "▭ 3:2", "▯ 2:3"]
+    assert "3840×2160" not in button_texts
     assert "⬅️ Back to settings" in button_texts
     assert all("Send a new" not in text for text in button_texts)
 
 
-def test_build_setting_options_keyboard_lays_out_size_presets_in_two_columns() -> None:
+def test_build_image_size_resolution_keyboard_lays_out_presets_in_two_columns() -> None:
     model = SimpleNamespace(
         user_settings={
             "size": SimpleNamespace(key="size", title="Size", type="string", default="1024*1024", options=()),
         }
     )
 
-    keyboard = build_setting_options_keyboard(model, "size", "1024*1024", lang="ru")
-    preset_rows = keyboard.inline_keyboard[:-1]
-    back_row = keyboard.inline_keyboard[-1]
+    keyboard = build_image_size_resolution_keyboard(model, "size", "1024*576", "16_9", lang="ru")
+    preset_rows = keyboard.inline_keyboard[:-2]
+    ratio_back_row = keyboard.inline_keyboard[-2]
+    settings_back_row = keyboard.inline_keyboard[-1]
 
     assert [[button.text for button in row] for row in preset_rows] == [
-        ["512×512", "768×768"],
-        ["✅ 1024×1024", "1536×1536"],
-        ["2048×2048", "720×1280"],
-        ["1440×2560", "2160×3840"],
-        ["768×1344", "1024×1792"],
-        ["832×1216", "1280×720"],
+        ["✅ 1024×576", "1280×720"],
+        ["1536×864", "1920×1080"],
         ["2560×1440", "3840×2160"],
-        ["1344×768", "1792×1024"],
-        ["1216×832", "2560×1080"],
-        ["3440×1440", "3840×1600"],
+        ["5120×2880", "7680×4320"],
+        ["8192×4608"],
     ]
-    assert all(len(row) == 2 for row in preset_rows)
-    assert len(back_row) == 1
-    assert back_row[0].text == f"⬅️ {t('common.back_to_settings', 'ru')}"
+    assert [len(row) for row in preset_rows] == [2, 2, 2, 2, 1]
+    assert ratio_back_row[0].text == t("settings.back_to_aspect_ratios", "ru")
+    assert settings_back_row[0].text == f"⬅️ {t('common.back_to_settings', 'ru')}"
 
 
-def test_build_setting_options_keyboard_allows_only_final_size_preset_row_to_be_single() -> None:
+def test_build_image_size_resolution_keyboard_allows_only_final_size_preset_row_to_be_single() -> None:
     model = SimpleNamespace(
         user_settings={
             "output_size": SimpleNamespace(
@@ -554,8 +550,8 @@ def test_build_setting_options_keyboard_allows_only_final_size_preset_row_to_be_
         }
     )
 
-    keyboard = build_setting_options_keyboard(model, "output_size", "512*512", lang="en")
-    preset_rows = keyboard.inline_keyboard[:-1]
+    keyboard = build_image_size_resolution_keyboard(model, "output_size", "512*512", "1_1", lang="en")
+    preset_rows = keyboard.inline_keyboard[:-2]
     back_row = keyboard.inline_keyboard[-1]
 
     assert [len(row) for row in preset_rows] == [2, 1]
@@ -580,7 +576,7 @@ def test_build_setting_options_keyboard_hides_unsupported_size_presets() -> None
         }
     )
 
-    keyboard = build_setting_options_keyboard(model, "image_size", "512*512", lang="en")
+    keyboard = build_image_size_resolution_keyboard(model, "image_size", "512*512", "1_1", lang="en")
     button_texts = [button.text for button in _iter_buttons(keyboard)]
 
     assert "✅ 512×512" in button_texts

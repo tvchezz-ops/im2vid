@@ -4307,38 +4307,99 @@ for language_code, catalog_updates in _PROFILE_DELIVERY_TOGGLE_UX.items():
 _SIZE_PRESET_SETTING_UX = {
     "en": {
         "settings.image_size_preset_prompt": "🖼 Image size\n\nCurrent size:\n{value}\n\nChoose one of the presets below.",
+        "settings.image_size_title": "Image size",
+        "settings.current_size": "Current size",
+        "settings.choose_aspect_ratio": "Choose an aspect ratio",
+        "settings.aspect_ratio_label": "Aspect ratio",
+        "settings.choose_resolution": "Choose resolution",
+        "settings.back_to_aspect_ratios": "⬅️ Back to ratios",
     },
     "ru": {
         "settings.image_size_preset_prompt": "🖼 Размер изображения\n\nТекущий размер:\n{value}\n\nВыберите подходящий формат ниже.",
+        "settings.image_size_title": "Размер изображения",
+        "settings.current_size": "Текущий размер",
+        "settings.choose_aspect_ratio": "Выберите соотношение сторон",
+        "settings.aspect_ratio_label": "Соотношение",
+        "settings.choose_resolution": "Выберите разрешение",
+        "settings.back_to_aspect_ratios": "⬅️ К форматам",
     },
     "es": {
         "settings.image_size_preset_prompt": "🖼 Tamaño de imagen\n\nTamaño actual:\n{value}\n\nElige uno de los presets de abajo.",
+        "settings.image_size_title": "Tamaño de imagen",
+        "settings.current_size": "Tamaño actual",
+        "settings.choose_aspect_ratio": "Elige una relación de aspecto",
+        "settings.aspect_ratio_label": "Relación de aspecto",
+        "settings.choose_resolution": "Elige resolución",
+        "settings.back_to_aspect_ratios": "⬅️ Volver a formatos",
     },
     "pt": {
         "settings.image_size_preset_prompt": "🖼 Tamanho da imagem\n\nTamanho atual:\n{value}\n\nEscolha um dos presets abaixo.",
+        "settings.image_size_title": "Tamanho da imagem",
+        "settings.current_size": "Tamanho atual",
+        "settings.choose_aspect_ratio": "Escolha a proporção",
+        "settings.aspect_ratio_label": "Proporção",
+        "settings.choose_resolution": "Escolha a resolução",
+        "settings.back_to_aspect_ratios": "⬅️ Voltar às proporções",
     },
     "fr": {
         "settings.image_size_preset_prompt": "🖼 Taille de l'image\n\nTaille actuelle :\n{value}\n\nChoisissez un préréglage ci-dessous.",
+        "settings.image_size_title": "Taille de l'image",
+        "settings.current_size": "Taille actuelle",
+        "settings.choose_aspect_ratio": "Choisissez un ratio",
+        "settings.aspect_ratio_label": "Ratio",
+        "settings.choose_resolution": "Choisissez la résolution",
+        "settings.back_to_aspect_ratios": "⬅️ Retour aux ratios",
     },
     "de": {
         "settings.image_size_preset_prompt": "🖼 Bildgröße\n\nAktuelle Größe:\n{value}\n\nWähle unten eine Vorlage aus.",
+        "settings.image_size_title": "Bildgröße",
+        "settings.current_size": "Aktuelle Größe",
+        "settings.choose_aspect_ratio": "Wähle ein Seitenverhältnis",
+        "settings.aspect_ratio_label": "Seitenverhältnis",
+        "settings.choose_resolution": "Wähle die Auflösung",
+        "settings.back_to_aspect_ratios": "⬅️ Zurück zu Formaten",
     },
     "ar": {
         "settings.image_size_preset_prompt": "🖼 حجم الصورة\n\nالحجم الحالي:\n{value}\n\nاختر أحد الإعدادات الجاهزة أدناه.",
+        "settings.image_size_title": "حجم الصورة",
+        "settings.current_size": "الحجم الحالي",
+        "settings.choose_aspect_ratio": "اختر نسبة الأبعاد",
+        "settings.aspect_ratio_label": "نسبة الأبعاد",
+        "settings.choose_resolution": "اختر الدقة",
+        "settings.back_to_aspect_ratios": "⬅️ إلى النسب",
     },
     "hi": {
         "settings.image_size_preset_prompt": "🖼 इमेज साइज़\n\nमौजूदा साइज़:\n{value}\n\nनीचे दिए गए presets में से चुनें.",
+        "settings.image_size_title": "इमेज साइज़",
+        "settings.current_size": "मौजूदा साइज़",
+        "settings.choose_aspect_ratio": "आस्पेक्ट रेशियो चुनें",
+        "settings.aspect_ratio_label": "आस्पेक्ट रेशियो",
+        "settings.choose_resolution": "रेज़ोल्यूशन चुनें",
+        "settings.back_to_aspect_ratios": "⬅️ रेशियो पर वापस",
     },
     "zh": {
         "settings.image_size_preset_prompt": "🖼 图片尺寸\n\n当前尺寸：\n{value}\n\n从下方预设中选择。",
+        "settings.image_size_title": "图片尺寸",
+        "settings.current_size": "当前尺寸",
+        "settings.choose_aspect_ratio": "选择宽高比",
+        "settings.aspect_ratio_label": "宽高比",
+        "settings.choose_resolution": "选择分辨率",
+        "settings.back_to_aspect_ratios": "⬅️ 返回比例",
     },
     "id": {
         "settings.image_size_preset_prompt": "🖼 Ukuran gambar\n\nUkuran saat ini:\n{value}\n\nPilih salah satu preset di bawah.",
+        "settings.image_size_title": "Ukuran gambar",
+        "settings.current_size": "Ukuran saat ini",
+        "settings.choose_aspect_ratio": "Pilih rasio aspek",
+        "settings.aspect_ratio_label": "Rasio aspek",
+        "settings.choose_resolution": "Pilih resolusi",
+        "settings.back_to_aspect_ratios": "⬅️ Kembali ke rasio",
     },
 }
 
 for language_code, catalog_updates in _SIZE_PRESET_SETTING_UX.items():
     globals()[f"{language_code.upper()}_TRANSLATIONS"].update(catalog_updates)
+    FLOW_I18N_TRANSLATIONS[language_code].update(catalog_updates)
 
 _GENERATION_REFUND_NOTICE_UX = {
     "en": {

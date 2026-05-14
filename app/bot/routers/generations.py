@@ -28,6 +28,10 @@ from app.bot.keyboards import (
     build_generation_sections_keyboard,
     build_generation_summary_keyboard,
     build_generation_type_keyboard,
+    build_image_size_aspect_ratio_keyboard,
+    build_image_size_aspect_ratio_text,
+    build_image_size_resolution_keyboard,
+    build_image_size_resolution_text,
     build_models_keyboard,
     build_model_selection_keyboard,
     build_model_settings_keyboard,
@@ -36,11 +40,14 @@ from app.bot.keyboards import (
     build_setting_input_back_keyboard,
     build_setting_options_keyboard,
     format_dimension_label,
+    get_image_size_options_for_ratio,
     get_setting_options_for_ui,
     get_main_menu_keyboard,
+    IMAGE_SIZE_RATIO_KEYS,
     is_size_preset_setting,
     is_localized_button_text,
     PAGINATION_NOOP_CALLBACK,
+    resolve_image_size_option_value,
     resolve_model_key_from_token,
 )
 from app.bot.error_messages import build_error_keyboard, build_user_error_message, log_error_code
@@ -141,6 +148,8 @@ PROVIDER_PREFIX = "gen:provider:"
 PROVIDERS_PAGE_PREFIX = "gen:providers:"
 SETTINGS_OPEN_PREFIX = "gen:setting:"
 SETTINGS_VALUE_PREFIX = "gen:set:"
+SIZE_ASPECT_RATIO_PREFIX = "gen:size_ar:"
+SIZE_SET_PREFIX = "gen:size_set:"
 BACK_TO_SECTIONS = "gen:back:sections"
 BACK_TO_PROVIDERS = "gen:back:providers"
 SETTINGS_BACK_PREFIX = "gen:back:settings"
@@ -1792,6 +1801,13 @@ async def show_setting_options(message: Message, state: FSMContext, setting_key:
         return
     user_settings = get_model_state_settings(state_data, model_key)
     current_value = str(user_settings.get(setting_key, model.user_settings[setting_key].default))
+    if is_size_preset_setting(setting_key, model.user_settings[setting_key]):
+        await message.edit_text(
+            build_image_size_aspect_ratio_text(current_value, lang),
+            reply_markup=build_image_size_aspect_ratio_keyboard(model, setting_key, lang),
+            parse_mode="HTML",
+        )
+        return
     await message.edit_text(
         build_setting_value_text(model, setting_key, current_value, lang),
         reply_markup=build_setting_options_keyboard(model, setting_key, current_value, lang),
@@ -3813,6 +3829,80 @@ async def process_text_setting_value(message: Message, state: FSMContext):
     await state.set_state(GenerationStates.choosing_settings)
     await message.answer(t("generation.value_saved", lang), reply_markup=get_main_menu_keyboard(lang))
     await render_settings_screen_message(message, state, edit=False)
+
+
+@router.callback_query(lambda cb: cb.data.startswith(SIZE_ASPECT_RATIO_PREFIX))
+async def choose_image_size_aspect_ratio(callback: CallbackQuery, state: FSMContext, session: Optional[AsyncSession] = None):
+    """Open image resolutions for the selected aspect ratio."""
+    log_generation_callback(callback)
+    state_data = await state.get_data()
+    lang = get_state_language(state_data, callback.from_user)
+    payload = callback.data.removeprefix(SIZE_ASPECT_RATIO_PREFIX)
+    if ":" not in payload:
+        await callback.answer(build_user_error_message("generation.invalid_value", lang), show_alert=True)
+        return
+    setting_key, ratio_key = payload.rsplit(":", 1)
+    if ratio_key not in IMAGE_SIZE_RATIO_KEYS:
+        await callback.answer(build_user_error_message("generation.invalid_value", lang), show_alert=True)
+        return
+    model_key = state_data.get("model_key")
+    if not model_key:
+        await callback.message.edit_text(format_user_error(ErrorCode.E005_UNSUPPORTED_MODEL, t("generation.model_not_selected", lang), lang), reply_markup=None)
+        await callback.answer()
+        return
+
+    model = get_generation_model(model_key)
+    if setting_key not in model.user_settings or not is_size_preset_setting(setting_key, model.user_settings[setting_key]):
+        await callback.answer(build_user_error_message("generation.setting_not_found", lang), show_alert=True)
+        return
+    if not get_image_size_options_for_ratio(model, setting_key, ratio_key):
+        await callback.answer(build_user_error_message("generation.invalid_value", lang), show_alert=True)
+        return
+
+    user_settings = get_model_state_settings(state_data, model_key)
+    current_value = str(user_settings.get(setting_key, model.user_settings[setting_key].default))
+    await state.update_data(current_setting_key=setting_key)
+    await state.set_state(GenerationStates.choosing_setting_value)
+    await callback.message.edit_text(
+        build_image_size_resolution_text(current_value, IMAGE_SIZE_RATIO_KEYS[ratio_key], lang),
+        reply_markup=build_image_size_resolution_keyboard(model, setting_key, current_value, ratio_key, lang),
+        parse_mode="HTML",
+    )
+    await callback.answer()
+
+
+@router.callback_query(lambda cb: cb.data.startswith(SIZE_SET_PREFIX))
+async def choose_image_size_resolution(callback: CallbackQuery, state: FSMContext, session: Optional[AsyncSession] = None):
+    """Save selected image dimensions and return to model settings."""
+    log_generation_callback(callback)
+    state_data = await state.get_data()
+    lang = get_state_language(state_data, callback.from_user)
+    payload = callback.data.removeprefix(SIZE_SET_PREFIX)
+    if ":" not in payload:
+        await callback.answer(build_user_error_message("generation.invalid_value", lang), show_alert=True)
+        return
+    setting_key, callback_value = payload.rsplit(":", 1)
+    model_key = state_data.get("model_key")
+    if not model_key:
+        await callback.message.edit_text(format_user_error(ErrorCode.E005_UNSUPPORTED_MODEL, t("generation.model_not_selected", lang), lang), reply_markup=None)
+        await callback.answer()
+        return
+
+    model = get_generation_model(model_key)
+    if setting_key not in model.user_settings or not is_size_preset_setting(setting_key, model.user_settings[setting_key]):
+        await callback.answer(build_user_error_message("generation.setting_not_found", lang), show_alert=True)
+        return
+    selected_value = resolve_image_size_option_value(model, setting_key, callback_value)
+    if selected_value is None:
+        await callback.answer(build_user_error_message("generation.invalid_value", lang), show_alert=True)
+        return
+
+    user_settings = get_model_state_settings(state_data, model_key)
+    user_settings[setting_key] = selected_value
+    await state.update_data(user_settings=user_settings, current_setting_key=None)
+    await state.set_state(GenerationStates.choosing_settings)
+    await render_settings_screen(callback.message, state)
+    await callback.answer()
 
 
 @router.callback_query(lambda cb: cb.data.startswith(SETTINGS_VALUE_PREFIX))

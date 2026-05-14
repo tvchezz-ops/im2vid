@@ -31,6 +31,13 @@ class GenerationSetting:
     description: str = ""
     min_value: str | None = None
     max_value: str | None = None
+    min_width: str | None = None
+    max_width: str | None = None
+    min_height: str | None = None
+    max_height: str | None = None
+    min_resolution: str | None = None
+    max_resolution: str | None = None
+    aspect_ratios: tuple[str, ...] = ()
     is_user_visible: bool = True
 
     @property
@@ -861,26 +868,13 @@ def _coerce_setting_options(raw_options: Any) -> tuple[SettingOption, ...]:
 
 SIZE_PRESET_SETTING_KEYS = {"size", "resolution", "dimensions", "image_size", "output_size"}
 FALLBACK_SIZE_PRESETS = (
-    "512*512",
-    "768*768",
-    "1024*1024",
-    "1536*1536",
-    "2048*2048",
-    "720*1280",
-    "1440*2560",
-    "2160*3840",
-    "768*1344",
-    "1024*1792",
-    "832*1216",
-    "1280*720",
-    "2560*1440",
-    "3840*2160",
-    "1344*768",
-    "1792*1024",
-    "1216*832",
-    "2560*1080",
-    "3440*1440",
-    "3840*1600",
+    "512*512", "768*768", "1024*1024", "1536*1536", "2048*2048", "3072*3072", "4096*4096", "6144*6144", "8192*8192",
+    "1024*576", "1280*720", "1536*864", "1920*1080", "2560*1440", "3840*2160", "5120*2880", "7680*4320", "8192*4608",
+    "576*1024", "720*1280", "864*1536", "1080*1920", "1440*2560", "2160*3840", "2880*5120", "4320*7680", "4608*8192",
+    "768*576", "1024*768", "1280*960", "1600*1200", "2048*1536", "3200*2400", "4096*3072", "6144*4608", "8192*6144",
+    "576*768", "768*1024", "960*1280", "1200*1600", "1536*2048", "2400*3200", "3072*4096", "4608*6144", "6144*8192",
+    "768*512", "1152*768", "1536*1024", "1920*1280", "2400*1600", "3000*2000", "3840*2560", "6144*4096", "8192*5461",
+    "512*768", "768*1152", "1024*1536", "1280*1920", "1600*2400", "2000*3000", "2560*3840", "4096*6144", "5461*8192",
 )
 
 
@@ -941,6 +935,13 @@ def generation_setting_from_generated(key: str, data: Mapping[str, Any]) -> Gene
         description=str(data.get("description", "")),
         min_value=None if data.get("min_value") is None else str(data.get("min_value")),
         max_value=None if data.get("max_value") is None else str(data.get("max_value")),
+        min_width=None if data.get("min_width") is None else str(data.get("min_width")),
+        max_width=None if data.get("max_width") is None else str(data.get("max_width")),
+        min_height=None if data.get("min_height") is None else str(data.get("min_height")),
+        max_height=None if data.get("max_height") is None else str(data.get("max_height")),
+        min_resolution=None if data.get("min_resolution") is None else str(data.get("min_resolution")),
+        max_resolution=None if data.get("max_resolution") is None else str(data.get("max_resolution")),
+        aspect_ratios=tuple(str(value) for value in data.get("aspect_ratios", ()) or ()),
         is_user_visible=bool(data.get("is_user_visible", True)),
     )
 

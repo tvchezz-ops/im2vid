@@ -113,6 +113,9 @@ class FakeCallback:
 TEXT_SETTING_MODEL_KEY = "test_text_setting_model"
 SIZE_SETTING_MODEL_KEY = "test_size_setting_model"
 LIMITED_SIZE_SETTING_MODEL_KEY = "test_limited_size_setting_model"
+MAX_4K_SIZE_SETTING_MODEL_KEY = "test_max_4k_size_setting_model"
+ENUM_SIZE_SETTING_MODEL_KEY = "test_enum_size_setting_model"
+PRICED_SIZE_SETTING_MODEL_KEY = "test_priced_size_setting_model"
 AUDIO_NO_LIMIT_MODEL_KEY = "test_audio_no_limit_model"
 
 
@@ -182,16 +185,30 @@ def remove_text_setting_model() -> None:
     MODEL_REGISTRY.pop(TEXT_SETTING_MODEL_KEY, None)
 
 
-def install_size_setting_model(*, limited: bool = False) -> str:
-    model_key = LIMITED_SIZE_SETTING_MODEL_KEY if limited else SIZE_SETTING_MODEL_KEY
-    options = (
-        (
+def install_size_setting_model(*, limited: bool = False, max_4k: bool = False, enum_options: bool = False, priced: bool = False) -> str:
+    if max_4k:
+        model_key = MAX_4K_SIZE_SETTING_MODEL_KEY
+    elif enum_options:
+        model_key = ENUM_SIZE_SETTING_MODEL_KEY
+    elif priced:
+        model_key = PRICED_SIZE_SETTING_MODEL_KEY
+    else:
+        model_key = LIMITED_SIZE_SETTING_MODEL_KEY if limited else SIZE_SETTING_MODEL_KEY
+    options = ()
+    max_resolution = "4k" if max_4k else None
+    pricing_rules = None
+    if limited:
+        options = (
             SettingOption(value="512*512", label="512*512"),
             SettingOption(value="1024*1024", label="1024*1024"),
         )
-        if limited
-        else ()
-    )
+    if enum_options:
+        options = (
+            SettingOption(value="1024*576", label="1024*576"),
+            SettingOption(value="1920*1080", label="1920*1080"),
+        )
+    if priced:
+        pricing_rules = {"resolution_multipliers": {"3840*2160": 2.0}}
     MODEL_REGISTRY[model_key] = GenerationModel(
         key=model_key,
         title="Test Size Setting Model",
@@ -215,8 +232,10 @@ def install_size_setting_model(*, limited: bool = False) -> str:
                 type="string",
                 default="1024*1024",
                 options=options,
+                max_resolution=max_resolution,
             ),
         },
+        pricing_rules=pricing_rules,
     )
     return model_key
 
@@ -224,6 +243,9 @@ def install_size_setting_model(*, limited: bool = False) -> str:
 def remove_size_setting_models() -> None:
     MODEL_REGISTRY.pop(SIZE_SETTING_MODEL_KEY, None)
     MODEL_REGISTRY.pop(LIMITED_SIZE_SETTING_MODEL_KEY, None)
+    MODEL_REGISTRY.pop(MAX_4K_SIZE_SETTING_MODEL_KEY, None)
+    MODEL_REGISTRY.pop(ENUM_SIZE_SETTING_MODEL_KEY, None)
+    MODEL_REGISTRY.pop(PRICED_SIZE_SETTING_MODEL_KEY, None)
 
 
 def install_audio_no_limit_model() -> None:
@@ -671,12 +693,83 @@ async def test_open_size_setting_selector_uses_preset_keyboard_not_text_input() 
 
         assert state.state == GenerationStates.choosing_setting_value
         assert state.data["current_setting_key"] == "size"
-        assert message.edits[-1] == "🖼 Размер изображения\n\nТекущий размер:\n1024×1024\n\nВыберите подходящий формат ниже."
+        assert message.edits[-1] == "🖼 Размер изображения\n\nТекущий размер:\n1024×1024\n\nВыберите соотношение сторон."
         assert "Отправьте новое значение" not in message.edits[-1]
         button_texts = [button.text for row in message.edit_markups[-1].inline_keyboard for button in row]
-        assert "3840×2160" in button_texts
-        assert "2160×3840" in button_texts
+        assert button_texts[:7] == ["□ 1:1", "▭ 16:9", "▯ 9:16", "▭ 4:3", "▯ 3:4", "▭ 3:2", "▯ 2:3"]
         assert f"⬅️ {t('common.back_to_settings', 'ru')}" in button_texts
+    finally:
+        remove_size_setting_models()
+
+
+@pytest.mark.asyncio
+async def test_size_setting_aspect_ratio_screen_contains_supported_ratios() -> None:
+    model_key = install_size_setting_model()
+    try:
+        state = FakeState({"model_key": model_key, "user_settings": {"size": "1024*1024"}})
+        message = FakeMessage(chat_id=463)
+        callback = FakeCallback(user_id=463, message=message, data="gen:setting:size")
+
+        await generations.open_setting_selector(callback, state)
+
+        ratio_texts = [button.text.split(" ", 1)[1] for row in message.edit_markups[-1].inline_keyboard[:-1] for button in row]
+        assert ratio_texts == ["1:1", "16:9", "9:16", "4:3", "3:4", "3:2", "2:3"]
+    finally:
+        remove_size_setting_models()
+
+
+@pytest.mark.asyncio
+async def test_size_setting_choosing_16_9_opens_only_16_9_resolutions() -> None:
+    model_key = install_size_setting_model()
+    try:
+        state = FakeState({"model_key": model_key, "user_settings": {"size": "1024*576"}})
+        message = FakeMessage(chat_id=466)
+        callback = FakeCallback(user_id=466, message=message, data="gen:size_ar:size:16_9")
+
+        await generations.choose_image_size_aspect_ratio(callback, state)
+
+        assert "Соотношение: 16:9" in message.edits[-1]
+        button_texts = [button.text.removeprefix("✅ ") for row in message.edit_markups[-1].inline_keyboard[:-2] for button in row]
+        assert button_texts == [
+            "1024×576", "1280×720", "1536×864", "1920×1080", "2560×1440", "3840×2160", "5120×2880", "7680×4320", "8192×4608",
+        ]
+        assert "576×1024" not in button_texts
+    finally:
+        remove_size_setting_models()
+
+
+@pytest.mark.asyncio
+async def test_size_setting_choosing_9_16_opens_only_9_16_resolutions() -> None:
+    model_key = install_size_setting_model()
+    try:
+        state = FakeState({"model_key": model_key, "user_settings": {"size": "576*1024"}})
+        message = FakeMessage(chat_id=467)
+        callback = FakeCallback(user_id=467, message=message, data="gen:size_ar:size:9_16")
+
+        await generations.choose_image_size_aspect_ratio(callback, state)
+
+        button_texts = [button.text.removeprefix("✅ ") for row in message.edit_markups[-1].inline_keyboard[:-2] for button in row]
+        assert button_texts == [
+            "576×1024", "720×1280", "864×1536", "1080×1920", "1440×2560", "2160×3840", "2880×5120", "4320×7680", "4608×8192",
+        ]
+        assert "1024×576" not in button_texts
+    finally:
+        remove_size_setting_models()
+
+
+@pytest.mark.asyncio
+async def test_size_setting_resolution_keyboard_uses_two_columns_and_short_callbacks() -> None:
+    model_key = install_size_setting_model()
+    try:
+        state = FakeState({"model_key": model_key, "user_settings": {"size": "1024*576"}})
+        message = FakeMessage(chat_id=468)
+        callback = FakeCallback(user_id=468, message=message, data="gen:size_ar:size:16_9")
+
+        await generations.choose_image_size_aspect_ratio(callback, state)
+
+        resolution_rows = message.edit_markups[-1].inline_keyboard[:-2]
+        assert [len(row) for row in resolution_rows] == [2, 2, 2, 2, 1]
+        assert all(len(button.callback_data.encode("utf-8")) <= 64 for row in message.edit_markups[-1].inline_keyboard for button in row)
     finally:
         remove_size_setting_models()
 
@@ -689,16 +782,11 @@ async def test_size_setting_callback_saves_preset_and_returns_to_settings() -> N
         message = FakeMessage(chat_id=464)
         open_callback = FakeCallback(user_id=464, message=message, data="gen:setting:size")
 
-        await generations.open_setting_selector(open_callback, state)
+        await generations.choose_image_size_aspect_ratio(FakeCallback(user_id=464, message=message, data="gen:size_ar:size:16_9"), state)
 
-        target_callback_data = next(
-            button.callback_data
-            for row in message.edit_markups[-1].inline_keyboard
-            for button in row
-            if button.text == "3840×2160"
-        )
+        target_callback_data = "gen:size_set:size:3840x2160"
         choose_callback = FakeCallback(user_id=464, message=message, data=target_callback_data)
-        await generations.choose_setting_value(choose_callback, state)
+        await generations.choose_image_size_resolution(choose_callback, state)
 
         assert state.state == GenerationStates.choosing_settings
         assert state.data["current_setting_key"] is None
@@ -720,10 +808,81 @@ async def test_size_setting_hides_unsupported_presets() -> None:
         await generations.open_setting_selector(callback, state)
 
         button_texts = [button.text for row in message.edit_markups[-1].inline_keyboard for button in row]
-        assert "✅ 512×512" in button_texts
-        assert "1024×1024" in button_texts
-        assert "3840×2160" not in button_texts
-        assert "2160×3840" not in button_texts
+        assert button_texts[:1] == ["□ 1:1"]
+        assert "▭ 16:9" not in button_texts
+        ratio_callback = FakeCallback(user_id=465, message=message, data="gen:size_ar:size:1_1")
+        await generations.choose_image_size_aspect_ratio(ratio_callback, state)
+        resolution_texts = [button.text.removeprefix("✅ ") for row in message.edit_markups[-1].inline_keyboard[:-2] for button in row]
+        assert resolution_texts == ["512×512", "1024×1024"]
+    finally:
+        remove_size_setting_models()
+
+
+@pytest.mark.asyncio
+async def test_size_setting_8192_presets_exist_without_max_limit() -> None:
+    model_key = install_size_setting_model()
+    try:
+        state = FakeState({"model_key": model_key, "user_settings": {"size": "1024*1024"}})
+        message = FakeMessage(chat_id=469)
+        callback = FakeCallback(user_id=469, message=message, data="gen:size_ar:size:1_1")
+
+        await generations.choose_image_size_aspect_ratio(callback, state)
+
+        button_texts = [button.text.removeprefix("✅ ") for row in message.edit_markups[-1].inline_keyboard[:-2] for button in row]
+        assert "8192×8192" in button_texts
+    finally:
+        remove_size_setting_models()
+
+
+@pytest.mark.asyncio
+async def test_size_setting_hides_above_4k_presets_when_max_is_4k() -> None:
+    model_key = install_size_setting_model(max_4k=True)
+    try:
+        state = FakeState({"model_key": model_key, "user_settings": {"size": "1024*576"}})
+        message = FakeMessage(chat_id=470)
+        callback = FakeCallback(user_id=470, message=message, data="gen:size_ar:size:16_9")
+
+        await generations.choose_image_size_aspect_ratio(callback, state)
+
+        button_texts = [button.text.removeprefix("✅ ") for row in message.edit_markups[-1].inline_keyboard[:-2] for button in row]
+        assert "3840×2160" in button_texts
+        assert "5120×2880" not in button_texts
+        assert "7680×4320" not in button_texts
+        assert "8192×4608" not in button_texts
+    finally:
+        remove_size_setting_models()
+
+
+@pytest.mark.asyncio
+async def test_size_setting_exact_enum_model_shows_only_enum_options() -> None:
+    model_key = install_size_setting_model(enum_options=True)
+    try:
+        state = FakeState({"model_key": model_key, "user_settings": {"size": "1024*576"}})
+        message = FakeMessage(chat_id=471)
+        open_callback = FakeCallback(user_id=471, message=message, data="gen:setting:size")
+
+        await generations.open_setting_selector(open_callback, state)
+        assert [button.text for row in message.edit_markups[-1].inline_keyboard[:-1] for button in row] == ["▭ 16:9"]
+
+        await generations.choose_image_size_aspect_ratio(FakeCallback(user_id=471, message=message, data="gen:size_ar:size:16_9"), state)
+        button_texts = [button.text.removeprefix("✅ ") for row in message.edit_markups[-1].inline_keyboard[:-2] for button in row]
+        assert button_texts == ["1024×576", "1920×1080"]
+    finally:
+        remove_size_setting_models()
+
+
+@pytest.mark.asyncio
+async def test_size_setting_price_recalculates_after_resolution_change() -> None:
+    model_key = install_size_setting_model(priced=True)
+    try:
+        state = FakeState({"model_key": model_key, "user_settings": {"size": "1024*576"}})
+        message = FakeMessage(chat_id=472)
+        callback = FakeCallback(user_id=472, message=message, data="gen:size_set:size:3840x2160")
+
+        await generations.choose_image_size_resolution(callback, state)
+
+        assert state.data["user_settings"]["size"] == "3840*2160"
+        assert "💰 Цена: 12 credits" in message.edits[-1]
     finally:
         remove_size_setting_models()
 
