@@ -1799,18 +1799,18 @@ FLOW_I18N_TRANSLATIONS = {
 
 ERROR_UX_TRANSLATIONS = {
     "en": {
-        "error_ux.invalid_input": "❌ Wrong file format\n\nSend the correct file type and try again.",
-        "error_ux.prompt_required": "✍️ Description required\n\nTell me what to create or change.",
-        "error_ux.missing_image": "🖼️ Image required\n\nSend a photo or image file.",
-        "error_ux.missing_video": "🎬 Video required\n\nSend a video or video file.",
-        "error_ux.model_unavailable": "⚙️ Model is temporarily unavailable\n\nTry another model or come back later.",
-        "error_ux.insufficient_balance": "💳 Not enough credits\n\nTop up your balance in Profile to continue.",
-        "error_ux.generation_failed": "❌ Generation failed\n\nCredits for this attempt were returned. Please try again.",
-        "error_ux.timeout": "⏱️ Generation took too long\n\nCredits for this attempt were returned. Please try again later.",
-        "error_ux.delivery_failed": "📦 Could not send the result\n\nCredits were returned. Please try running the generation again.",
-        "error_ux.internal": "⚠️ Something went wrong\n\nPlease try again a bit later.",
-        "error_ux.invalid_settings": "⚙️ Invalid settings\n\nChange the model parameters and try again.",
-        "error_ux.media_prepare_failed": "📎 Could not prepare the file\n\nUpload the file again and try once more.",
+        "error_ux.invalid_input": "📎 Unsupported file type\n\nThis model does not support the uploaded format.\nPlease send the correct image, video, or audio file for this model.",
+        "error_ux.prompt_required": "✍️ Description required\n\nPlease add a text description of the result you want to generate.\nGeneration cannot start without it.",
+        "error_ux.missing_image": "🖼 Image required\n\nThis model requires an image to continue.\nPlease upload a photo or image file.",
+        "error_ux.missing_video": "🎬 Video required\n\nThis model requires a video file.\nPlease upload a video and try again.",
+        "error_ux.model_unavailable": "⚙️ Model temporarily unavailable\n\nThis model is currently unavailable or still being configured.\nPlease choose another model and try again.",
+        "error_ux.insufficient_balance": "💳 Not enough credits\n\nYour balance is too low to start this generation.\nOpen Profile → Top Up Balance and try again.",
+        "error_ux.generation_failed": "❌ Failed to generate result\n\nThe generation server returned an error while processing your request.\nPlease try again later.\nIf the generation was not completed, your credits will be refunded automatically.",
+        "error_ux.timeout": "⏳ Generation took too long\n\nThe server could not finish processing in time.\nPlease try again later — your credits were refunded.",
+        "error_ux.delivery_failed": "📤 Failed to deliver result\n\nThe result was generated, but Telegram could not deliver the file.\nYour credits were refunded automatically.",
+        "error_ux.internal": "⚠️ Internal error\n\nSomething went wrong while processing your request.\nPlease try again in a few seconds.",
+        "error_ux.invalid_settings": "🛠 Invalid model settings\n\nSome model parameters were filled incorrectly.\nPlease check your settings and try again.",
+        "error_ux.media_prepare_failed": "☁️ Media upload failed\n\nThe media file could not be processed or uploaded.\nPlease try uploading the file again or use another file.",
         "error_ux.missing_audio": "🎵 Audio required\n\nSend a voice message or audio file.",
         "error_ux.audio_too_large": "🎵 Audio file is too large\n\nSend a file up to 5 MB.",
         "error_ux.payment_unavailable": "💳 Payment is temporarily unavailable\n\nTry again later or choose another method.",
@@ -1826,18 +1826,18 @@ ERROR_UX_TRANSLATIONS = {
         "wallet.error.payment_order_not_found": "❌ Payment order not found\n\nReturn to the main bot and try again.",
     },
     "ru": {
-        "error_ux.invalid_input": "❌ Не тот формат файла\n\nОтправьте файл в нужном формате и попробуйте снова.",
-        "error_ux.prompt_required": "✍️ Нужно описание\n\nНапишите, что нужно создать или изменить.",
-        "error_ux.missing_image": "🖼️ Нужно изображение\n\nОтправьте фото или файл изображения.",
-        "error_ux.missing_video": "🎬 Нужно видео\n\nОтправьте видео или video-файл.",
-        "error_ux.model_unavailable": "⚙️ Модель временно недоступна\n\nПопробуйте другую модель или вернитесь позже.",
-        "error_ux.insufficient_balance": "💳 Недостаточно кредитов\n\nПополните баланс в профиле, чтобы продолжить.",
-        "error_ux.generation_failed": "❌ Генерация не удалась\n\nМы вернули кредиты за эту попытку. Попробуйте ещё раз.",
-        "error_ux.timeout": "⏱️ Генерация заняла слишком много времени\n\nМы вернули кредиты за эту попытку. Попробуйте позже.",
-        "error_ux.delivery_failed": "📦 Не удалось отправить результат\n\nМы вернули кредиты. Попробуйте запустить генерацию ещё раз.",
-        "error_ux.internal": "⚠️ Что-то пошло не так\n\nПопробуйте ещё раз чуть позже.",
-        "error_ux.invalid_settings": "⚙️ Некорректные настройки\n\nИзмените параметры модели и попробуйте снова.",
-        "error_ux.media_prepare_failed": "📎 Не удалось подготовить файл\n\nЗагрузите файл ещё раз и повторите попытку.",
+        "error_ux.invalid_input": "📎 Неверный тип файла\n\nЭта модель не поддерживает такой формат.\nПожалуйста, отправьте подходящий файл: изображение, видео или аудио — в зависимости от выбранной модели.",
+        "error_ux.prompt_required": "✍️ Нужно описание\n\nДобавьте текстовое описание того, что хотите получить.\nБез описания генерацию запустить нельзя.",
+        "error_ux.missing_image": "🖼 Нужно изображение\n\nДля этой модели требуется фото или изображение.\nОтправьте картинку и попробуйте снова.",
+        "error_ux.missing_video": "🎬 Нужно видео\n\nДля этой модели необходимо загрузить видео.\nОтправьте видеофайл и повторите попытку.",
+        "error_ux.model_unavailable": "⚙️ Модель временно недоступна\n\nЭта модель сейчас недоступна или ещё настраивается.\nВыберите другую модель и попробуйте снова.",
+        "error_ux.insufficient_balance": "💳 Недостаточно кредитов\n\nНа балансе недостаточно кредитов для запуска генерации.\nОткройте Профиль → Пополнить баланс и попробуйте снова.",
+        "error_ux.generation_failed": "❌ Не удалось создать результат\n\nВо время генерации произошла ошибка со стороны сервера.\nПопробуйте ещё раз немного позже.\nЕсли генерация не была завершена — кредиты автоматически вернутся.",
+        "error_ux.timeout": "⏳ Генерация заняла слишком много времени\n\nСервер не успел завершить обработку вовремя.\nПопробуйте ещё раз позже — кредиты возвращены.",
+        "error_ux.delivery_failed": "📤 Не удалось отправить результат\n\nРезультат был создан, но Telegram не смог доставить файл.\nКредиты возвращены автоматически.",
+        "error_ux.internal": "⚠️ Внутренняя ошибка\n\nВо время обработки произошёл сбой.\nПопробуйте снова через несколько секунд.",
+        "error_ux.invalid_settings": "🛠 Некорректные настройки\n\nНекоторые параметры модели заполнены неверно.\nПроверьте настройки генерации и попробуйте снова.",
+        "error_ux.media_prepare_failed": "☁️ Ошибка загрузки файла\n\nНе удалось обработать или загрузить медиафайл.\nПопробуйте отправить файл ещё раз или используйте другой файл.",
         "error_ux.missing_audio": "🎵 Нужно аудио\n\nОтправьте голосовое сообщение или аудиофайл.",
         "error_ux.audio_too_large": "🎵 Аудиофайл слишком большой\n\nОтправьте файл до 5 МБ.",
         "error_ux.payment_unavailable": "💳 Оплата временно недоступна\n\nПопробуйте позже или выберите другой способ.",
@@ -4054,6 +4054,43 @@ for language_code in _EXPLANATORY_ERROR_AND_GENERATION_UX:
     catalog["generation.invalid_wait_image"] = catalog["error_ux.missing_image"]
     catalog["generation.invalid_wait_video"] = catalog["error_ux.missing_video"]
     catalog["generation.unsupported_audio_type"] = catalog["error_ux.missing_audio"]
+
+_GENERATION_ERROR_UX_REQUESTED_COPY = {
+    "en": {
+        "error_ux.invalid_input": "📎 Unsupported file type\n\nThis model does not support the uploaded format.\nPlease send the correct image, video, or audio file for this model.",
+        "error_ux.prompt_required": "✍️ Description required\n\nPlease add a text description of the result you want to generate.\nGeneration cannot start without it.",
+        "error_ux.missing_image": "🖼 Image required\n\nThis model requires an image to continue.\nPlease upload a photo or image file.",
+        "error_ux.missing_video": "🎬 Video required\n\nThis model requires a video file.\nPlease upload a video and try again.",
+        "error_ux.model_unavailable": "⚙️ Model temporarily unavailable\n\nThis model is currently unavailable or still being configured.\nPlease choose another model and try again.",
+        "error_ux.insufficient_balance": "💳 Not enough credits\n\nYour balance is too low to start this generation.\nOpen Profile → Top Up Balance and try again.",
+        "error_ux.generation_failed": "❌ Failed to generate result\n\nThe generation server returned an error while processing your request.\nPlease try again later.\nIf the generation was not completed, your credits will be refunded automatically.",
+        "error_ux.timeout": "⏳ Generation took too long\n\nThe server could not finish processing in time.\nPlease try again later — your credits were refunded.",
+        "error_ux.delivery_failed": "📤 Failed to deliver result\n\nThe result was generated, but Telegram could not deliver the file.\nYour credits were refunded automatically.",
+        "error_ux.internal": "⚠️ Internal error\n\nSomething went wrong while processing your request.\nPlease try again in a few seconds.",
+        "error_ux.invalid_settings": "🛠 Invalid model settings\n\nSome model parameters were filled incorrectly.\nPlease check your settings and try again.",
+        "error_ux.media_prepare_failed": "☁️ Media upload failed\n\nThe media file could not be processed or uploaded.\nPlease try uploading the file again or use another file.",
+    },
+    "ru": {
+        "error_ux.invalid_input": "📎 Неверный тип файла\n\nЭта модель не поддерживает такой формат.\nПожалуйста, отправьте подходящий файл: изображение, видео или аудио — в зависимости от выбранной модели.",
+        "error_ux.prompt_required": "✍️ Нужно описание\n\nДобавьте текстовое описание того, что хотите получить.\nБез описания генерацию запустить нельзя.",
+        "error_ux.missing_image": "🖼 Нужно изображение\n\nДля этой модели требуется фото или изображение.\nОтправьте картинку и попробуйте снова.",
+        "error_ux.missing_video": "🎬 Нужно видео\n\nДля этой модели необходимо загрузить видео.\nОтправьте видеофайл и повторите попытку.",
+        "error_ux.model_unavailable": "⚙️ Модель временно недоступна\n\nЭта модель сейчас недоступна или ещё настраивается.\nВыберите другую модель и попробуйте снова.",
+        "error_ux.insufficient_balance": "💳 Недостаточно кредитов\n\nНа балансе недостаточно кредитов для запуска генерации.\nОткройте Профиль → Пополнить баланс и попробуйте снова.",
+        "error_ux.generation_failed": "❌ Не удалось создать результат\n\nВо время генерации произошла ошибка со стороны сервера.\nПопробуйте ещё раз немного позже.\nЕсли генерация не была завершена — кредиты автоматически вернутся.",
+        "error_ux.timeout": "⏳ Генерация заняла слишком много времени\n\nСервер не успел завершить обработку вовремя.\nПопробуйте ещё раз позже — кредиты возвращены.",
+        "error_ux.delivery_failed": "📤 Не удалось отправить результат\n\nРезультат был создан, но Telegram не смог доставить файл.\nКредиты возвращены автоматически.",
+        "error_ux.internal": "⚠️ Внутренняя ошибка\n\nВо время обработки произошёл сбой.\nПопробуйте снова через несколько секунд.",
+        "error_ux.invalid_settings": "🛠 Некорректные настройки\n\nНекоторые параметры модели заполнены неверно.\nПроверьте настройки генерации и попробуйте снова.",
+        "error_ux.media_prepare_failed": "☁️ Ошибка загрузки файла\n\nНе удалось обработать или загрузить медиафайл.\nПопробуйте отправить файл ещё раз или используйте другой файл.",
+    },
+}
+
+for language_code, copy in _GENERATION_ERROR_UX_REQUESTED_COPY.items():
+    catalog = globals()[f"{language_code.upper()}_TRANSLATIONS"]
+    catalog.update(copy)
+    catalog["generation.invalid_wait_image"] = catalog["error_ux.missing_image"]
+    catalog["generation.invalid_wait_video"] = catalog["error_ux.missing_video"]
 
 _SETTING_INPUT_BACK_BUTTON_UX = {
     "en": "Back to settings",

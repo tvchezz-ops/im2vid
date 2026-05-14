@@ -42,6 +42,37 @@ ERROR_UX_KEYS = {
     "wallet.error.payment_order_not_found",
 }
 
+EXPECTED_ERROR_MESSAGES = {
+    "en": {
+        "E001": "📎 Unsupported file type\n\nThis model does not support the uploaded format.\nPlease send the correct image, video, or audio file for this model.",
+        "E002": "✍️ Description required\n\nPlease add a text description of the result you want to generate.\nGeneration cannot start without it.",
+        "E003": "🖼 Image required\n\nThis model requires an image to continue.\nPlease upload a photo or image file.",
+        "E004": "🎬 Video required\n\nThis model requires a video file.\nPlease upload a video and try again.",
+        "E005": "⚙️ Model temporarily unavailable\n\nThis model is currently unavailable or still being configured.\nPlease choose another model and try again.",
+        "E006": "💳 Not enough credits\n\nYour balance is too low to start this generation.\nOpen Profile → Top Up Balance and try again.",
+        "E007": "❌ Failed to generate result\n\nThe generation server returned an error while processing your request.\nPlease try again later.\nIf the generation was not completed, your credits will be refunded automatically.",
+        "E008": "⏳ Generation took too long\n\nThe server could not finish processing in time.\nPlease try again later — your credits were refunded.",
+        "E009": "📤 Failed to deliver result\n\nThe result was generated, but Telegram could not deliver the file.\nYour credits were refunded automatically.",
+        "E010": "⚠️ Internal error\n\nSomething went wrong while processing your request.\nPlease try again in a few seconds.",
+        "E011": "🛠 Invalid model settings\n\nSome model parameters were filled incorrectly.\nPlease check your settings and try again.",
+        "E012": "☁️ Media upload failed\n\nThe media file could not be processed or uploaded.\nPlease try uploading the file again or use another file.",
+    },
+    "ru": {
+        "E001": "📎 Неверный тип файла\n\nЭта модель не поддерживает такой формат.\nПожалуйста, отправьте подходящий файл: изображение, видео или аудио — в зависимости от выбранной модели.",
+        "E002": "✍️ Нужно описание\n\nДобавьте текстовое описание того, что хотите получить.\nБез описания генерацию запустить нельзя.",
+        "E003": "🖼 Нужно изображение\n\nДля этой модели требуется фото или изображение.\nОтправьте картинку и попробуйте снова.",
+        "E004": "🎬 Нужно видео\n\nДля этой модели необходимо загрузить видео.\nОтправьте видеофайл и повторите попытку.",
+        "E005": "⚙️ Модель временно недоступна\n\nЭта модель сейчас недоступна или ещё настраивается.\nВыберите другую модель и попробуйте снова.",
+        "E006": "💳 Недостаточно кредитов\n\nНа балансе недостаточно кредитов для запуска генерации.\nОткройте Профиль → Пополнить баланс и попробуйте снова.",
+        "E007": "❌ Не удалось создать результат\n\nВо время генерации произошла ошибка со стороны сервера.\nПопробуйте ещё раз немного позже.\nЕсли генерация не была завершена — кредиты автоматически вернутся.",
+        "E008": "⏳ Генерация заняла слишком много времени\n\nСервер не успел завершить обработку вовремя.\nПопробуйте ещё раз позже — кредиты возвращены.",
+        "E009": "📤 Не удалось отправить результат\n\nРезультат был создан, но Telegram не смог доставить файл.\nКредиты возвращены автоматически.",
+        "E010": "⚠️ Внутренняя ошибка\n\nВо время обработки произошёл сбой.\nПопробуйте снова через несколько секунд.",
+        "E011": "🛠 Некорректные настройки\n\nНекоторые параметры модели заполнены неверно.\nПроверьте настройки генерации и попробуйте снова.",
+        "E012": "☁️ Ошибка загрузки файла\n\nНе удалось обработать или загрузить медиафайл.\nПопробуйте отправить файл ещё раз или используйте другой файл.",
+    },
+}
+
 
 def flatten_keyboard_texts(keyboard) -> list[str]:
     return [button.text for row in keyboard.inline_keyboard for button in row]
@@ -52,6 +83,12 @@ def test_error_ux_messages_do_not_contain_internal_error_codes() -> None:
         for error_code in ERROR_CODES:
             message = build_user_error_message(error_code, language, balance=10)
             assert ERROR_CODE_RE.search(message) is None
+
+
+def test_ru_and_en_generation_error_messages_match_requested_copy() -> None:
+    for language, expected_messages in EXPECTED_ERROR_MESSAGES.items():
+        for error_code, expected_message in expected_messages.items():
+            assert build_user_error_message(error_code, language) == expected_message
 
 
 def test_error_ux_logs_keep_error_code(caplog) -> None:
@@ -107,27 +144,27 @@ def test_error_ux_messages_include_explanation_and_next_step() -> None:
 
 
 def test_refund_errors_explain_credits_are_returned() -> None:
-    assert "Credits for this attempt have already been returned." in build_user_error_message("E007", "en")
-    assert "Credits for this attempt have already been returned." in build_user_error_message("E008", "en")
-    assert "Credits for this attempt have already been returned." in build_user_error_message("E009", "en")
-    assert "Кредиты за эту попытку уже возвращены." in build_user_error_message("E007", "ru")
-    assert "Кредиты за эту попытку уже возвращены." in build_user_error_message("E008", "ru")
-    assert "Кредиты за эту попытку уже возвращены." in build_user_error_message("E009", "ru")
+    assert "credits will be refunded automatically" in build_user_error_message("E007", "en")
+    assert "credits were refunded" in build_user_error_message("E008", "en")
+    assert "credits were refunded automatically" in build_user_error_message("E009", "en")
+    assert "кредиты автоматически вернутся" in build_user_error_message("E007", "ru")
+    assert "кредиты возвращены" in build_user_error_message("E008", "ru")
+    assert "Кредиты возвращены автоматически" in build_user_error_message("E009", "ru")
 
 
 def test_delivery_error_explains_telegram_delivery_issue() -> None:
     en_message = build_user_error_message("E009", "en")
     ru_message = build_user_error_message("E009", "ru")
 
-    assert "Telegram could not deliver it" in en_message
-    assert "Telegram не смог его доставить" in ru_message
+    assert "Telegram could not deliver the file" in en_message
+    assert "Telegram не смог доставить файл" in ru_message
 
 
 def test_ru_and_en_error_messages_keep_language_boundaries() -> None:
     ru_message = build_user_error_message("E007", "ru")
     en_message = build_user_error_message("E007", "en")
 
-    assert "Generation failed" not in ru_message
-    assert "Try changing the prompt" not in ru_message
-    assert "Генерация не получилась" not in en_message
-    assert "Кредиты за эту попытку" not in en_message
+    assert "Failed to generate result" not in ru_message
+    assert "Please try again later" not in ru_message
+    assert "Не удалось создать результат" not in en_message
+    assert "кредиты автоматически" not in en_message

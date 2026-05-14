@@ -532,7 +532,7 @@ async def test_submit_failure_refunds_debited_credits(session_factory, monkeypat
 
         assert await get_user_balance(session, 423) == 100
         assert state.state is None
-        assert any("Что-то пошло не так" in answer for answer in callback.message.answers)
+        assert any(t("error_ux.internal", "ru") in answer for answer in callback.message.answers)
 
 
 @pytest.mark.asyncio
