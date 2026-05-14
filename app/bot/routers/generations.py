@@ -120,6 +120,7 @@ GENERATION_FLOW_STATE_NAMES = {
     GenerationStates.choosing_settings.state,
     GenerationStates.choosing_setting_value.state,
     GenerationStates.waiting_for_setting_text.state,
+    GenerationStates.waiting_for_setting_number.state,
     GenerationStates.waiting_for_images.state,
     GenerationStates.waiting_for_image.state,
     GenerationStates.waiting_for_video.state,
@@ -232,7 +233,8 @@ class OutputDeliveryResult:
 
 
 SUMMARY_PROMPT_LIMIT = 1500
-FREEFORM_SETTING_TYPES = {"text", "textarea", "number", "float", "audio", "media"}
+FREEFORM_SETTING_TYPES = {"text", "textarea", "number", "integer", "float", "audio", "media"}
+NUMERIC_SETTING_TYPES = {"number", "integer", "float"}
 NEGATIVE_PROMPT_SETTING_KEYS = {"exclude", "excluded_prompt", "negative", "negative_prompt", "avoid_prompt"}
 NEGATIVE_PROMPT_LEGACY_TITLES = {"exclude", "excluded prompt", "negative", "negative prompt", "avoid prompt", "исключить"}
 
@@ -372,6 +374,56 @@ def get_setting_display_value(setting: Any, value: Any) -> str:
         if option.value == raw_value:
             return option.label
     return raw_value
+
+
+def setting_has_number_range(setting: Any) -> bool:
+    return getattr(setting, "min_value", None) is not None and getattr(setting, "max_value", None) is not None
+
+
+def format_numeric_bound(value: Any) -> str:
+    decimal_value = Decimal(str(value))
+    if decimal_value == decimal_value.to_integral_value():
+        return str(int(decimal_value))
+    return str(decimal_value.normalize())
+
+
+def get_numeric_setting_example(setting: Any) -> str:
+    if getattr(setting, "min_value", None) is not None:
+        return format_numeric_bound(setting.min_value)
+    return "5"
+
+
+def build_number_setting_error(key: str, lang: str = DEFAULT_LANGUAGE, **kwargs: Any) -> str:
+    return t(key, lang, **kwargs)
+
+
+def validate_numeric_setting_input(setting: Any, raw_text: str, lang: str = DEFAULT_LANGUAGE) -> tuple[str | None, str | None]:
+    stripped_text = raw_text.strip()
+    try:
+        numeric_value = Decimal(stripped_text)
+    except Exception:
+        if setting_has_number_range(setting):
+            return None, build_number_setting_error(
+                "errors.number_required_range",
+                lang,
+                min=format_numeric_bound(setting.min_value),
+                max=format_numeric_bound(setting.max_value),
+                example=get_numeric_setting_example(setting),
+            )
+        return None, build_number_setting_error("errors.number_required", lang)
+
+    if not numeric_value.is_finite():
+        return None, build_number_setting_error("errors.number_required", lang)
+    if getattr(setting, "type", "") == "integer" and numeric_value != numeric_value.to_integral_value():
+        return None, build_number_setting_error("errors.integer_required", lang)
+    if getattr(setting, "min_value", None) is not None and numeric_value < Decimal(str(setting.min_value)):
+        return None, build_number_setting_error("errors.number_too_small", lang, min=format_numeric_bound(setting.min_value))
+    if getattr(setting, "max_value", None) is not None and numeric_value > Decimal(str(setting.max_value)):
+        return None, build_number_setting_error("errors.number_too_large", lang, max=format_numeric_bound(setting.max_value))
+
+    if numeric_value == numeric_value.to_integral_value():
+        return str(int(numeric_value)), None
+    return str(numeric_value.normalize()), None
 
 
 def truncate_generation_summary_prompt(prompt: str, limit: int = SUMMARY_PROMPT_LIMIT) -> str:
@@ -554,11 +606,23 @@ def build_setting_value_text(model: GenerationModel, setting_key: str, current_v
     setting = model.user_settings[setting_key]
     setting_title = get_setting_display_title(setting_key, setting, lang)
     if setting.type in FREEFORM_SETTING_TYPES:
-        prompt_key = "settings.enter_number_value" if setting.type in {"number", "float"} else "settings.enter_text_value"
+        if setting.type in NUMERIC_SETTING_TYPES:
+            prompt_text = (
+                t(
+                    "settings.enter_number_value_range",
+                    lang,
+                    min=format_numeric_bound(setting.min_value),
+                    max=format_numeric_bound(setting.max_value),
+                )
+                if setting_has_number_range(setting)
+                else t("settings.enter_number_value", lang)
+            )
+        else:
+            prompt_text = t("settings.enter_text_value", lang)
         return (
             f"{t('settings.parameter', lang, parameter=escape(setting_title))}\n"
             f"{t('settings.current_value', lang, value=escape(current_value))}\n\n"
-            f"{t(prompt_key, lang)}\n"
+            f"{prompt_text}\n"
             f"{t('settings.clear_hint', lang)}"
         )
     return (
@@ -3610,7 +3674,8 @@ async def open_setting_selector(callback: CallbackQuery, state: FSMContext, sess
     if setting.type in FREEFORM_SETTING_TYPES:
         user_settings = get_model_state_settings(state_data, model_key)
         current_value = str(user_settings.get(setting_key, setting.default))
-        await state.set_state(GenerationStates.waiting_for_setting_text)
+        next_state = GenerationStates.waiting_for_setting_number if setting.type in NUMERIC_SETTING_TYPES else GenerationStates.waiting_for_setting_text
+        await state.set_state(next_state)
         await callback.message.edit_text(
             build_setting_value_text(model, setting_key, current_value, lang),
             reply_markup=build_setting_input_back_keyboard(lang),
@@ -3641,6 +3706,57 @@ async def back_to_settings_from_text_setting(message: Message, state: FSMContext
     state_data = await state.get_data()
     lang = get_state_language(state_data, message.from_user)
     await message.answer(t("generation.back_to_model_settings", lang), reply_markup=get_main_menu_keyboard(lang))
+    await render_settings_screen_message(message, state, edit=False)
+
+
+@router.message(GenerationStates.waiting_for_setting_number, lambda message: is_localized_button_text(message.text, "common.back_to_settings", getattr(message.from_user, "language_code", None)))
+async def back_to_settings_from_number_setting(message: Message, state: FSMContext):
+    """Вернуться с числового ввода настройки к экрану настроек модели."""
+    await back_to_settings_from_text_setting(message, state)
+
+
+@router.message(GenerationStates.waiting_for_setting_number)
+async def process_number_setting_value(message: Message, state: FSMContext):
+    """Сохранить числовое значение настройки и вернуть пользователя к настройкам модели."""
+    state_data = await state.get_data()
+    model_key = state_data.get("model_key")
+    setting_key = state_data.get("current_setting_key")
+    lang = get_state_language(state_data, message.from_user)
+    if not model_key or not setting_key:
+        await message.answer(format_user_error(ErrorCode.E010_INTERNAL_ERROR, t("errors.setting_not_selected", lang), lang))
+        return
+
+    model = get_generation_model(model_key)
+    if setting_key not in model.user_settings:
+        await message.answer(format_user_error(ErrorCode.E010_INTERNAL_ERROR, t("errors.setting_unavailable", lang), lang))
+        return
+
+    setting = model.user_settings[str(setting_key)]
+    if message_contains_file(message):
+        await message.answer(t("errors.number_setting_media_sent", lang))
+        return
+
+    raw_text = (message.text or "").strip()
+    if raw_text == "-":
+        value = ""
+    else:
+        value, error_text = validate_numeric_setting_input(setting, raw_text, lang)
+        if error_text:
+            await message.answer(error_text)
+            return
+
+    user_settings = get_model_state_settings(state_data, str(model_key))
+    trial_settings = dict(user_settings)
+    trial_settings[str(setting_key)] = value
+    try:
+        validate_model_settings(str(model_key), trial_settings)
+    except ValueError:
+        await message.answer(t("generation.invalid_value", lang))
+        return
+    user_settings[str(setting_key)] = value
+    await state.update_data(user_settings=user_settings, current_setting_key=None)
+    await state.set_state(GenerationStates.choosing_settings)
+    await message.answer(t("generation.value_saved", lang), reply_markup=get_main_menu_keyboard(lang))
     await render_settings_screen_message(message, state, edit=False)
 
 

@@ -429,6 +429,14 @@ def _validate_number_setting(
             f"Invalid numeric value '{raw_value}' for setting '{setting.key}' in model '{model.key}'"
         ) from exc
 
+    if not numeric_value.is_finite():
+        raise ValueError(
+            f"Invalid numeric value '{raw_value}' for setting '{setting.key}' in model '{model.key}'"
+        )
+    if setting.type == "integer" and numeric_value != numeric_value.to_integral_value():
+        raise ValueError(
+            f"Invalid integer value '{raw_value}' for setting '{setting.key}' in model '{model.key}'"
+        )
     if setting.min_value is not None and numeric_value < Decimal(str(setting.min_value)):
         raise ValueError(
             f"Value '{raw_value}' for setting '{setting.key}' in model '{model.key}' is below minimum {setting.min_value}"
@@ -493,7 +501,7 @@ def validate_model_settings(
                 ) from exc
             validated_settings[setting_key] = str(min(max(requested_generations, 1), 10))
             continue
-        if setting.type == "number":
+        if setting.type in {"number", "integer", "float"}:
             validated_settings[setting_key] = _validate_number_setting(model, setting, raw_value)
             continue
         if setting.type == "select" and raw_value not in setting.allowed_values:

@@ -17,6 +17,7 @@ class GenerationStates(StatesGroup):
     choosing_settings = State()
     choosing_setting_value = State()
     waiting_for_setting_text = State()
+    waiting_for_setting_number = State()
     waiting_for_images = State()
     waiting_for_image = State()
     waiting_for_video = State()

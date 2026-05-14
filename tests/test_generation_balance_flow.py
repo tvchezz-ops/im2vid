@@ -130,7 +130,7 @@ def install_text_setting_model() -> None:
         requires_audio=False,
         outputs="video",
         required_payload_fields=("prompt",),
-        allowed_payload_fields=("prompt", "note", "seed", "audio_url"),
+        allowed_payload_fields=("prompt", "note", "seed", "steps", "audio_url"),
         user_settings={
             "note": GenerationSetting(
                 key="note",
@@ -146,6 +146,17 @@ def install_text_setting_model() -> None:
                 type="number",
                 default="",
                 options=(),
+                min_value="1",
+                max_value="10",
+            ),
+            "steps": GenerationSetting(
+                key="steps",
+                title="Steps",
+                type="integer",
+                default="5",
+                options=(),
+                min_value="1",
+                max_value="20",
             ),
             "audio_url": GenerationSetting(
                 key="audio_url",
@@ -611,11 +622,121 @@ async def test_number_setting_input_screen_contains_back_button() -> None:
 
         await generations.open_setting_selector(callback, state)
 
-        assert state.state == GenerationStates.waiting_for_setting_text
+        assert state.state == GenerationStates.waiting_for_setting_number
         assert t("settings.parameter", "ru", parameter="Seed") in message.edits[-1]
-        assert t("settings.enter_number_value", "ru") in message.edits[-1]
+        assert "Введите число" in message.edits[-1]
+        assert t("settings.enter_number_value_range", "ru", min="1", max="10") in message.edits[-1]
         assert message.edit_markups[-1].inline_keyboard[0][0].text == f"⬅️ {t('common.back_to_settings', 'ru')}"
         assert message.edit_markups[-1].inline_keyboard[0][0].callback_data == "gen:back:settings"
+    finally:
+        remove_text_setting_model()
+
+
+@pytest.mark.asyncio
+async def test_number_setting_screen_is_localized_in_en() -> None:
+    install_text_setting_model()
+    try:
+        state = FakeState({"model_key": TEXT_SETTING_MODEL_KEY, "user_settings": {"seed": ""}, "lang": "en"})
+        message = FakeMessage(chat_id=457)
+        callback = FakeCallback(user_id=457, message=message, data="gen:setting:seed")
+        callback.from_user.language_code = "en"
+
+        await generations.open_setting_selector(callback, state)
+
+        assert state.state == GenerationStates.waiting_for_setting_number
+        assert "Send a number from 1 to 10." in message.edits[-1]
+        assert "Отправьте новое значение" not in message.edits[-1]
+    finally:
+        remove_text_setting_model()
+
+
+@pytest.mark.asyncio
+async def test_process_number_setting_rejects_text_with_number_error() -> None:
+    install_text_setting_model()
+    try:
+        state = FakeState({"model_key": TEXT_SETTING_MODEL_KEY, "current_setting_key": "seed", "user_settings": {"seed": ""}})
+        state.state = GenerationStates.waiting_for_setting_number
+        message = FakeMessage(chat_id=458)
+        message.text = "пиргтоьл"
+
+        await generations.process_number_setting_value(message, state)
+
+        assert "🔢 Нужно число" in message.answers[-1]
+        assert "Не подходит файл" not in message.answers[-1]
+        assert state.state == GenerationStates.waiting_for_setting_number
+    finally:
+        remove_text_setting_model()
+
+
+@pytest.mark.asyncio
+async def test_process_number_setting_media_uses_number_error() -> None:
+    install_text_setting_model()
+    try:
+        state = FakeState({"model_key": TEXT_SETTING_MODEL_KEY, "current_setting_key": "seed", "user_settings": {"seed": ""}})
+        state.state = GenerationStates.waiting_for_setting_number
+        message = FakeMessage(chat_id=459)
+        message.photo = [object()]
+
+        await generations.process_number_setting_value(message, state)
+
+        assert message.answers[-1] == t("errors.number_setting_media_sent", "ru")
+        assert "Не подходит файл" not in message.answers[-1]
+    finally:
+        remove_text_setting_model()
+
+
+@pytest.mark.asyncio
+async def test_process_integer_setting_rejects_decimal() -> None:
+    install_text_setting_model()
+    try:
+        state = FakeState({"model_key": TEXT_SETTING_MODEL_KEY, "current_setting_key": "steps", "user_settings": {"steps": "5"}})
+        state.state = GenerationStates.waiting_for_setting_number
+        message = FakeMessage(chat_id=460)
+        message.text = "5.5"
+
+        await generations.process_number_setting_value(message, state)
+
+        assert message.answers[-1] == t("errors.integer_required", "ru")
+        assert state.data["user_settings"]["steps"] == "5"
+    finally:
+        remove_text_setting_model()
+
+
+@pytest.mark.asyncio
+async def test_process_number_setting_min_max_validation() -> None:
+    install_text_setting_model()
+    try:
+        state = FakeState({"model_key": TEXT_SETTING_MODEL_KEY, "current_setting_key": "seed", "user_settings": {"seed": ""}})
+        state.state = GenerationStates.waiting_for_setting_number
+        message = FakeMessage(chat_id=461)
+        message.text = "0"
+
+        await generations.process_number_setting_value(message, state)
+
+        assert message.answers[-1] == t("errors.number_too_small", "ru", min="1")
+
+        message.text = "11"
+        await generations.process_number_setting_value(message, state)
+
+        assert message.answers[-1] == t("errors.number_too_large", "ru", max="10")
+    finally:
+        remove_text_setting_model()
+
+
+@pytest.mark.asyncio
+async def test_process_number_setting_saves_valid_number() -> None:
+    install_text_setting_model()
+    try:
+        state = FakeState({"model_key": TEXT_SETTING_MODEL_KEY, "current_setting_key": "seed", "user_settings": {"seed": ""}})
+        state.state = GenerationStates.waiting_for_setting_number
+        message = FakeMessage(chat_id=462)
+        message.text = "5.5"
+
+        await generations.process_number_setting_value(message, state)
+
+        assert state.state == GenerationStates.choosing_settings
+        assert state.data["user_settings"]["seed"] == "5.5"
+        assert message.answers[0] == t("generation.value_saved", "ru")
     finally:
         remove_text_setting_model()
 
@@ -1435,7 +1556,8 @@ def test_raw_english_docs_description_is_not_displayed_for_ru_setting_text() -> 
     text = generations.build_setting_value_text(model, "duration", "5", "ru")
 
     assert "The duration of the generated media" not in text
-    assert t("settings.enter_number_value", "ru") in text
+    assert "Введите число" in text
+    assert t("settings.enter_number_value_range", "ru", min="2", max="15") in text
 
 
 def test_settings_screen_shows_generated_or_fallback_settings_without_media_fields() -> None:
