@@ -109,7 +109,8 @@ async def test_show_profile_displays_clean_summary_and_delivery_toggle(session_f
         assert f"💳 {t('profile.balance', 'ru')}: 5" in message.answers[-1]
         assert f"🎨 {t('profile.total_generations', 'ru')}: 0" in message.answers[-1]
         assert "📦 Отправка: обычный формат" in message.answers[-1]
-        assert f"🏆 {t('profile.credits_spent', 'ru')}: 0" in message.answers[-1]
+        assert "Потрачено" not in message.answers[-1]
+        assert "Credits spent" not in message.answers[-1]
         keyboard = message.answer_markups[-1]
         assert keyboard.inline_keyboard[0][0].text == f"💳 {t('profile.top_up', 'ru')}"
         assert keyboard.inline_keyboard[1][0].text == "📎 Отправлять файлом"
@@ -128,8 +129,9 @@ async def test_toggle_delivery_mode_updates_profile_message(session_factory) -> 
         await profile.toggle_delivery_mode(callback, session)
 
         assert callback.answers[-1] == t("profile.setting_updated", "ru")
-        assert f"🏆 {t('profile.credits_spent', 'ru')}: 0" in message.edits[-1]
         assert "📦 Отправка: файлом" in message.edits[-1]
+        assert "Потрачено" not in message.edits[-1]
+        assert "Credits spent" not in message.edits[-1]
         keyboard = message.edit_markups[-1]
         assert keyboard.inline_keyboard[1][0].text == "🖼 Обычный формат"
         assert len(keyboard.inline_keyboard) == 2
@@ -149,7 +151,11 @@ async def test_show_profile_falls_back_to_english_when_language_code_missing(ses
 
         await profile.show_profile(message, state, session)
 
+        assert "💳 Balance: 5" in message.answers[-1]
+        assert "🎨 Generations: 0" in message.answers[-1]
         assert "📦 Delivery: normal" in message.answers[-1]
+        assert "Credits spent" not in message.answers[-1]
+        assert "Потрачено" not in message.answers[-1]
         keyboard = message.answer_markups[-1]
         assert keyboard.inline_keyboard[0][0].text == get_button_text("profile.top_up", "en")
         assert keyboard.inline_keyboard[1][0].text == "📎 Send as file"
