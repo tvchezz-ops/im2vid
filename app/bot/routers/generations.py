@@ -41,6 +41,7 @@ from app.bot.keyboards import (
     build_setting_options_keyboard,
     format_dimension_label,
     get_image_size_options_for_ratio,
+    get_setting_option_display_label,
     get_setting_options_for_ui,
     get_main_menu_keyboard,
     IMAGE_SIZE_RATIO_KEYS,
@@ -52,6 +53,7 @@ from app.bot.keyboards import (
 )
 from app.bot.error_messages import build_error_keyboard, build_user_error_message, log_error_code
 from app.bot.language import get_event_lang
+from app.bot.model_i18n import get_model_display_title
 from app.bot.states import GenerationStates
 from app.config import settings
 from app.db import GenerationRepository, GenerationRequestStatus, UserRepository
@@ -382,11 +384,11 @@ def get_generation_summary_setting_title(setting_key: str, setting: Any, lang: s
     return get_setting_display_title(setting_key, setting, lang)
 
 
-def get_setting_display_value(setting: Any, value: Any) -> str:
+def get_setting_display_value(setting: Any, value: Any, lang: str = DEFAULT_LANGUAGE) -> str:
     raw_value = str(value)
     for option in getattr(setting, "options", ()) or ():
         if option.value == raw_value:
-            return option.label
+            return get_setting_option_display_label(option.value, option.label, lang)
     return raw_value
 
 
@@ -453,7 +455,7 @@ def format_generation_summary_settings(model: GenerationModel, user_settings: Ma
             continue
         title = get_generation_summary_setting_title(setting_key, setting, lang)
         value = user_settings.get(setting.key, setting.default)
-        display_value = get_setting_display_value(setting, value)
+        display_value = get_setting_display_value(setting, value, lang)
         rows.append(f"• {escape(title)}: <code>{escape(str(display_value))}</code>")
     return "\n".join(rows) if rows else "-"
 
@@ -468,7 +470,7 @@ def build_generation_summary_message(generation_batch: GenerationBatchSummary, l
     parts = [
         t("generation.summary.title", lang),
         "",
-        t("generation.summary.model", lang, model=escape(generation_batch.model.title)),
+        t("generation.summary.model", lang, model=escape(get_model_display_title(generation_batch.model, lang))),
         t("generation.summary.type", lang, generation_type=generation_type),
         t("generation.summary.prompt", lang, prompt=prompt),
         "",
@@ -584,14 +586,14 @@ def format_settings_price_line(model: GenerationModel, user_settings: dict[str, 
     price_usd, cost = calculate_generation_price_quote(model, user_settings, num_generations=num_generations)
     usd_label = format_price_usd(price_usd)
     if lang == "ru":
-        prefix = "от " if generation_cost_has_minimum_label(model) and not user_settings else ""
+        prefix = t("credits.prefix_from", lang) if generation_cost_has_minimum_label(model) and not user_settings else ""
         if is_generation_cost_estimated(model):
             prefix = f"{prefix}≈ "
-        return f"💰 Цена: {prefix}{cost} credits (~${usd_label})"
-    prefix = "from " if generation_cost_has_minimum_label(model) and not user_settings else ""
+        return t("generation.price_line", lang, prefix=prefix, cost=cost, usd=usd_label)
+    prefix = t("credits.prefix_from", lang) if generation_cost_has_minimum_label(model) and not user_settings else ""
     if is_generation_cost_estimated(model):
         prefix = f"{prefix}≈ "
-    return f"💰 Price: {prefix}{cost} credits (~${usd_label})"
+    return t("generation.price_line", lang, prefix=prefix, cost=cost, usd=usd_label)
 
 
 def build_settings_text(model: GenerationModel, user_settings: dict[str, Any], lang: str = DEFAULT_LANGUAGE) -> str:
@@ -601,13 +603,13 @@ def build_settings_text(model: GenerationModel, user_settings: dict[str, Any], l
     requirements_block = f"{requirements_text}\n\n" if requirements_text else ""
     if not model.user_settings:
         return (
-            f"{t('settings.model_settings', lang, model=escape(model.title))}\n\n"
+            f"{t('settings.model_settings', lang, model=escape(get_model_display_title(model, lang)))}\n\n"
             f"{requirements_block}"
             f"{price_line}\n\n"
             f"{t('generation.settings_no_extra_full', lang)}"
         )
     return (
-        f"{t('settings.model_settings', lang, model=escape(model.title))}\n\n"
+        f"{t('settings.model_settings', lang, model=escape(get_model_display_title(model, lang)))}\n\n"
         f"{requirements_block}"
         f"{price_line}\n\n"
         f"{t('settings.choose_parameters', lang)}\n\n"
@@ -664,7 +666,7 @@ def build_confirmation_text(
         prompt_line = t("generation.voiceover_label", lang, prompt=escape(prompt))
     return (
         f"{t('generation.review', lang)}\n\n"
-        f"{t('generation.model_label', lang, model=escape(model.title))}\n"
+        f"{t('generation.model_label', lang, model=escape(get_model_display_title(model, lang)))}\n"
         f"{t('generation.settings_label', lang, settings=format_generation_settings_localized(model, user_settings, lang))}\n\n"
         f"{prompt_line}\n\n"
         f"{t('generation.count_label', lang, count=num_generations)}\n"
@@ -1630,7 +1632,7 @@ async def render_settings_screen_message(message: Message, state: FSMContext, *,
 async def prompt_for_generation_image(message: Message, *, edit: bool, model: GenerationModel, lang: str | None = None) -> None:
     """Показать шаг загрузки изображения с reply keyboard возврата к настройкам."""
     lang = lang or get_actor_language(getattr(message, "from_user", None))
-    prompt_text = t("generation.send_image_for_model", lang, model=model.title)
+    prompt_text = t("generation.send_image_for_model", lang, model=get_model_display_title(model, lang))
     if edit:
         await message.edit_text(prompt_text, reply_markup=None)
     else:
@@ -1647,7 +1649,7 @@ async def prompt_for_generation_images(message: Message, *, edit: bool, model: G
     prompt_text = t(
         "generation.send_images_for_model",
         lang,
-        model=model.title,
+        model=get_model_display_title(model, lang),
         min_count=model.min_images,
         max_count=model.max_images,
     )
@@ -1665,7 +1667,7 @@ async def prompt_for_generation_images(message: Message, *, edit: bool, model: G
 async def prompt_for_generation_video(message: Message, *, edit: bool, model: GenerationModel, lang: str | None = None) -> None:
     """Показать шаг загрузки видео с reply keyboard возврата к настройкам."""
     lang = lang or get_actor_language(getattr(message, "from_user", None))
-    prompt_text = t("generation.send_video_for_lipsync", lang) if model.generation_type == "lipsync" else t("generation.send_video_for_model", lang, model=model.title)
+    prompt_text = t("generation.send_video_for_lipsync", lang) if model.generation_type == "lipsync" else t("generation.send_video_for_model", lang, model=get_model_display_title(model, lang))
     if edit:
         await message.edit_text(prompt_text, reply_markup=None)
     else:
@@ -1680,7 +1682,7 @@ async def prompt_for_generation_video(message: Message, *, edit: bool, model: Ge
 async def prompt_for_generation_audio(message: Message, *, edit: bool, model: GenerationModel, lang: str | None = None) -> None:
     """Показать шаг загрузки аудио с reply keyboard возврата к настройкам."""
     lang = lang or get_actor_language(getattr(message, "from_user", None))
-    prompt_text = t("generation.send_audio_for_lipsync", lang) if model.generation_type == "lipsync" else t("generation.send_audio_for_model", lang, model=model.title)
+    prompt_text = t("generation.send_audio_for_lipsync", lang) if model.generation_type == "lipsync" else t("generation.send_audio_for_model", lang, model=get_model_display_title(model, lang))
     if edit:
         await message.edit_text(prompt_text, reply_markup=None)
     else:
@@ -1773,7 +1775,7 @@ async def restore_generation_repeat_flow(callback: CallbackQuery, state: FSMCont
         prompt=str(generation.prompt or ""),
         user_language=lang,
     )
-    await callback.message.answer(t("generation.repeat_title", lang, model=escape(model.title)), parse_mode="HTML")
+    await callback.message.answer(t("generation.repeat_title", lang, model=escape(get_model_display_title(model, lang))), parse_mode="HTML")
     if get_model_required_input_type(model) == "text":
         await send_confirmation_screen(
             message=callback.message,
@@ -4852,7 +4854,7 @@ async def confirm_generation(callback: CallbackQuery, state: FSMContext, session
         await state.clear()
 
         await callback.message.edit_text(
-            build_generation_started_message(str(model_title or model.title), num_generations, lang),
+            build_generation_started_message(get_model_display_title(model, lang), num_generations, lang),
             parse_mode="HTML",
         )
         await callback.message.answer(

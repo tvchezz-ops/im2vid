@@ -4475,6 +4475,100 @@ for language_code, catalog_updates in _GENERATION_REFUND_NOTICE_UX.items():
     globals()[f"{language_code.upper()}_TRANSLATIONS"].update(catalog_updates)
     FLOW_I18N_TRANSLATIONS[language_code].update(catalog_updates)
 
+_LOCALIZATION_AUDIT_RUNTIME_UX = {
+    "en": {
+        "credits.unit": "credits",
+        "credits.compact": "{prefix}{cost} credits",
+        "credits.prefix_from": "from ",
+        "generation.price_line": "💰 Price: {prefix}{cost} credits (~${usd})",
+        "provider.label.alibaba": "Alibaba",
+        "provider.label.bytedance": "ByteDance",
+        "provider.label.google": "Google",
+        "provider.label.openai": "OpenAI",
+        "provider.label.kling": "Kling",
+        "provider.label.grok": "Grok",
+        "provider.label.minimax": "MiniMax",
+        "provider.label.wavespeed_ai": "Wan AI",
+        "provider.label.unknown": "Provider",
+        "model.kind.image_upscaler": "Image Upscaler",
+        "settings.option.true": "On",
+        "settings.option.false": "Off",
+        "settings.option.on": "On",
+        "settings.option.off": "Off",
+        "settings.option.fast": "Fast",
+        "settings.option.turbo": "Turbo",
+        "settings.option.lite": "Lite",
+        "settings.option.pro": "Pro",
+        "settings.option.standard": "Standard",
+        "settings.option.high": "High",
+        "settings.option.medium": "Medium",
+        "settings.option.low": "Low",
+    },
+    "ru": {
+        "credits.unit": "кредитов",
+        "credits.compact": "{prefix}{cost} кредитов",
+        "credits.prefix_from": "от ",
+        "generation.price_line": "💰 Цена: {prefix}{cost} кредитов (~${usd})",
+        "provider.label.alibaba": "Alibaba",
+        "provider.label.bytedance": "ByteDance",
+        "provider.label.google": "Google",
+        "provider.label.openai": "OpenAI",
+        "provider.label.kling": "Kling",
+        "provider.label.grok": "Grok",
+        "provider.label.minimax": "MiniMax",
+        "provider.label.wavespeed_ai": "Wan AI",
+        "provider.label.unknown": "Провайдер",
+        "model.kind.image_upscaler": "Улучшение изображения",
+        "settings.option.true": "Вкл.",
+        "settings.option.false": "Выкл.",
+        "settings.option.on": "Вкл.",
+        "settings.option.off": "Выкл.",
+        "settings.option.fast": "Быстро",
+        "settings.option.turbo": "Турбо",
+        "settings.option.lite": "Лёгкий",
+        "settings.option.pro": "Профи",
+        "settings.option.standard": "Стандарт",
+        "settings.option.high": "Высокое",
+        "settings.option.medium": "Среднее",
+        "settings.option.low": "Низкое",
+    },
+    "es": {
+        "credits.unit": "créditos", "credits.compact": "{prefix}{cost} créditos", "credits.prefix_from": "desde ", "generation.price_line": "💰 Precio: {prefix}{cost} créditos (~${usd})", "provider.label.unknown": "Proveedor", "model.kind.image_upscaler": "Mejora de imagen", "settings.option.true": "Activado", "settings.option.false": "Desactivado", "settings.option.on": "Activado", "settings.option.off": "Desactivado", "settings.option.fast": "Rápido", "settings.option.turbo": "Turbo", "settings.option.lite": "Ligero", "settings.option.pro": "Pro", "settings.option.standard": "Estándar", "settings.option.high": "Alto", "settings.option.medium": "Medio", "settings.option.low": "Bajo",
+    },
+    "pt": {
+        "credits.unit": "créditos", "credits.compact": "{prefix}{cost} créditos", "credits.prefix_from": "a partir de ", "generation.price_line": "💰 Preço: {prefix}{cost} créditos (~${usd})", "provider.label.unknown": "Provedor", "model.kind.image_upscaler": "Melhoria de imagem", "settings.option.true": "Ligado", "settings.option.false": "Desligado", "settings.option.on": "Ligado", "settings.option.off": "Desligado", "settings.option.fast": "Rápido", "settings.option.turbo": "Turbo", "settings.option.lite": "Leve", "settings.option.pro": "Pro", "settings.option.standard": "Padrão", "settings.option.high": "Alto", "settings.option.medium": "Médio", "settings.option.low": "Baixo",
+    },
+    "fr": {
+        "credits.unit": "crédits", "credits.compact": "{prefix}{cost} crédits", "credits.prefix_from": "dès ", "generation.price_line": "💰 Prix : {prefix}{cost} crédits (~${usd})", "provider.label.unknown": "Fournisseur", "model.kind.image_upscaler": "Amélioration d'image", "settings.option.true": "Activé", "settings.option.false": "Désactivé", "settings.option.on": "Activé", "settings.option.off": "Désactivé", "settings.option.fast": "Rapide", "settings.option.turbo": "Turbo", "settings.option.lite": "Léger", "settings.option.pro": "Pro", "settings.option.standard": "Standard", "settings.option.high": "Élevé", "settings.option.medium": "Moyen", "settings.option.low": "Bas",
+    },
+    "de": {
+        "credits.unit": "Credits", "credits.compact": "{prefix}{cost} Credits", "credits.prefix_from": "ab ", "generation.price_line": "💰 Preis: {prefix}{cost} Credits (~${usd})", "provider.label.unknown": "Anbieter", "model.kind.image_upscaler": "Bildverbesserung", "settings.option.true": "Ein", "settings.option.false": "Aus", "settings.option.on": "Ein", "settings.option.off": "Aus", "settings.option.fast": "Schnell", "settings.option.turbo": "Turbo", "settings.option.lite": "Leicht", "settings.option.pro": "Pro", "settings.option.standard": "Standard", "settings.option.high": "Hoch", "settings.option.medium": "Mittel", "settings.option.low": "Niedrig",
+    },
+    "ar": {
+        "credits.unit": "رصيد", "credits.compact": "{prefix}{cost} رصيد", "credits.prefix_from": "من ", "generation.price_line": "💰 السعر: {prefix}{cost} رصيد (~${usd})", "provider.label.unknown": "المزوّد", "model.kind.image_upscaler": "تحسين الصورة", "settings.option.true": "تشغيل", "settings.option.false": "إيقاف", "settings.option.on": "تشغيل", "settings.option.off": "إيقاف", "settings.option.fast": "سريع", "settings.option.turbo": "توربو", "settings.option.lite": "خفيف", "settings.option.pro": "احترافي", "settings.option.standard": "قياسي", "settings.option.high": "عالٍ", "settings.option.medium": "متوسط", "settings.option.low": "منخفض",
+    },
+    "hi": {
+        "credits.unit": "क्रेडिट", "credits.compact": "{prefix}{cost} क्रेडिट", "credits.prefix_from": "से ", "generation.price_line": "💰 कीमत: {prefix}{cost} क्रेडिट (~${usd})", "provider.label.unknown": "प्रोवाइडर", "model.kind.image_upscaler": "इमेज सुधार", "settings.option.true": "चालू", "settings.option.false": "बंद", "settings.option.on": "चालू", "settings.option.off": "बंद", "settings.option.fast": "तेज़", "settings.option.turbo": "टर्बो", "settings.option.lite": "हल्का", "settings.option.pro": "प्रो", "settings.option.standard": "स्टैंडर्ड", "settings.option.high": "ऊँचा", "settings.option.medium": "मध्यम", "settings.option.low": "कम",
+    },
+    "zh": {
+        "credits.unit": "点数", "credits.compact": "{prefix}{cost} 点数", "credits.prefix_from": "从 ", "generation.price_line": "💰 价格：{prefix}{cost} 点数 (~${usd})", "provider.label.unknown": "提供方", "model.kind.image_upscaler": "图片增强", "settings.option.true": "开启", "settings.option.false": "关闭", "settings.option.on": "开启", "settings.option.off": "关闭", "settings.option.fast": "快速", "settings.option.turbo": "极速", "settings.option.lite": "轻量", "settings.option.pro": "专业", "settings.option.standard": "标准", "settings.option.high": "高", "settings.option.medium": "中", "settings.option.low": "低",
+    },
+    "id": {
+        "credits.unit": "kredit", "credits.compact": "{prefix}{cost} kredit", "credits.prefix_from": "mulai ", "generation.price_line": "💰 Harga: {prefix}{cost} kredit (~${usd})", "provider.label.unknown": "Penyedia", "model.kind.image_upscaler": "Peningkatan gambar", "settings.option.true": "Aktif", "settings.option.false": "Nonaktif", "settings.option.on": "Aktif", "settings.option.off": "Nonaktif", "settings.option.fast": "Cepat", "settings.option.turbo": "Turbo", "settings.option.lite": "Ringan", "settings.option.pro": "Pro", "settings.option.standard": "Standar", "settings.option.high": "Tinggi", "settings.option.medium": "Sedang", "settings.option.low": "Rendah",
+    },
+}
+
+for language_code, catalog_updates in _LOCALIZATION_AUDIT_RUNTIME_UX.items():
+    catalog_updates.setdefault("provider.label.alibaba", "Alibaba")
+    catalog_updates.setdefault("provider.label.bytedance", "ByteDance")
+    catalog_updates.setdefault("provider.label.google", "Google")
+    catalog_updates.setdefault("provider.label.openai", "OpenAI")
+    catalog_updates.setdefault("provider.label.kling", "Kling")
+    catalog_updates.setdefault("provider.label.grok", "Grok")
+    catalog_updates.setdefault("provider.label.minimax", "MiniMax")
+    catalog_updates.setdefault("provider.label.wavespeed_ai", "Wan AI")
+    globals()[f"{language_code.upper()}_TRANSLATIONS"].update(catalog_updates)
+
 TRANSLATIONS = {
     "en": EN_TRANSLATIONS,
     "ru": RU_TRANSLATIONS,

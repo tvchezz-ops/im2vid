@@ -35,6 +35,7 @@ from app.bot.keyboards import (
     resolve_model_key_from_token,
     validate_callback_length,
 )
+from app.bot.model_i18n import get_model_display_title
 from app.services.generation_service import list_models_by_provider, list_models_by_type
 from app.i18n import t
 from app.services.generation_service import get_generation_model
@@ -175,9 +176,10 @@ def test_build_models_keyboard_hides_model_price() -> None:
 
 
 def test_build_models_keyboard_hides_minimum_video_duration_price_in_ru() -> None:
-    keyboard = build_models_keyboard([get_generation_model("alibaba_wan_2_6_text_to_video")], "gen:back:sections", "ru")
+    model = get_generation_model("alibaba_wan_2_6_text_to_video")
+    keyboard = build_models_keyboard([model], "gen:back:sections", "ru")
 
-    assert keyboard.inline_keyboard[0][0].text == "Alibaba Wan 2.6 Text To Video"
+    assert keyboard.inline_keyboard[0][0].text == get_model_display_title(model, "ru")
     assert "credits" not in keyboard.inline_keyboard[0][0].text
 
 
@@ -381,10 +383,10 @@ def test_model_pagination_works_for_more_than_eight_models() -> None:
         page_callback_builder=lambda target_page: f"gen:models:text_to_image:{target_page}",
     )
 
-    assert models[0].title in first_page.inline_keyboard[0][0].text
-    assert models[7].title in first_page.inline_keyboard[7][0].text
+    assert get_model_display_title(models[0], "en") in first_page.inline_keyboard[0][0].text
+    assert get_model_display_title(models[7], "en") in first_page.inline_keyboard[7][0].text
     assert f"gen:model:{models[8].key}" not in _iter_callback_data(first_page)
-    assert models[8].title in second_page.inline_keyboard[0][0].text
+    assert get_model_display_title(models[8], "en") in second_page.inline_keyboard[0][0].text
     assert first_page.inline_keyboard[-2][1].callback_data == "gen:models:text_to_image:1"
     assert second_page.inline_keyboard[-2][0].callback_data == "gen:models:text_to_image:0"
 
@@ -472,6 +474,20 @@ def test_build_model_settings_keyboard_shows_generated_settings_for_target_model
     assert "gen:setting:audio" not in lipsync_callbacks
     assert all("Audio" not in text and "Аудио" not in text for text in lipsync_texts)
     assert "gen:setting:num_generations" in lipsync_callbacks
+
+
+def test_generated_setting_metadata_is_localized_or_hidden_in_ru() -> None:
+    model = get_generation_model("alibaba_happyhorse_1_0_text_to_video")
+
+    keyboard = build_model_settings_keyboard(model, {}, lang="ru")
+    text = "\n".join(button.text for button in _iter_buttons(keyboard))
+
+    assert "Duration" not in text
+    assert "Resolution" not in text
+    assert "Video length" not in text
+    assert "Output video resolution" not in text
+    assert "Длительность" in text
+    assert "Разрешение" in text
 
 
 def test_build_setting_options_keyboard_uses_setting_key_and_option_index() -> None:

@@ -21,6 +21,7 @@ os.environ.setdefault("PUBLIC_BASE_URL", "https://example.com")
 
 
 from app.bot.routers import generations
+from app.bot.model_i18n import get_model_display_title
 from app.bot.keyboards import build_main_menu_keyboard, get_button_text
 from app.db.base import Base
 from app.db.models import GenerationRequest, GenerationRequestStatus, User
@@ -882,7 +883,7 @@ async def test_size_setting_price_recalculates_after_resolution_change() -> None
         await generations.choose_image_size_resolution(callback, state)
 
         assert state.data["user_settings"]["size"] == "3840*2160"
-        assert "💰 Цена: 12 credits" in message.edits[-1]
+        assert "💰 Цена: 12 кредитов" in message.edits[-1]
     finally:
         remove_size_setting_models()
 
@@ -1047,7 +1048,8 @@ async def test_setting_input_back_callback_returns_to_model_settings() -> None:
 
         assert state.state == GenerationStates.choosing_settings
         assert state.data["current_setting_key"] is None
-        assert t("settings.model_settings", "ru", model="Test Text Setting Model") in message.edits[-1]
+        model = generations.get_generation_model(TEXT_SETTING_MODEL_KEY)
+        assert t("settings.model_settings", "ru", model=get_model_display_title(model, "ru")) in message.edits[-1]
         assert message.edit_markups[-1] is not None
         assert callback.answered is True
     finally:
@@ -1155,7 +1157,8 @@ async def test_generation_image_step_uses_db_language_without_mixing(session_fac
         await generations.continue_after_settings(callback, state, session)
 
         combined_text = "\n".join(message.edits + message.answers)
-        assert t("generation.send_image_for_model", "ru", model="Alibaba Wan 2.7 Image To Video") in combined_text
+        model = generations.get_generation_model("alibaba_wan_2_7_image_to_video")
+        assert t("generation.send_image_for_model", "ru", model=get_model_display_title(model, "ru")) in combined_text
         assert t("generation.changed_mind_back_to_settings", "ru") in combined_text
         assert "Send an image" not in combined_text
         assert "If you changed your mind" not in combined_text
@@ -1178,7 +1181,8 @@ async def test_generation_image_step_english_user_has_no_russian_phrases(session
         await generations.continue_after_settings(callback, state, session)
 
         combined_text = "\n".join(message.edits + message.answers)
-        assert t("generation.send_image_for_model", "en", model="Alibaba Wan 2.7 Image To Video") in combined_text
+        model = generations.get_generation_model("alibaba_wan_2_7_image_to_video")
+        assert t("generation.send_image_for_model", "en", model=get_model_display_title(model, "en")) in combined_text
         assert t("generation.changed_mind_back_to_settings", "en") in combined_text
         assert "Отправьте" not in combined_text
         assert "Если передумали" not in combined_text
@@ -1251,8 +1255,8 @@ async def test_process_generation_images_appends_uploaded_media(monkeypatch) -> 
 @pytest.mark.parametrize(
     ("model_key", "model_title", "max_images_text"),
     [
-        ("nano_banana", "Google Nano Banana Pro Edit Ultra", "1 из 10"),
-        ("seedream", "Bytedance Seedream V4.5 Edit", "1 из 10"),
+        ("nano_banana", "Nano Banana Pro Edit Ultra · Правка изображения", "1 из 10"),
+        ("seedream", "Seedream V4.5 Edit · Правка изображения", "1 из 10"),
     ],
 )
 async def test_legacy_nano_banana_and_seedream_generation_flow_still_reaches_confirmation(
@@ -3205,9 +3209,9 @@ def test_build_settings_text_shows_price_and_recalculates_duration() -> None:
         "ru",
     )
 
-    assert "💰 Цена: ≈ 6 credits" in default_text
+    assert "💰 Цена: ≈ 6 кредитов" in default_text
     assert "(~$0.08)" in default_text
-    assert "💰 Цена: ≈ 6 credits" in longer_text
+    assert "💰 Цена: ≈ 6 кредитов" in longer_text
     assert "(~$0.08)" in longer_text
 
 
@@ -3419,8 +3423,9 @@ async def test_summary_repeat_restores_exact_alibaba_model_and_ignores_current_f
         assert state_data["prompt"] == "A cinematic image prompt"
         assert state_data["user_settings"]["num_generations"] == "2"
         assert state.state == GenerationStates.waiting_for_confirmation
-        assert callback.message.answers[0] == t("generation.repeat_title", "ru", model=model.title)
-        assert any("Alibaba Wan 2.7 Text To Image Pro" in answer for answer in callback.message.answers)
+        localized_title = get_model_display_title(model, "ru")
+        assert callback.message.answers[0] == t("generation.repeat_title", "ru", model=localized_title)
+        assert any(localized_title in answer for answer in callback.message.answers)
 
 
 @pytest.mark.asyncio
@@ -3444,7 +3449,7 @@ async def test_summary_repeat_text_only_opens_confirmation(session_factory) -> N
         await generations.repeat_generation_from_summary(callback, state, session)
 
         assert state.state == GenerationStates.waiting_for_confirmation
-        assert callback.message.answers[0] == t("generation.repeat_title", "ru", model=model.title)
+        assert callback.message.answers[0] == t("generation.repeat_title", "ru", model=get_model_display_title(model, "ru"))
         assert t("generation.review", "ru") in callback.message.answers[-1]
         assert "A repeatable text only prompt" in callback.message.answers[-1]
 
@@ -3473,10 +3478,10 @@ async def test_summary_repeat_english_user_does_not_mix_russian(session_factory)
         await generations.repeat_generation_from_summary(callback, state, session)
 
         combined_text = "\n".join(callback.message.answers)
-        assert callback.message.answers[0] == t("generation.repeat_title", "en", model=model.title)
+        assert callback.message.answers[0] == t("generation.repeat_title", "en", model=get_model_display_title(model, "en"))
         assert t("generation.review", "en") in combined_text
         assert "Model:" in combined_text
-        assert t("generation.repeat_title", "ru", model=model.title) not in combined_text
+        assert t("generation.repeat_title", "ru", model=get_model_display_title(model, "ru")) not in combined_text
         assert t("generation.review", "ru") not in combined_text
 
 
@@ -3504,7 +3509,7 @@ async def test_summary_repeat_media_model_asks_for_media_again(session_factory) 
         assert state_data["model_key"] == "alibaba_wan_2_7_image_to_video"
         assert state_data["prompt"] == "Animate this image with soft camera motion"
         assert state.state in {GenerationStates.waiting_for_image, GenerationStates.waiting_for_images}
-        assert callback.message.answers[0] == t("generation.repeat_title", "ru", model=model.title)
+        assert callback.message.answers[0] == t("generation.repeat_title", "ru", model=get_model_display_title(model, "ru"))
         assert any("Отправьте изображ" in answer for answer in callback.message.answers)
 
 

@@ -7,6 +7,7 @@ from aiogram.types import InlineKeyboardButton, InlineKeyboardMarkup, KeyboardBu
 from aiogram.utils.keyboard import InlineKeyboardBuilder
 
 from app.bot.error_messages import build_error_keyboard
+from app.bot.model_i18n import get_model_display_title, get_provider_display_label
 from app.i18n import DEFAULT_LANGUAGE, SUPPORTED_LANGUAGES, get_user_language, t
 from app.services.payments import ALLOWED_STARS_AMOUNTS
 from app.services.generation_service import (
@@ -415,7 +416,11 @@ def get_setting_option_display_label(value: str, label: str, lang: str = DEFAULT
     translated_label = t(option_key, lang)
     if translated_label != option_key:
         return translated_label
-    return label
+    normalized_label_key = f"settings.option.{str(label).strip().lower().replace(' ', '_')}"
+    normalized_label = t(normalized_label_key, lang)
+    if normalized_label != normalized_label_key:
+        return normalized_label
+    return str(value) if get_user_language(lang) != DEFAULT_LANGUAGE and str(label).strip().isalpha() else label
 
 
 def get_model_setting_entries(model: Any) -> list[tuple[str, Any]]:
@@ -492,7 +497,7 @@ def format_model_price_label(model: Any, lang: str = DEFAULT_LANGUAGE) -> str:
             prefix = "from "
         if is_generation_cost_estimated(model):
             prefix = f"{prefix}≈ "
-        return f"{prefix}{cost} credits"
+        return t("credits.compact", lang, prefix=prefix, cost=cost)
     except Exception:
         return ""
 
@@ -585,7 +590,7 @@ def build_providers_keyboard(lang: str = DEFAULT_LANGUAGE, page: int = 0) -> Inl
         list_providers(),
         page,
         item_callback_builder=lambda provider: f"gen:provider:{provider}:0",
-        item_text_builder=lambda provider: PROVIDER_LABELS.get(provider, str(provider).title()),
+        item_text_builder=lambda provider: get_provider_display_label(provider, lang),
         page_callback_builder=lambda target_page: f"gen:providers:{target_page}",
         back_callback="gen:back:sections",
         columns=2,
@@ -608,7 +613,7 @@ def build_models_keyboard(
         return f"gen:model:{token}"
 
     def build_model_text(model: Any) -> str:
-        button_text = str(model.title)
+        button_text = get_model_display_title(model, lang)
         price_label = format_model_price_label(model, lang) if show_price else ""
         if show_price and price_label:
             button_text = f"{button_text} — {price_label}"

@@ -11,8 +11,15 @@ os.environ.setdefault("WAVESPEED_API_KEY", "test-api-key")
 os.environ.setdefault("PUBLIC_BASE_URL", "https://example.com")
 
 import app.i18n as i18n
-from app.i18n import SUPPORTED_LANGUAGES, TRANSLATIONS, get_user_language, t
+from app.i18n import SUPPORTED_LANGUAGES, TRANSLATIONS, get_user_language, safe_t, t
 from app.i18n.translations import FLOW_I18N_TRANSLATIONS
+from scripts.check_i18n_consistency import (
+    EN_FORBIDDEN_RE,
+    RU_FORBIDDEN_RE,
+    _scan_text,
+    run_scan,
+    scan_hardcoded_user_text,
+)
 
 
 PAYMENT_TRANSLATION_KEYS = {
@@ -209,6 +216,40 @@ def test_translate_falls_back_to_english_for_missing_supported_language_key(monk
 
 def test_translate_falls_back_to_english_for_missing_key() -> None:
     assert t("unknown.key", "ru") == "unknown.key"
+
+
+def test_safe_translate_never_returns_raw_missing_key(caplog) -> None:
+    raw_key = "generation.invalid_input_generic"
+
+    translated = safe_t(raw_key, "ru")
+
+    assert translated != raw_key
+    assert raw_key in caplog.text
+    assert "попробуйте" in translated.lower()
+
+
+def test_safe_translate_handles_formatting_errors_without_raw_keys(caplog) -> None:
+    translated = safe_t("generation.started_count", "en", model="Nano Banana")
+
+    assert translated != "generation.started_count"
+    assert "Generation started" not in translated
+    assert "Translation formatting failed" in caplog.text
+
+
+def test_i18n_consistency_scanner_passes_all_supported_locales() -> None:
+    assert run_scan() == []
+
+
+def test_i18n_scanner_finds_no_hardcoded_user_facing_literals() -> None:
+    assert scan_hardcoded_user_text() == []
+
+
+def test_ru_and_en_locales_do_not_contain_requested_language_contamination() -> None:
+    for key, value in TRANSLATIONS["ru"].items():
+        assert not RU_FORBIDDEN_RE.search(_scan_text(value)), key
+
+    for key, value in TRANSLATIONS["en"].items():
+        assert not EN_FORBIDDEN_RE.search(_scan_text(value)), key
 
 
 def test_translate_formats_placeholders() -> None:
