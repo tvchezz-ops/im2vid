@@ -550,7 +550,12 @@ async def test_open_setting_selector_and_choose_setting_value_for_model_with_set
 
     assert state.data["current_setting_key"] == "aspect_ratio"
     assert t("settings.parameter", "ru", parameter="Формат") in message.edits[-1]
-    assert t("generation.setting_choose_value", "ru") in message.edits[-1]
+    assert t("settings.current_value", "ru", value="1:1") in message.edits[-1]
+    assert t("settings.select_helper", "ru") in message.edits[-1]
+    assert "Варианты:" not in message.edits[-1]
+    assert "• <code>1:1</code>" not in message.edits[-1]
+    assert "• <code>16:9</code>" not in message.edits[-1]
+    assert message.edit_markups[-1] is not None
 
     choose_callback = FakeCallback(user_id=450, message=message, data="gen:set:aspect_ratio:8")
     await generations.choose_setting_value(choose_callback, state)

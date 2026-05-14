@@ -552,14 +552,10 @@ def build_setting_value_text(model: GenerationModel, setting_key: str, current_v
             f"{t(prompt_key, lang)}\n"
             f"{t('settings.clear_hint', lang)}"
         )
-    options = "\n".join(f"• <code>{escape(option.value)}</code>" for option in setting.options)
     return (
-        f"{t('settings.model_settings', lang, model=escape(model.title))}\n\n"
-        f"{t('generation.setting_choose_value', lang)}\n\n"
-        f"{t('generation.model_label', lang, model=escape(model.title))}\n"
         f"{t('settings.parameter', lang, parameter=escape(setting_title))}\n"
         f"{t('settings.current_value', lang, value=escape(current_value))}\n\n"
-        f"{t('generation.setting_options', lang, options=options)}"
+        f"{t('settings.select_helper', lang)}"
     )
 
 
