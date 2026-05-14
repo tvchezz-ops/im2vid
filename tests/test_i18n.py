@@ -123,6 +123,20 @@ FLOW_I18N_KEYS = {
     "settings.current_values",
 }
 
+PROMPT_REQUEST_KEYS = {
+    "generation.prompt_text_image",
+    "generation.prompt_text_video",
+    "generation.prompt_request",
+    "generation.second_step_text",
+    "generation.flow.text_to_image.initial",
+    "generation.flow.text_to_video.initial",
+}
+
+NEW_PROMPT_COPY = {
+    "en": "✍️ Write a prompt for generation\n\nDescribe what you want to generate.\nMore detailed prompts usually produce better results.\n\nYou can return to settings at any time.",
+    "ru": "✍️ Напишите промпт для генерации\n\nОпишите, что вы хотите получить в результате.\nЧем подробнее описание — тем лучше результат генерации.\n\nК настройкам можно вернуться в любой момент.",
+}
+
 
 def test_supported_languages_match_translation_catalog() -> None:
     assert len(SUPPORTED_LANGUAGES) == 10
@@ -158,6 +172,32 @@ def test_all_languages_have_generation_flow_i18n_keys() -> None:
         assert FLOW_I18N_KEYS <= set(TRANSLATIONS[language])
         assert FLOW_I18N_KEYS <= set(FLOW_I18N_TRANSLATIONS[language])
         assert t("generation.send_image_for_model", language, model="MiniMax Image 01 Image To Image")
+
+
+def test_ru_and_en_prompt_requests_use_requested_copy() -> None:
+    for language, expected_text in NEW_PROMPT_COPY.items():
+        for key in PROMPT_REQUEST_KEYS:
+            assert t(key, language) == expected_text
+            assert FLOW_I18N_TRANSLATIONS[language][key] == expected_text
+
+
+def test_prompt_requests_do_not_use_old_description_copy() -> None:
+    old_fragments = (
+        "Коротко опишите результат.",
+        "Коротко опишите видео.",
+        "Дальше откроется проверка.",
+        "Briefly describe the image.",
+        "Briefly describe the video.",
+        "I will open the final check next.",
+        "Add a description",
+        "Добавьте описание",
+    )
+
+    for language in ("ru", "en"):
+        for key in PROMPT_REQUEST_KEYS:
+            translated = t(key, language)
+            for old_fragment in old_fragments:
+                assert old_fragment not in translated
 
 
 def test_generation_routers_do_not_embed_forbidden_user_facing_phrases() -> None:

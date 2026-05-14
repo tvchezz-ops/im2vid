@@ -2870,8 +2870,8 @@ for language_code, copy in _PREMIUM_ERROR_UX_REWRITE.items():
 
 _PREMIUM_GENERATION_FLOW_UX = {
     "en": {
-        "describe_image": "✍️ Add a description\n\nBriefly describe the image.\nI will open the final check next.",
-        "describe_video": "✍️ Add a description\n\nBriefly describe the video.\nI will open the final check next.",
+        "describe_image": "✍️ Write a prompt for generation\n\nDescribe what you want to generate.\nMore detailed prompts usually produce better results.\n\nYou can return to settings at any time.",
+        "describe_video": "✍️ Write a prompt for generation\n\nDescribe what you want to generate.\nMore detailed prompts usually produce better results.\n\nYou can return to settings at any time.",
         "send_image": "🖼️ Send an image\n\nIt will guide the result.\nThen add a short description.",
         "send_images": "🖼️ Send images\n\nThey will guide the result.\nThen add a short description.",
         "send_video": "🎬 Send a video\n\nIt will be used as the base.\nThen add a short description.",
@@ -2896,8 +2896,8 @@ _PREMIUM_GENERATION_FLOW_UX = {
         "back_sections": "Back to formats.",
     },
     "ru": {
-        "describe_image": "✍️ Добавьте описание\n\nКоротко опишите результат.\nДальше откроется проверка.",
-        "describe_video": "✍️ Добавьте описание\n\nКоротко опишите видео.\nДальше откроется проверка.",
+        "describe_image": "✍️ Напишите промпт для генерации\n\nОпишите, что вы хотите получить в результате.\nЧем подробнее описание — тем лучше результат генерации.\n\nК настройкам можно вернуться в любой момент.",
+        "describe_video": "✍️ Напишите промпт для генерации\n\nОпишите, что вы хотите получить в результате.\nЧем подробнее описание — тем лучше результат генерации.\n\nК настройкам можно вернуться в любой момент.",
         "send_image": "🖼️ Отправьте изображение\n\nОно будет основой результата.\nЗатем добавьте описание.",
         "send_images": "🖼️ Отправьте изображения\n\nОни помогут задать результат.\nЗатем добавьте описание.",
         "send_video": "🎬 Отправьте видео\n\nОно будет основой результата.\nЗатем добавьте описание.",
@@ -3695,10 +3695,10 @@ _EXPLANATORY_ERROR_AND_GENERATION_UX = {
         "generation.invalid_wait_image": "🖼 Image required\n\nThis model works with an image.\nSend a photo or image file to continue.",
         "generation.invalid_wait_video": "🎬 Video required\n\nThis model works with a video.\nSend a video file to continue.",
         "generation.unsupported_audio_type": "🎵 Audio required\n\nThis model needs an audio file or voice message.\nSend audio to continue.",
-        "generation.prompt_text_image": "✍️ Add a description\n\nDescribe what you want to get.\nSimple wording is enough — the bot will send it to the model.\n\nAfter that, you will see a final check before launch.",
-        "generation.prompt_text_video": "✍️ Add a description\n\nDescribe what you want to get.\nSimple wording is enough — the bot will send it to the model.\n\nAfter that, you will see a final check before launch.",
-        "generation.prompt_request": "✍️ Add a description\n\nDescribe what you want to get.\nSimple wording is enough — the bot will send it to the model.\n\nAfter that, you will see a final check before launch.",
-        "generation.second_step_text": "✍️ Add a description\n\nDescribe what you want to get.\nSimple wording is enough — the bot will send it to the model.\n\nAfter that, you will see a final check before launch.",
+        "generation.prompt_text_image": "✍️ Write a prompt for generation\n\nDescribe what you want to generate.\nMore detailed prompts usually produce better results.\n\nYou can return to settings at any time.",
+        "generation.prompt_text_video": "✍️ Write a prompt for generation\n\nDescribe what you want to generate.\nMore detailed prompts usually produce better results.\n\nYou can return to settings at any time.",
+        "generation.prompt_request": "✍️ Write a prompt for generation\n\nDescribe what you want to generate.\nMore detailed prompts usually produce better results.\n\nYou can return to settings at any time.",
+        "generation.second_step_text": "✍️ Write a prompt for generation\n\nDescribe what you want to generate.\nMore detailed prompts usually produce better results.\n\nYou can return to settings at any time.",
     },
     "ru": {
         "error_ux.generation_failed": "❌ Генерация не получилась\n\nМодель не смогла обработать запрос.\nТакое бывает из-за слишком сложного описания, неподходящего файла или временной ошибки сервиса.\n\nКредиты за эту попытку уже возвращены.\nПопробуйте изменить описание или выбрать другую модель.",
@@ -3737,10 +3737,10 @@ _EXPLANATORY_ERROR_AND_GENERATION_UX = {
         "generation.invalid_wait_image": "🖼 Нужно изображение\n\nЭта модель работает с изображением.\nОтправьте фото или файл изображения, чтобы продолжить.",
         "generation.invalid_wait_video": "🎬 Нужно видео\n\nЭта модель работает с видео.\nОтправьте видеофайл, чтобы продолжить.",
         "generation.unsupported_audio_type": "🎵 Нужно аудио\n\nДля этой модели нужен аудиофайл или голосовое сообщение.\nОтправьте аудио, чтобы продолжить.",
-        "generation.prompt_text_image": "✍️ Добавьте описание\n\nОпишите, что хотите получить.\nМожно писать простыми словами — бот сам передаст текст модели.\n\nПосле этого вы увидите проверку перед запуском.",
-        "generation.prompt_text_video": "✍️ Добавьте описание\n\nОпишите, что хотите получить.\nМожно писать простыми словами — бот сам передаст текст модели.\n\nПосле этого вы увидите проверку перед запуском.",
-        "generation.prompt_request": "✍️ Добавьте описание\n\nОпишите, что хотите получить.\nМожно писать простыми словами — бот сам передаст текст модели.\n\nПосле этого вы увидите проверку перед запуском.",
-        "generation.second_step_text": "✍️ Добавьте описание\n\nОпишите, что хотите получить.\nМожно писать простыми словами — бот сам передаст текст модели.\n\nПосле этого вы увидите проверку перед запуском.",
+        "generation.prompt_text_image": "✍️ Напишите промпт для генерации\n\nОпишите, что вы хотите получить в результате.\nЧем подробнее описание — тем лучше результат генерации.\n\nК настройкам можно вернуться в любой момент.",
+        "generation.prompt_text_video": "✍️ Напишите промпт для генерации\n\nОпишите, что вы хотите получить в результате.\nЧем подробнее описание — тем лучше результат генерации.\n\nК настройкам можно вернуться в любой момент.",
+        "generation.prompt_request": "✍️ Напишите промпт для генерации\n\nОпишите, что вы хотите получить в результате.\nЧем подробнее описание — тем лучше результат генерации.\n\nК настройкам можно вернуться в любой момент.",
+        "generation.second_step_text": "✍️ Напишите промпт для генерации\n\nОпишите, что вы хотите получить в результате.\nЧем подробнее описание — тем лучше результат генерации.\n\nК настройкам можно вернуться в любой момент.",
     },
     "es": {
         "error_ux.generation_failed": "❌ La creación no salió bien\n\nEl modelo no pudo procesar esta solicitud.\nPuede pasar por una descripción compleja, un archivo no adecuado o un fallo temporal del servicio.\n\nLos créditos de este intento ya fueron devueltos.\nCambia la descripción o elige otro modelo.",
@@ -4568,6 +4568,29 @@ for language_code, catalog_updates in _LOCALIZATION_AUDIT_RUNTIME_UX.items():
     catalog_updates.setdefault("provider.label.minimax", "MiniMax")
     catalog_updates.setdefault("provider.label.wavespeed_ai", "Wan AI")
     globals()[f"{language_code.upper()}_TRANSLATIONS"].update(catalog_updates)
+
+_PROMPT_REQUEST_COPY_UPDATE = {
+    "en": {
+        "generation.prompt_text_image": "✍️ Write a prompt for generation\n\nDescribe what you want to generate.\nMore detailed prompts usually produce better results.\n\nYou can return to settings at any time.",
+        "generation.prompt_text_video": "✍️ Write a prompt for generation\n\nDescribe what you want to generate.\nMore detailed prompts usually produce better results.\n\nYou can return to settings at any time.",
+        "generation.prompt_request": "✍️ Write a prompt for generation\n\nDescribe what you want to generate.\nMore detailed prompts usually produce better results.\n\nYou can return to settings at any time.",
+        "generation.second_step_text": "✍️ Write a prompt for generation\n\nDescribe what you want to generate.\nMore detailed prompts usually produce better results.\n\nYou can return to settings at any time.",
+        "generation.flow.text_to_image.initial": "✍️ Write a prompt for generation\n\nDescribe what you want to generate.\nMore detailed prompts usually produce better results.\n\nYou can return to settings at any time.",
+        "generation.flow.text_to_video.initial": "✍️ Write a prompt for generation\n\nDescribe what you want to generate.\nMore detailed prompts usually produce better results.\n\nYou can return to settings at any time.",
+    },
+    "ru": {
+        "generation.prompt_text_image": "✍️ Напишите промпт для генерации\n\nОпишите, что вы хотите получить в результате.\nЧем подробнее описание — тем лучше результат генерации.\n\nК настройкам можно вернуться в любой момент.",
+        "generation.prompt_text_video": "✍️ Напишите промпт для генерации\n\nОпишите, что вы хотите получить в результате.\nЧем подробнее описание — тем лучше результат генерации.\n\nК настройкам можно вернуться в любой момент.",
+        "generation.prompt_request": "✍️ Напишите промпт для генерации\n\nОпишите, что вы хотите получить в результате.\nЧем подробнее описание — тем лучше результат генерации.\n\nК настройкам можно вернуться в любой момент.",
+        "generation.second_step_text": "✍️ Напишите промпт для генерации\n\nОпишите, что вы хотите получить в результате.\nЧем подробнее описание — тем лучше результат генерации.\n\nК настройкам можно вернуться в любой момент.",
+        "generation.flow.text_to_image.initial": "✍️ Напишите промпт для генерации\n\nОпишите, что вы хотите получить в результате.\nЧем подробнее описание — тем лучше результат генерации.\n\nК настройкам можно вернуться в любой момент.",
+        "generation.flow.text_to_video.initial": "✍️ Напишите промпт для генерации\n\nОпишите, что вы хотите получить в результате.\nЧем подробнее описание — тем лучше результат генерации.\n\nК настройкам можно вернуться в любой момент.",
+    },
+}
+
+for language_code, catalog_updates in _PROMPT_REQUEST_COPY_UPDATE.items():
+    globals()[f"{language_code.upper()}_TRANSLATIONS"].update(catalog_updates)
+    FLOW_I18N_TRANSLATIONS[language_code].update(catalog_updates)
 
 TRANSLATIONS = {
     "en": EN_TRANSLATIONS,
