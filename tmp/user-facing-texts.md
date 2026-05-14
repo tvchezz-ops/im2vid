@@ -2,7 +2,7 @@
 
 Generated from runtime `app.i18n.TRANSLATIONS`.
 
-Total localized keys: 349
+Total localized keys: 353
 
 | key | en | ru | es | pt | fr | de | ar | hi | zh | id |
 | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
@@ -335,14 +335,18 @@ Total localized keys: 349
 | settings.select_helper | Choose a value using the buttons below. | Выберите значение кнопками ниже. | Elige un valor con los botones de abajo. | Escolha um valor pelos botões abaixo. | Choisissez une valeur avec les boutons ci-dessous. | Wähle einen Wert mit den Buttons unten. | اختر قيمة من الأزرار أدناه. | नीचे दिए बटन से मान चुनें. | 请使用下方按钮选择数值。 | Pilih nilai dengan tombol di bawah. |
 | settings.target_resolution | Target resolution | Целевое разрешение | Resolución objetivo | Resolução de destino | Résolution cible | Zielauflösung | الدقة المستهدفة | लक्षित रिज़ॉल्यूशन | 目标分辨率 | Resolusi target |
 | settings.title.aspect_ratio | Aspect ratio | Формат | Ajustes | Ajustes | Réglages | Einstellungen | الإعدادات | सेटिंग्स | 设置 | Pengaturan |
+| settings.title.avoid_prompt | Negative prompt | Негативный промпт | Prompt negativo | Prompt negativo | Prompt négatif | Negativer Prompt | وصف سلبي | नेगेटिव प्रॉम्प्ट | 负面提示词 | Prompt negatif |
 | settings.title.duration | Duration | Длительность | Ajustes | Ajustes | Réglages | Einstellungen | الإعدادات | सेटिंग्स | 设置 | Pengaturan |
 | settings.title.enable_audio | Sound | Звук | Sonido | Som | Son | Ton | الصوت | साउंड | 声音 | Suara |
+| settings.title.exclude | Negative prompt | Негативный промпт | Prompt negativo | Prompt negativo | Prompt négatif | Negativer Prompt | وصف سلبي | नेगेटिव प्रॉम्प्ट | 负面提示词 | Prompt negatif |
+| settings.title.excluded_prompt | Negative prompt | Негативный промпт | Prompt negativo | Prompt negativo | Prompt négatif | Negativer Prompt | وصف سلبي | नेगेटिव प्रॉम्प्ट | 负面提示词 | Prompt negatif |
 | settings.title.fps | Frames/s | Кадры/с | Fotogramas/s | Quadros/s | Images/s | Bilder/s | إطار/ث | फ़्रेम/सेकंड | 帧/秒 | Frame/detik |
 | settings.title.guidance | Precision | Точность | Precisión | Precisão | Précision | Präzision | الدقة | सटीकता | 精度 | Presisi |
 | settings.title.guidance_scale | Precision | Точность | Precisión | Precisão | Précision | Präzision | الدقة | सटीकता | 精度 | Presisi |
 | settings.title.mode | Mode | Режим | Ajustes | Ajustes | Réglages | Einstellungen | الإعدادات | सेटिंग्स | 设置 | Pengaturan |
 | settings.title.motion_strength | Motion strength | Сила движения | Ajustes | Ajustes | Réglages | Einstellungen | الإعدادات | सेटिंग्स | 设置 | Pengaturan |
-| settings.title.negative_prompt | Avoid | Исключить | Evitar | Evitar | Éviter | Vermeiden | تجنّب | बचाएँ | 避免 | Hindari |
+| settings.title.negative | Negative prompt | Негативный промпт | Prompt negativo | Prompt negativo | Prompt négatif | Negativer Prompt | وصف سلبي | नेगेटिव प्रॉम्प्ट | 负面提示词 | Prompt negatif |
+| settings.title.negative_prompt | Negative prompt | Негативный промпт | Prompt negativo | Prompt negativo | Prompt négatif | Negativer Prompt | وصف سلبي | नेगेटिव प्रॉम्प्ट | 负面提示词 | Prompt negatif |
 | settings.title.num_generations | Count | Количество | Cantidad | Quantidade | Nombre | Anzahl | العدد | संख्या | 数量 | Jumlah |
 | settings.title.quality | Quality | Качество | Ajustes | Ajustes | Réglages | Einstellungen | الإعدادات | सेटिंग्स | 设置 | Pengaturan |
 | settings.title.resolution | Resolution | Разрешение | Ajustes | Ajustes | Réglages | Einstellungen | الإعدادات | सेटिंग्स | 设置 | Pengaturan |

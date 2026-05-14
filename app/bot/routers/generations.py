@@ -233,6 +233,8 @@ class OutputDeliveryResult:
 
 SUMMARY_PROMPT_LIMIT = 1500
 FREEFORM_SETTING_TYPES = {"text", "textarea", "number", "float", "audio", "media"}
+NEGATIVE_PROMPT_SETTING_KEYS = {"exclude", "excluded_prompt", "negative", "negative_prompt", "avoid_prompt"}
+NEGATIVE_PROMPT_LEGACY_TITLES = {"exclude", "excluded prompt", "negative", "negative prompt", "avoid prompt", "исключить"}
 
 
 @dataclass(frozen=True)
@@ -327,12 +329,14 @@ def format_generation_settings(model: GenerationModel, user_settings: dict[str, 
     if not model.user_settings:
         return "-"
     return "\n".join(
-        f"- <b>{escape(setting.title)}</b>: <code>{escape(str(user_settings.get(setting.key, setting.default)))}</code>"
-        for setting in model.user_settings.values()
+        f"- <b>{escape(get_setting_display_title(setting_key, setting, DEFAULT_LANGUAGE))}</b>: <code>{escape(str(user_settings.get(setting.key, setting.default)))}</code>"
+        for setting_key, setting in model.user_settings.items()
     )
 
 
 def get_setting_display_title(setting_key: str, setting: Any, lang: str = DEFAULT_LANGUAGE) -> str:
+    if setting_key in NEGATIVE_PROMPT_SETTING_KEYS:
+        return t("settings.title.negative_prompt", lang)
     direct_title_key = f"settings.{setting_key}"
     direct_translated_title = t(direct_title_key, lang)
     if direct_translated_title != direct_title_key:
@@ -341,7 +345,10 @@ def get_setting_display_title(setting_key: str, setting: Any, lang: str = DEFAUL
     translated_title = t(title_key, lang)
     if translated_title != title_key:
         return translated_title
-    return str(getattr(setting, "title", setting_key))
+    fallback_title = str(getattr(setting, "title", setting_key))
+    if fallback_title.strip().casefold() in NEGATIVE_PROMPT_LEGACY_TITLES:
+        return t("settings.title.negative_prompt", lang)
+    return fallback_title
 
 
 def format_generation_settings_localized(model: GenerationModel, user_settings: dict[str, Any], lang: str = DEFAULT_LANGUAGE) -> str:

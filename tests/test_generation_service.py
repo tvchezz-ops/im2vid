@@ -1388,6 +1388,20 @@ def test_filled_negative_prompt_is_added_when_fallback_exposes_model_support() -
     assert payload["negative_prompt"] == "blur, noise"
 
 
+def test_negative_prompt_ui_label_change_does_not_rename_payload_key() -> None:
+    payload = build_payload(
+        "alibaba_wan_2_6_text_to_video",
+        [],
+        "Generate a sunrise drone shot",
+        {"negative_prompt": "blur, noise"},
+    )
+
+    assert payload["negative_prompt"] == "blur, noise"
+    assert "exclude" not in payload
+    assert "excluded_prompt" not in payload
+    assert "avoid_prompt" not in payload
+
+
 def test_build_payload_maps_media_fields_per_model_contract() -> None:
     image_edit_payload = build_payload(
         "nano_banana",

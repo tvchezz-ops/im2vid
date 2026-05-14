@@ -21,6 +21,8 @@ from app.services.generation_service import (
 CALLBACK_DATA_LIMIT = 64
 DEFAULT_PAGE_SIZE = 8
 PAGINATION_NOOP_CALLBACK = "gen:page:noop"
+NEGATIVE_PROMPT_SETTING_KEYS = {"exclude", "excluded_prompt", "negative", "negative_prompt", "avoid_prompt"}
+NEGATIVE_PROMPT_LEGACY_TITLES = {"exclude", "excluded prompt", "negative", "negative prompt", "avoid prompt", "исключить"}
 
 SECTION_KEYS = {
     "text_to_image": "generation.text_to_image",
@@ -211,6 +213,8 @@ def _get_setting_options(options: Iterable[Any]) -> list[tuple[str, str]]:
 
 
 def get_setting_display_title(setting_key: str, setting: Any, lang: str = DEFAULT_LANGUAGE) -> str:
+    if setting_key in NEGATIVE_PROMPT_SETTING_KEYS:
+        return t("settings.title.negative_prompt", lang)
     direct_key = f"settings.{setting_key}"
     direct_title = t(direct_key, lang)
     if direct_title != direct_key:
@@ -219,7 +223,10 @@ def get_setting_display_title(setting_key: str, setting: Any, lang: str = DEFAUL
     translated_title = t(title_key, lang)
     if translated_title != title_key:
         return translated_title
-    return str(getattr(setting, "title", setting_key))
+    fallback_title = str(getattr(setting, "title", setting_key))
+    if fallback_title.strip().casefold() in NEGATIVE_PROMPT_LEGACY_TITLES:
+        return t("settings.title.negative_prompt", lang)
+    return fallback_title
 
 
 def get_setting_option_display_label(value: str, label: str, lang: str = DEFAULT_LANGUAGE) -> str:

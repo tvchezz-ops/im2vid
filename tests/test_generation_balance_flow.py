@@ -2598,6 +2598,13 @@ def test_build_generation_summary_message_formats_visible_settings_and_escapes_h
         requires_audio=False,
         outputs="video",
         user_settings={
+            "negative_prompt": GenerationSetting(
+                key="negative_prompt",
+                title="Исключить",
+                type="text",
+                default="",
+                options=(),
+            ),
             "num_generations": GenerationSetting(
                 key="num_generations",
                 title="Generation count",
@@ -2625,7 +2632,7 @@ def test_build_generation_summary_message_formats_visible_settings_and_escapes_h
     batch = generations.GenerationBatchSummary(
         model=model,
         prompt="Render <b>cinematic</b> shot",
-        settings={"num_generations": "4", "resolution": "1080p", "internal_token": "raw-api-key"},
+        settings={"negative_prompt": "blur", "num_generations": "4", "resolution": "1080p", "internal_token": "raw-api-key"},
         expected_count=4,
         completed_count=4,
         failed_count=0,
@@ -2640,12 +2647,55 @@ def test_build_generation_summary_message_formats_visible_settings_and_escapes_h
     assert "Prompt:" in text
     assert "Settings:" in text
     assert "Render &lt;b&gt;cinematic&lt;/b&gt; shot" in text
+    assert "• Negative prompt: <code>blur</code>" in text
+    assert "Exclude" not in text
     assert f"• {t('settings.title.num_generations', 'en')}: <code>4</code>" in text
     assert "• Resolution: <code>1080p</code>" in text
     assert "internal_token" not in text
     assert "raw-api-key" not in text
     assert t("generation.summary.results", "en", completed=4, expected=4) in text
     assert t("generation.summary.credits", "en", credits=24) in text
+
+
+def test_generation_summary_message_uses_ru_negative_prompt_label() -> None:
+    model = GenerationModel(
+        key="summary_negative_prompt_ru_model",
+        title="Imagen",
+        provider="google",
+        generation_type="text_to_image",
+        endpoint="/api/v3/google/test",
+        docs_url="https://example.com/docs",
+        description="Summary negative prompt test model",
+        max_images=0,
+        requires_prompt=True,
+        requires_image=False,
+        requires_video=False,
+        requires_audio=False,
+        outputs="image",
+        user_settings={
+            "negative_prompt": GenerationSetting(
+                key="negative_prompt",
+                title="Исключить",
+                type="text",
+                default="",
+                options=(),
+            ),
+        },
+    )
+    batch = generations.GenerationBatchSummary(
+        model=model,
+        prompt="Кинематографичный кадр",
+        settings={"negative_prompt": "апрол"},
+        expected_count=1,
+        completed_count=1,
+        failed_count=0,
+        credits_spent=5,
+    )
+
+    text = generations.build_generation_summary_message(batch, "ru")
+
+    assert "Негативный промпт" in text
+    assert "Исключить" not in text
 
 
 def test_setting_input_screen_explains_current_value_and_clear_hint() -> None:

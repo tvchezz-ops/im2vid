@@ -421,13 +421,33 @@ def test_build_model_settings_keyboard_uses_setting_keys() -> None:
     model = SimpleNamespace(
         user_settings={
             "aspect_ratio": SimpleNamespace(key="aspect_ratio", title="Формат", default="1:1"),
+            "negative_prompt": SimpleNamespace(key="negative_prompt", title="Исключить", default=""),
         }
     )
 
-    keyboard = build_model_settings_keyboard(model, {"aspect_ratio": "16:9"})
+    keyboard = build_model_settings_keyboard(model, {"aspect_ratio": "16:9", "negative_prompt": "апрол"}, lang="ru")
 
     assert keyboard.inline_keyboard[0][0].callback_data == "gen:setting:aspect_ratio"
+    assert keyboard.inline_keyboard[1][0].text == "Негативный промпт: апрол"
+    assert "Исключить" not in "\n".join(button.text for button in _iter_buttons(keyboard))
+    assert keyboard.inline_keyboard[1][0].callback_data == "gen:setting:negative_prompt"
     assert keyboard.inline_keyboard[-1][0].callback_data == "gen:back:models"
+
+
+def test_build_model_settings_keyboard_uses_negative_prompt_label_for_aliases() -> None:
+    model = SimpleNamespace(
+        user_settings={
+            "exclude": SimpleNamespace(key="exclude", title="Exclude", default=""),
+            "avoid_prompt": SimpleNamespace(key="avoid_prompt", title="Avoid", default=""),
+        }
+    )
+
+    keyboard = build_model_settings_keyboard(model, {"exclude": "hands", "avoid_prompt": "blur"}, lang="en")
+
+    button_texts = [button.text for button in _iter_buttons(keyboard)]
+    assert "Negative prompt: hands" in button_texts
+    assert "Negative prompt: blur" in button_texts
+    assert all("Exclude" not in text and "Avoid" not in text for text in button_texts)
 
 
 def test_build_model_settings_keyboard_shows_generated_settings_for_target_models() -> None:

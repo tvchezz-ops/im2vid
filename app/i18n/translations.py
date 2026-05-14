@@ -4073,6 +4073,25 @@ for language_code, label in _SETTING_INPUT_BACK_BUTTON_UX.items():
     catalog["common.back_to_settings"] = label
     catalog["generation.back_to_settings"] = label
 
+_NEGATIVE_PROMPT_SETTING_TITLE_UX = {
+    "en": "Negative prompt",
+    "ru": "Негативный промпт",
+    "es": "Prompt negativo",
+    "pt": "Prompt negativo",
+    "fr": "Prompt négatif",
+    "de": "Negativer Prompt",
+    "ar": "وصف سلبي",
+    "hi": "नेगेटिव प्रॉम्प्ट",
+    "zh": "负面提示词",
+    "id": "Prompt negatif",
+}
+_NEGATIVE_PROMPT_SETTING_ALIASES = ("exclude", "excluded_prompt", "negative", "negative_prompt", "avoid_prompt")
+
+for language_code, label in _NEGATIVE_PROMPT_SETTING_TITLE_UX.items():
+    catalog = globals()[f"{language_code.upper()}_TRANSLATIONS"]
+    for setting_key in _NEGATIVE_PROMPT_SETTING_ALIASES:
+        catalog[f"settings.title.{setting_key}"] = label
+
 TRANSLATIONS = {
     "en": EN_TRANSLATIONS,
     "ru": RU_TRANSLATIONS,
