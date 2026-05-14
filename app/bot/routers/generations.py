@@ -33,6 +33,7 @@ from app.bot.keyboards import (
     build_model_settings_keyboard,
     build_providers_keyboard,
     build_provider_keyboard,
+    build_setting_input_back_keyboard,
     build_setting_options_keyboard,
     get_main_menu_keyboard,
     is_localized_button_text,
@@ -231,6 +232,7 @@ class OutputDeliveryResult:
 
 
 SUMMARY_PROMPT_LIMIT = 1500
+FREEFORM_SETTING_TYPES = {"text", "textarea", "number", "float", "audio", "media"}
 
 
 @dataclass(frozen=True)
@@ -544,8 +546,8 @@ def build_setting_value_text(model: GenerationModel, setting_key: str, current_v
     """Собрать экран выбора конкретной настройки."""
     setting = model.user_settings[setting_key]
     setting_title = get_setting_display_title(setting_key, setting, lang)
-    if setting.type in {"text", "number"}:
-        prompt_key = "settings.enter_number_value" if setting.type == "number" else "settings.enter_text_value"
+    if setting.type in FREEFORM_SETTING_TYPES:
+        prompt_key = "settings.enter_number_value" if setting.type in {"number", "float"} else "settings.enter_text_value"
         return (
             f"{t('settings.parameter', lang, parameter=escape(setting_title))}\n"
             f"{t('settings.current_value', lang, value=escape(current_value))}\n\n"
@@ -3598,13 +3600,13 @@ async def open_setting_selector(callback: CallbackQuery, state: FSMContext, sess
         return
     setting = model.user_settings[setting_key]
     await state.update_data(current_setting_key=setting_key)
-    if setting.type in {"text", "number"}:
+    if setting.type in FREEFORM_SETTING_TYPES:
         user_settings = get_model_state_settings(state_data, model_key)
         current_value = str(user_settings.get(setting_key, setting.default))
         await state.set_state(GenerationStates.waiting_for_setting_text)
         await callback.message.edit_text(
             build_setting_value_text(model, setting_key, current_value, lang),
-            reply_markup=None,
+            reply_markup=build_setting_input_back_keyboard(lang),
             parse_mode="HTML",
         )
         await callback.answer()

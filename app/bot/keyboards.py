@@ -479,6 +479,13 @@ def build_setting_options_keyboard(model: Any, setting_key: str, current_value: 
     return InlineKeyboardMarkup(inline_keyboard=rows)
 
 
+def build_setting_input_back_keyboard(lang: str = DEFAULT_LANGUAGE) -> InlineKeyboardMarkup:
+    """Back button for free-form setting input screens."""
+    return InlineKeyboardMarkup(
+        inline_keyboard=[[InlineKeyboardButton(text=get_button_text("common.back_to_settings", lang), callback_data="gen:back:settings")]]
+    )
+
+
 def build_generation_confirm_keyboard(lang: str = DEFAULT_LANGUAGE) -> InlineKeyboardMarkup:
     """Кнопки подтверждения запуска генерации."""
     return InlineKeyboardMarkup(

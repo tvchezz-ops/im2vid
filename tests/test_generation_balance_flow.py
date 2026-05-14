@@ -130,7 +130,7 @@ def install_text_setting_model() -> None:
         requires_audio=False,
         outputs="video",
         required_payload_fields=("prompt",),
-        allowed_payload_fields=("prompt", "note"),
+        allowed_payload_fields=("prompt", "note", "seed", "audio_url"),
         user_settings={
             "note": GenerationSetting(
                 key="note",
@@ -139,6 +139,20 @@ def install_text_setting_model() -> None:
                 default="",
                 options=(),
                 description="Дополнительное описание",
+            ),
+            "seed": GenerationSetting(
+                key="seed",
+                title="Seed",
+                type="number",
+                default="",
+                options=(),
+            ),
+            "audio_url": GenerationSetting(
+                key="audio_url",
+                title="Audio",
+                type="audio",
+                default="",
+                options=(),
             ),
             "num_generations": GenerationSetting(
                 key="num_generations",
@@ -581,6 +595,65 @@ async def test_open_setting_selector_for_text_setting_switches_to_text_input() -
         assert state.state == GenerationStates.waiting_for_setting_text
         assert state.data["current_setting_key"] == "note"
         assert t("settings.parameter", "ru", parameter="Заметка") in message.edits[-1]
+        assert message.edit_markups[-1].inline_keyboard[0][0].text == f"⬅️ {t('common.back_to_settings', 'ru')}"
+        assert message.edit_markups[-1].inline_keyboard[0][0].callback_data == "gen:back:settings"
+    finally:
+        remove_text_setting_model()
+
+
+@pytest.mark.asyncio
+async def test_number_setting_input_screen_contains_back_button() -> None:
+    install_text_setting_model()
+    try:
+        state = FakeState({"model_key": TEXT_SETTING_MODEL_KEY, "user_settings": {"seed": ""}})
+        message = FakeMessage(chat_id=454)
+        callback = FakeCallback(user_id=454, message=message, data="gen:setting:seed")
+
+        await generations.open_setting_selector(callback, state)
+
+        assert state.state == GenerationStates.waiting_for_setting_text
+        assert t("settings.parameter", "ru", parameter="Seed") in message.edits[-1]
+        assert t("settings.enter_number_value", "ru") in message.edits[-1]
+        assert message.edit_markups[-1].inline_keyboard[0][0].text == f"⬅️ {t('common.back_to_settings', 'ru')}"
+        assert message.edit_markups[-1].inline_keyboard[0][0].callback_data == "gen:back:settings"
+    finally:
+        remove_text_setting_model()
+
+
+@pytest.mark.asyncio
+async def test_audio_setting_input_screen_contains_back_button() -> None:
+    install_text_setting_model()
+    try:
+        state = FakeState({"model_key": TEXT_SETTING_MODEL_KEY, "user_settings": {"audio_url": ""}})
+        message = FakeMessage(chat_id=455)
+        callback = FakeCallback(user_id=455, message=message, data="gen:setting:audio_url")
+
+        await generations.open_setting_selector(callback, state)
+
+        assert state.state == GenerationStates.waiting_for_setting_text
+        assert t("settings.parameter", "ru", parameter="Audio") in message.edits[-1]
+        assert message.edit_markups[-1].inline_keyboard[0][0].text == f"⬅️ {t('common.back_to_settings', 'ru')}"
+        assert message.edit_markups[-1].inline_keyboard[0][0].callback_data == "gen:back:settings"
+    finally:
+        remove_text_setting_model()
+
+
+@pytest.mark.asyncio
+async def test_setting_input_back_callback_returns_to_model_settings() -> None:
+    install_text_setting_model()
+    try:
+        state = FakeState({"model_key": TEXT_SETTING_MODEL_KEY, "current_setting_key": "note", "user_settings": {"note": ""}})
+        state.state = GenerationStates.waiting_for_setting_text
+        message = FakeMessage(chat_id=456)
+        callback = FakeCallback(user_id=456, message=message, data="gen:back:settings")
+
+        await generations.back_to_settings(callback, state)
+
+        assert state.state == GenerationStates.choosing_settings
+        assert state.data["current_setting_key"] is None
+        assert t("settings.model_settings", "ru", model="Test Text Setting Model") in message.edits[-1]
+        assert message.edit_markups[-1] is not None
+        assert callback.answered is True
     finally:
         remove_text_setting_model()
 

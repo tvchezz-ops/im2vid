@@ -4055,6 +4055,24 @@ for language_code in _EXPLANATORY_ERROR_AND_GENERATION_UX:
     catalog["generation.invalid_wait_video"] = catalog["error_ux.missing_video"]
     catalog["generation.unsupported_audio_type"] = catalog["error_ux.missing_audio"]
 
+_SETTING_INPUT_BACK_BUTTON_UX = {
+    "en": "Back to settings",
+    "ru": "К настройкам",
+    "es": "Ajustes",
+    "pt": "Ajustes",
+    "fr": "Réglages",
+    "de": "Zu Einstellungen",
+    "ar": "إلى الإعدادات",
+    "hi": "सेटिंग्स पर",
+    "zh": "返回设置",
+    "id": "Ke pengaturan",
+}
+
+for language_code, label in _SETTING_INPUT_BACK_BUTTON_UX.items():
+    catalog = globals()[f"{language_code.upper()}_TRANSLATIONS"]
+    catalog["common.back_to_settings"] = label
+    catalog["generation.back_to_settings"] = label
+
 TRANSLATIONS = {
     "en": EN_TRANSLATIONS,
     "ru": RU_TRANSLATIONS,

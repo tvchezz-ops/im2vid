@@ -7,7 +7,7 @@ Total localized keys: 349
 | key | en | ru | es | pt | fr | de | ar | hi | zh | id |
 | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
 | common.back | Back | Назад | Atrás | Voltar | Retour | Zurück | رجوع | वापस | 返回 | Kembali |
-| common.back_to_settings | Settings | Настройки | Ajustes | Ajustes | Réglages | Einstellungen | الإعدادات | सेटिंग्स | 设置 | Pengaturan |
+| common.back_to_settings | Back to settings | К настройкам | Ajustes | Ajustes | Réglages | Zu Einstellungen | إلى الإعدادات | सेटिंग्स पर | 返回设置 | Ke pengaturan |
 | common.change_settings | Settings | Настройки | Ajustes | Ajustes | Réglages | Einstellungen | الإعدادات | सेटिंग्स | 设置 | Pengaturan |
 | common.clear_images | Clear | Очистить | Clear images | Clear images | Clear images | Clear images | Clear images | Clear images | Clear images | Clear images |
 | common.continue | Continue | Далее | Continuar | Continuar | Continuer | Weiter | متابعة | जारी रखें | 继续 | Lanjutkan |
@@ -95,7 +95,7 @@ Total localized keys: 349
 | generation.avatar | Avatar | Аватар | Personaje | Personagem | Personnage | Figur | أفاتار | अवतार | 头像 | Karakter |
 | generation.back_to_model_settings | Back to settings. | Назад к настройкам. | Volver a ajustes. | Voltar aos ajustes. | Retour aux réglages. | Zurück zu Einstellungen. | رجوع إلى الإعدادات. | सेटिंग्स पर वापस. | 返回设置。 | Kembali ke pengaturan. |
 | generation.back_to_sections | Back to formats. | Назад к форматам. | Volver a formatos. | Voltar aos formatos. | Retour aux formats. | Zurück zu Formaten. | رجوع إلى الصيغ. | फॉर्मैट पर वापस. | 返回格式。 | Kembali ke format. |
-| generation.back_to_settings | Settings | Настройки | Volver a ajustes | Voltar às configurações | Retour aux paramètres | Zurück zu Einstellungen | العودة إلى الإعدادات | सेटिंग्स पर वापस | 返回设置 | Kembali ke pengaturan |
+| generation.back_to_settings | Back to settings | К настройкам | Ajustes | Ajustes | Réglages | Zu Einstellungen | إلى الإعدادات | सेटिंग्स पर | 返回设置 | Ke pengaturan |
 | generation.back_to_settings_hint | You can return to settings anytime. | К настройкам можно вернуться в любой момент. | Puedes volver a ajustes cuando quieras. | Você pode voltar aos ajustes quando quiser. | Vous pouvez revenir aux réglages à tout moment. | Du kannst jederzeit zu den Einstellungen zurück. | يمكنك الرجوع إلى الإعدادات في أي وقت. | आप कभी भी सेटिंग्स पर लौट सकते हैं. | 你随时可以返回设置。 | Kamu bisa kembali ke pengaturan kapan saja. |
 | generation.balance_after | Balance after start | Баланс после запуска | Saldo después | Saldo depois | 💳 Crédits insuffisants<br><br>Rechargez dans Profil. | 💳 Nicht genug Credits<br><br>Lade im Profil auf. | 💳 الرصيد غير كافٍ<br><br>اشحن من الملف. | 💳 क्रेडिट कम हैं<br><br>प्रोफ़ाइल में बैलेंस बढ़ाएँ. | 💳 点数不足<br><br>请在资料页充值。 | 💳 Kredit tidak cukup<br><br>Isi saldo di Profil. |
 | generation.balance_after_label | After start: <code>{balance}</code> | После старта: <code>{balance}</code> | Saldo después: <code>{balance}</code> | Saldo depois: <code>{balance}</code> | Solde après : <code>{balance}</code> | Guthaben danach: <code>{balance}</code> | الرصيد بعد البدء: <code>{balance}</code> | बाद का बैलेंस: <code>{balance}</code> | 启动后余额：<code>{balance}</code> | Saldo setelah mulai: <code>{balance}</code> |

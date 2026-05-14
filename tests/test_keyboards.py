@@ -24,6 +24,7 @@ from app.bot.keyboards import (
     build_paginated_keyboard,
     build_providers_keyboard,
     build_crypto_top_up_keyboard,
+    build_setting_input_back_keyboard,
     build_setting_options_keyboard,
     build_stars_wallet_redirect_keyboard,
     build_stars_top_up_keyboard,
@@ -490,6 +491,13 @@ def test_build_setting_options_keyboard_shows_num_generations_in_two_columns() -
         for row in keyboard.inline_keyboard
         for button in row
     )
+
+
+def test_build_setting_input_back_keyboard_uses_existing_callback() -> None:
+    keyboard = build_setting_input_back_keyboard("ru")
+
+    assert keyboard.inline_keyboard[0][0].text == f"⬅️ {t('common.back_to_settings', 'ru')}"
+    assert keyboard.inline_keyboard[0][0].callback_data == "gen:back:settings"
 
 
 def test_build_generation_confirm_keyboard_uses_new_callbacks() -> None:
