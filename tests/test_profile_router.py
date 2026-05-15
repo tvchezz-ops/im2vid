@@ -114,7 +114,7 @@ async def test_show_profile_displays_clean_summary_and_delivery_toggle(session_f
         assert "Дата регистрации" not in message.answers[-1]
         assert "Последняя активность" not in message.answers[-1]
         assert "История" not in message.answers[-1]
-        assert f"💳 {t('profile.balance', 'ru')}: 5" in message.answers[-1]
+        assert f"💳 {t('profile.balance', 'ru')}: 30" in message.answers[-1]
         assert f"🎨 {t('profile.total_generations', 'ru')}: 0" in message.answers[-1]
         assert '🛟 Поддержка: <a href="https://t.me/supbananify">@supbananify</a>' in message.answers[-1]
         assert "🎁 Приглашено: 0" in message.answers[-1]
@@ -167,7 +167,7 @@ async def test_show_profile_falls_back_to_english_when_language_code_missing(ses
 
         await profile.show_profile(message, state, session)
 
-        assert "💳 Balance: 5" in message.answers[-1]
+        assert "💳 Balance: 30" in message.answers[-1]
         assert message.answer_kwargs[-1]["link_preview_options"].is_disabled is True
         assert "🎨 Generations: 0" in message.answers[-1]
         assert '🛟 Support: <a href="https://t.me/supbananify">@supbananify</a>' in message.answers[-1]

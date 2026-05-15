@@ -195,14 +195,14 @@ async def _clear_start_state_without_user_notice(message: Message, state: FSMCon
 
 async def _send_start_welcome(message: Message, user, lang: str) -> None:
     await message.answer(
-        build_welcome_text(user.first_name, lang),
+        build_welcome_text(getattr(message.from_user, "first_name", None) or getattr(user, "first_name", None), lang),
         reply_markup=get_main_menu_keyboard(lang),
     )
     logger.info(f"User {message.from_user.id} started the bot")
 
 
 async def _send_referral_start_welcome(message: Message, user, lang: str, *, accepted: bool, bonus_credits: int = 0) -> None:
-    welcome_text = build_welcome_text(user.first_name, lang)
+    welcome_text = build_welcome_text(getattr(message.from_user, "first_name", None) or getattr(user, "first_name", None), lang)
     if accepted:
         referral_lines = ["🎁 Реферальная ссылка применена."]
         if bonus_credits > 0:
@@ -211,6 +211,48 @@ async def _send_referral_start_welcome(message: Message, user, lang: str, *, acc
         welcome_text = f"{referral_text}\n\n{welcome_text}"
     await message.answer(welcome_text, reply_markup=get_main_menu_keyboard(lang))
     logger.info(f"User {message.from_user.id} started the bot")
+
+
+async def _apply_referral_start_payload_safely(
+    session: AsyncSession,
+    user,
+    start_payload: str,
+    *,
+    created: bool,
+):
+    try:
+        referral_code, referrer = await _resolve_referral_start_payload(session, start_payload)
+        if referral_code is None:
+            return None
+
+        return await ReferralService(session).apply_referral(
+            user,
+            referral_code,
+            created=created,
+            referrer=referrer,
+        )
+    except Exception as e:
+        logger.exception(
+            {
+                "action": "referral_start_flow_failed",
+                "error_code": "REFERRAL_START_FLOW_ERROR",
+                "user_id": getattr(user, "id", None),
+                "error": e.__class__.__name__,
+                "payload_prefix": mask_start_payload(start_payload),
+            }
+        )
+        try:
+            await session.rollback()
+        except Exception as rollback_error:
+            logger.exception(
+                {
+                    "action": "referral_start_flow_rollback_failed",
+                    "error_code": "REFERRAL_START_FLOW_ROLLBACK_ERROR",
+                    "user_id": getattr(user, "id", None),
+                    "error": rollback_error.__class__.__name__,
+                }
+            )
+        return None
 
 
 @router.message(Command("start"), _has_start_payload)
@@ -240,22 +282,21 @@ async def start_payment_return_command(
                 await _send_start_welcome(message, user, lang)
                 return
 
-            referral_code, referrer = await _resolve_referral_start_payload(session, start_payload)
-            if referral_code is None:
+            referral_result = await _apply_referral_start_payload_safely(
+                session,
+                user,
+                start_payload,
+                created=user_result.created,
+            )
+            if referral_result is None or referral_result.status != "accepted":
                 await _send_start_welcome(message, user, lang)
                 return
 
-            referral_result = await ReferralService(session).apply_referral(
-                user,
-                referral_code,
-                created=user_result.created,
-                referrer=referrer,
-            )
             await _send_referral_start_welcome(
                 message,
                 user,
                 lang,
-                accepted=referral_result.status == "accepted",
+                accepted=True,
                 bonus_credits=referral_result.referred_bonus_credits,
             )
             return

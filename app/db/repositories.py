@@ -25,6 +25,8 @@ from app.db.models import (
 from app.utils import logger
 from app.utils.referrals import generate_referral_code, generate_start_payload
 
+INITIAL_USER_BALANCE = 30
+
 
 @dataclass(frozen=True)
 class PaymentCompletionResult:
@@ -61,7 +63,7 @@ class UserRepository:
         if user is None:
             user = User(
                 id=telegram_user.id,
-                balance=5,
+                balance=INITIAL_USER_BALANCE,
                 referral_code=generate_referral_code(),
                 start_payload=generate_start_payload(),
             )
@@ -171,7 +173,7 @@ class UserRepository:
         if existing is None:
             existing = User(
                 id=telegram_id,
-                balance=5,
+                balance=INITIAL_USER_BALANCE,
                 referral_code=generate_referral_code(),
                 start_payload=generate_start_payload(),
             )

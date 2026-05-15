@@ -6,6 +6,7 @@ import string
 
 REFERRAL_CODE_ALPHABET = string.ascii_letters + string.digits
 DEFAULT_REFERRAL_CODE_LENGTH = 8
+MAX_REFERRAL_CODE_LENGTH = 64
 START_PAYLOAD_ALPHABET = string.ascii_letters + string.digits
 DEFAULT_START_PAYLOAD_LENGTH = 12
 
@@ -14,6 +15,8 @@ def generate_referral_code(length: int = DEFAULT_REFERRAL_CODE_LENGTH) -> str:
     """Generate a short URL-safe referral code without exposing Telegram IDs."""
     if length <= 0:
         raise ValueError("Referral code length must be positive")
+    if length > MAX_REFERRAL_CODE_LENGTH:
+        raise ValueError(f"Referral code length must be at most {MAX_REFERRAL_CODE_LENGTH} characters")
     return "".join(secrets.choice(REFERRAL_CODE_ALPHABET) for _ in range(length))
 
 

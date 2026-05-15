@@ -10,7 +10,7 @@ from sqlalchemy import BigInteger, Boolean, CheckConstraint, DateTime, Enum, For
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.db.base import Base, BaseModel
-from app.utils.referrals import generate_referral_code, generate_start_payload
+from app.utils.referrals import MAX_REFERRAL_CODE_LENGTH, generate_referral_code, generate_start_payload
 
 
 class GenerationRequestStatus(str, enum.Enum):
@@ -80,9 +80,9 @@ class User(BaseModel):
     is_bot: Mapped[bool] = mapped_column(Boolean, default=False, server_default="0")
     is_premium: Mapped[Optional[bool]] = mapped_column(Boolean, nullable=True)
     photo_url: Mapped[Optional[str]] = mapped_column(String(1024), nullable=True)
-    balance: Mapped[int] = mapped_column(Integer, default=5, server_default="5")
+    balance: Mapped[int] = mapped_column(Integer, default=30, server_default="30")
     referral_code: Mapped[Optional[str]] = mapped_column(
-        String(10),
+        String(MAX_REFERRAL_CODE_LENGTH),
         unique=True,
         index=True,
         nullable=True,
@@ -131,7 +131,7 @@ class ReferralEvent(Base):
     id: Mapped[uuid.UUID] = mapped_column(Uuid, primary_key=True, default=uuid.uuid4)
     referrer_user_id: Mapped[Optional[int]] = mapped_column(BigInteger, ForeignKey("users.id"), nullable=True, index=True)
     referred_user_id: Mapped[int] = mapped_column(BigInteger, ForeignKey("users.id"), nullable=False, index=True)
-    referral_code: Mapped[Optional[str]] = mapped_column(String(10), nullable=True)
+    referral_code: Mapped[Optional[str]] = mapped_column(String(MAX_REFERRAL_CODE_LENGTH), nullable=True)
     status: Mapped[str] = mapped_column(String(20), nullable=False, index=True)
     reject_reason: Mapped[Optional[str]] = mapped_column(String(50), nullable=True)
     created_at: Mapped[datetime] = mapped_column(

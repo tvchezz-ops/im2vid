@@ -25,7 +25,7 @@ from app.bot.routers.profile import build_referral_link
 from app.db.models import CreditTransaction, ReferralEvent, ReferralEventStatus, User
 from app.db.repositories import UserRepository
 from app.services.referrals import ReferralService
-from app.utils.referrals import generate_referral_code, generate_start_payload
+from app.utils.referrals import MAX_REFERRAL_CODE_LENGTH, generate_referral_code, generate_start_payload
 from scripts.audit_referrals import audit_referrals
 from scripts.backfill_referral_bonuses import backfill_referral_bonuses
 
@@ -112,6 +112,16 @@ def test_generate_referral_code_is_short_and_url_safe() -> None:
 
     assert len(code) == 8
     assert code.isalnum()
+
+
+def test_referral_code_columns_allow_longer_codes() -> None:
+    assert User.__table__.c.referral_code.type.length == MAX_REFERRAL_CODE_LENGTH
+    assert ReferralEvent.__table__.c.referral_code.type.length == MAX_REFERRAL_CODE_LENGTH
+
+
+def test_generate_referral_code_rejects_codes_longer_than_schema() -> None:
+    with pytest.raises(ValueError, match="at most 64"):
+        generate_referral_code(MAX_REFERRAL_CODE_LENGTH + 1)
 
 
 def test_generate_start_payload_is_random_url_safe_and_has_no_prefix() -> None:
@@ -391,8 +401,8 @@ async def test_flow_scenario_a_profile_link_creates_user_b_and_accepts_referral(
         assert user_b is not None
         await session.refresh(user_a)
         assert user_b.referred_by_user_id == user_a.id
-        assert user_a.balance == 10
-        assert user_b.balance == 5
+        assert user_a.balance == 35
+        assert user_b.balance == 30
         assert await UserRepository(session).count_accepted_referrals(user_a.id) == 1
         assert accepted_event.referrer_user_id == user_a.id
         transaction = (await session.execute(sa.select(CreditTransaction))).scalars().one()
@@ -400,6 +410,27 @@ async def test_flow_scenario_a_profile_link_creates_user_b_and_accepts_referral(
         assert transaction.user_id == user_a.id
         assert transaction.amount == 5
         assert "Реферальная ссылка применена" in start_message.answers[0]
+
+
+@pytest.mark.asyncio
+async def test_start_legacy_referral_code_longer_than_10_is_saved_to_referral_events(session_factory) -> None:
+    async with session_factory() as session:
+        long_referral_code = "hFvuVUKtjcIl"
+        session.add(User(id=1420, referral_code=long_referral_code, start_payload="X7pQ2Lm9Ka22"))
+        await session.commit()
+        message = FakeStartMessage(user_id=1421, text=f"/start ref_{long_referral_code}")
+
+        await start.start_payment_return_command(
+            message,
+            FakeState(),
+            session,
+            command=SimpleNamespace(args=f"ref_{long_referral_code}"),
+        )
+
+        event = (await session.execute(sa.select(ReferralEvent))).scalars().one()
+        assert event.status == ReferralEventStatus.ACCEPTED.value
+        assert event.referral_code == long_referral_code
+        assert "Реферальная ссылка применена" in message.answers[0]
 
 
 @pytest.mark.asyncio
@@ -420,7 +451,7 @@ async def test_flow_scenario_b_own_referral_link_rejects_self_without_ui_spam(se
         event = (await session.execute(sa.select(ReferralEvent))).scalars().one()
         assert user is not None
         assert user.referred_by_user_id is None
-        assert user.balance == 5
+        assert user.balance == 30
         assert event.status == ReferralEventStatus.REJECTED.value
         assert event.reject_reason == "self_referral"
         assert "Реферальная ссылка применена" not in message.answers[0]
@@ -451,7 +482,7 @@ async def test_flow_scenario_c_existing_user_rejected_already_registered(session
         event = (await session.execute(sa.select(ReferralEvent))).scalars().one()
         assert user_b is not None
         assert user_b.referred_by_user_id is None
-        assert user_b.balance == 5
+        assert user_b.balance == 30
         assert event.status == ReferralEventStatus.REJECTED.value
         assert event.reject_reason == "already_registered"
         assert "Реферальная ссылка применена" not in message.answers[0]
@@ -486,8 +517,8 @@ async def test_flow_scenario_d_already_referred_user_keeps_original_referrer(ses
         assert referrer_a is not None
         assert referrer_c is not None
         assert user_b.referred_by_user_id == 1406
-        assert referrer_a.balance == 5
-        assert referrer_c.balance == 5
+        assert referrer_a.balance == 30
+        assert referrer_c.balance == 30
         assert event.referrer_user_id == 1407
         assert event.status == ReferralEventStatus.REJECTED.value
         assert event.reject_reason == "already_referred"
@@ -516,6 +547,42 @@ async def test_flow_scenario_e_invalid_code_rejected_with_normal_welcome(session
         assert "Реферальная ссылка применена" not in message.answers[0]
         assert "invalid_code" not in message.answers[0]
         assert "Привет" in message.answers[0]
+
+
+@pytest.mark.asyncio
+async def test_start_referral_service_exception_logs_rolls_back_and_shows_normal_welcome(session_factory, monkeypatch, caplog) -> None:
+    async def fail_apply_referral(self, new_user, referral_code, *, created=None, referrer=None):
+        raise RuntimeError("boom")
+
+    monkeypatch.setattr(ReferralService, "apply_referral", fail_apply_referral)
+    async with session_factory() as session:
+        session.add(User(id=1422, referral_code="ref1422", start_payload="Xa82PqLmN0sD"))
+        await session.commit()
+        message = FakeStartMessage(user_id=1423, text="/start Xa82PqLmN0sD")
+
+        with caplog.at_level(logging.ERROR):
+            await start.start_payment_return_command(
+                message,
+                FakeState(),
+                session,
+                command=SimpleNamespace(args="Xa82PqLmN0sD"),
+            )
+
+        event_count = (await session.execute(sa.select(sa.func.count()).select_from(ReferralEvent))).scalar_one()
+        user = await session.get(User, 1423)
+        assert event_count == 0
+        assert user is not None
+        assert user.referred_by_user_id is None
+        assert len(message.answers) == 1
+        assert "Привет" in message.answers[0]
+        assert "Реферальная ссылка применена" not in message.answers[0]
+        assert "ошибка" not in message.answers[0].lower()
+        assert any(
+            isinstance(record.msg, dict)
+            and record.msg.get("action") == "referral_start_flow_failed"
+            and record.msg.get("error_code") == "REFERRAL_START_FLOW_ERROR"
+            for record in caplog.records
+        )
 
 
 @pytest.mark.asyncio
@@ -867,6 +934,42 @@ def test_referral_migration_applies_cleanly(tmp_path) -> None:
         "referred_by_user_id",
         "referred_at",
     }
+
+
+def test_expand_referral_code_length_migration_applies_cleanly(tmp_path) -> None:
+    db_path = tmp_path / "referral-code-length-migration.sqlite3"
+    engine = sa.create_engine(f"sqlite:///{db_path}")
+    metadata = sa.MetaData()
+    sa.Table(
+        "users",
+        metadata,
+        sa.Column("id", sa.BigInteger(), primary_key=True),
+        sa.Column("referral_code", sa.String(length=10), nullable=True),
+    )
+    sa.Table(
+        "referral_events",
+        metadata,
+        sa.Column("id", sa.String(), primary_key=True),
+        sa.Column("referral_code", sa.String(length=10), nullable=True),
+    )
+    metadata.create_all(engine)
+
+    migration_path = Path("alembic/versions/20260515_150000_expand_referral_code_length.py")
+    spec = importlib.util.spec_from_file_location("expand_referral_code_length_migration", migration_path)
+    assert spec is not None
+    assert spec.loader is not None
+    migration = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(migration)
+    with engine.begin() as connection:
+        context = MigrationContext.configure(connection)
+        migration.op = Operations(context)
+        migration.upgrade()
+
+    inspector = sa.inspect(engine)
+    user_referral_code = next(column for column in inspector.get_columns("users") if column["name"] == "referral_code")
+    event_referral_code = next(column for column in inspector.get_columns("referral_events") if column["name"] == "referral_code")
+    assert user_referral_code["type"].length == MAX_REFERRAL_CODE_LENGTH
+    assert event_referral_code["type"].length == MAX_REFERRAL_CODE_LENGTH
 
 
 def test_start_payload_migration_applies_cleanly(tmp_path) -> None:
