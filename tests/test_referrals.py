@@ -27,6 +27,7 @@ from app.db.repositories import UserRepository
 from app.services.referrals import ReferralService
 from app.utils.referrals import generate_referral_code, generate_start_payload
 from scripts.audit_referrals import audit_referrals
+from scripts.backfill_referral_bonuses import backfill_referral_bonuses
 
 
 class FakeStartMessage:
@@ -384,8 +385,16 @@ async def test_flow_scenario_a_profile_link_creates_user_b_and_accepts_referral(
             )
         ).scalars().one()
         assert user_b is not None
+        await session.refresh(user_a)
         assert user_b.referred_by_user_id == user_a.id
+        assert user_a.balance == 10
+        assert user_b.balance == 5
+        assert await UserRepository(session).count_accepted_referrals(user_a.id) == 1
         assert accepted_event.referrer_user_id == user_a.id
+        transaction = (await session.execute(sa.select(CreditTransaction))).scalars().one()
+        assert transaction.type == "referral_bonus"
+        assert transaction.user_id == user_a.id
+        assert transaction.amount == 5
         assert "Реферальная ссылка применена" in start_message.answers[0]
 
 
@@ -407,6 +416,7 @@ async def test_flow_scenario_b_own_referral_link_rejects_self_without_ui_spam(se
         event = (await session.execute(sa.select(ReferralEvent))).scalars().one()
         assert user is not None
         assert user.referred_by_user_id is None
+        assert user.balance == 5
         assert event.status == ReferralEventStatus.REJECTED.value
         assert event.reject_reason == "self_referral"
         assert "Реферальная ссылка применена" not in message.answers[0]
@@ -437,6 +447,7 @@ async def test_flow_scenario_c_existing_user_rejected_already_registered(session
         event = (await session.execute(sa.select(ReferralEvent))).scalars().one()
         assert user_b is not None
         assert user_b.referred_by_user_id is None
+        assert user_b.balance == 5
         assert event.status == ReferralEventStatus.REJECTED.value
         assert event.reject_reason == "already_registered"
         assert "Реферальная ссылка применена" not in message.answers[0]
@@ -464,9 +475,15 @@ async def test_flow_scenario_d_already_referred_user_keeps_original_referrer(ses
         )
 
         user_b = await session.get(User, 1408)
+        referrer_a = await session.get(User, 1406)
+        referrer_c = await session.get(User, 1407)
         event = (await session.execute(sa.select(ReferralEvent))).scalars().one()
         assert user_b is not None
+        assert referrer_a is not None
+        assert referrer_c is not None
         assert user_b.referred_by_user_id == 1406
+        assert referrer_a.balance == 5
+        assert referrer_c.balance == 5
         assert event.referrer_user_id == 1407
         assert event.status == ReferralEventStatus.REJECTED.value
         assert event.reject_reason == "already_referred"
@@ -600,14 +617,20 @@ async def test_apply_referral_accepts_and_sets_referrer(session_factory) -> None
         await session.refresh(referrer)
         assert user.referred_by_user_id == 1308
         assert user.referred_at is not None
-        assert referrer.balance == 5
+        assert referrer.balance == 10
         assert user.balance == 5
-        transaction_count = (await session.execute(sa.select(sa.func.count()).select_from(CreditTransaction))).scalar_one()
-        assert transaction_count == 0
+        transaction = (await session.execute(sa.select(CreditTransaction))).scalars().one()
+        event = (await session.execute(sa.select(ReferralEvent).where(ReferralEvent.status == "accepted"))).scalars().one()
+        assert transaction.type == "referral_bonus"
+        assert transaction.user_id == 1308
+        assert transaction.amount == 5
+        assert transaction.referral_event_id == event.id
+        assert transaction.metadata_["referred_user_id"] == 1309
+        assert transaction.metadata_["referral_event_id"] == str(event.id)
 
 
 @pytest.mark.asyncio
-async def test_referral_bonus_disabled_by_default_creates_no_transactions(session_factory, monkeypatch) -> None:
+async def test_referral_bonus_disabled_by_config_creates_no_transactions(session_factory, monkeypatch) -> None:
     monkeypatch.setattr(settings, "referral_referrer_bonus_credits", 0)
     monkeypatch.setattr(settings, "referral_referred_bonus_credits", 0)
     async with session_factory() as session:
@@ -631,7 +654,7 @@ async def test_referral_bonus_disabled_by_default_creates_no_transactions(sessio
 
 
 @pytest.mark.asyncio
-async def test_referral_bonus_enabled_credits_both_users_and_records_transactions(session_factory, monkeypatch) -> None:
+async def test_referral_bonus_enabled_credits_both_users_and_records_transactions(session_factory, monkeypatch, caplog) -> None:
     monkeypatch.setattr(settings, "referral_referrer_bonus_credits", 5)
     monkeypatch.setattr(settings, "referral_referred_bonus_credits", 2)
     async with session_factory() as session:
@@ -641,7 +664,8 @@ async def test_referral_bonus_enabled_credits_both_users_and_records_transaction
         session.add_all([referrer, user])
         await session.commit()
 
-        result = await ReferralService(session).apply_referral(user, "ref1314")
+        with caplog.at_level(logging.INFO):
+            result = await ReferralService(session).apply_referral(user, "ref1314")
 
         await session.refresh(referrer)
         await session.refresh(user)
@@ -660,6 +684,15 @@ async def test_referral_bonus_enabled_credits_both_users_and_records_transaction
         assert all(transaction.metadata_["referrer_user_id"] == 1314 for transaction in transactions)
         assert all(transaction.metadata_["referred_user_id"] == 1315 for transaction in transactions)
         assert all(transaction.metadata_["referral_event_id"] == str(event.id) for transaction in transactions)
+        assert any(
+            isinstance(record.msg, dict)
+            and record.msg.get("action") == "referral_bonus_granted"
+            and record.msg.get("referrer_user_id") == 1314
+            and record.msg.get("referred_user_id") == 1315
+            and record.msg.get("credits") == 5
+            and record.msg.get("referral_event_id") == str(event.id)
+            for record in caplog.records
+        )
 
 
 @pytest.mark.asyncio
@@ -693,6 +726,72 @@ async def test_apply_referral_repeated_start_does_not_double_apply(session_facto
         assert user.balance == 7
         transaction_count = (await session.execute(sa.select(sa.func.count()).select_from(CreditTransaction))).scalar_one()
         assert transaction_count == 2
+
+
+@pytest.mark.asyncio
+async def test_backfill_referral_bonuses_adds_missing_bonus_once(session_factory, monkeypatch) -> None:
+    monkeypatch.setattr(settings, "referral_referrer_bonus_credits", 5)
+    async with session_factory() as session:
+        referrer = User(id=1324, referral_code="ref1324", balance=5)
+        user = User(id=1325, referral_code="user1325", balance=5, referred_by_user_id=1324)
+        session.add_all([referrer, user])
+        await session.commit()
+        event = ReferralEvent(
+            referrer_user_id=1324,
+            referred_user_id=1325,
+            referral_code="ref1324",
+            status=ReferralEventStatus.ACCEPTED.value,
+        )
+        session.add(event)
+        await session.commit()
+
+        summary = await backfill_referral_bonuses(session, bonus_credits=5)
+
+        await session.refresh(referrer)
+        transactions = (await session.execute(sa.select(CreditTransaction))).scalars().all()
+        assert summary.processed == 1
+        assert summary.credited == 1
+        assert summary.skipped_existing == 0
+        assert summary.total_credits_added == 5
+        assert referrer.balance == 10
+        assert len(transactions) == 1
+        assert transactions[0].user_id == 1324
+        assert transactions[0].amount == 5
+        assert transactions[0].referral_event_id == event.id
+        assert transactions[0].metadata_["referred_user_id"] == 1325
+        assert transactions[0].metadata_["referral_event_id"] == str(event.id)
+
+
+@pytest.mark.asyncio
+async def test_backfill_referral_bonuses_is_idempotent(session_factory, monkeypatch) -> None:
+    monkeypatch.setattr(settings, "referral_referrer_bonus_credits", 5)
+    async with session_factory() as session:
+        referrer = User(id=1326, referral_code="ref1326", balance=5)
+        user = User(id=1327, referral_code="user1327", balance=5, referred_by_user_id=1326)
+        session.add_all([referrer, user])
+        await session.commit()
+        event = ReferralEvent(
+            referrer_user_id=1326,
+            referred_user_id=1327,
+            referral_code="ref1326",
+            status=ReferralEventStatus.ACCEPTED.value,
+        )
+        session.add(event)
+        await session.commit()
+
+        first_summary = await backfill_referral_bonuses(session, bonus_credits=5)
+        second_summary = await backfill_referral_bonuses(session, bonus_credits=5)
+
+        await session.refresh(referrer)
+        transaction_count = (await session.execute(sa.select(sa.func.count()).select_from(CreditTransaction))).scalar_one()
+        assert first_summary.credited == 1
+        assert first_summary.total_credits_added == 5
+        assert second_summary.processed == 1
+        assert second_summary.credited == 0
+        assert second_summary.skipped_existing == 1
+        assert second_summary.total_credits_added == 0
+        assert referrer.balance == 10
+        assert transaction_count == 1
 
 
 @pytest.mark.asyncio

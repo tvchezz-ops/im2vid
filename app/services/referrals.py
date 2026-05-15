@@ -3,6 +3,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from datetime import datetime, timezone
+from uuid import UUID
 from typing import Literal
 
 from sqlalchemy import select, update
@@ -142,10 +143,7 @@ class ReferralService:
             self.session.add(event)
             await self.session.flush()
             if referrer_bonus > 0:
-                await self.session.execute(
-                    update(User).where(User.id == referrer.id).values(balance=User.balance + referrer_bonus)
-                )
-                self._add_bonus_transaction(
+                await self._grant_referral_bonus(
                     user_id=referrer.id,
                     amount=referrer_bonus,
                     referrer_user_id=referrer.id,
@@ -153,10 +151,7 @@ class ReferralService:
                     referral_event_id=event.id,
                 )
             if referred_bonus > 0:
-                await self.session.execute(
-                    update(User).where(User.id == user.id).values(balance=User.balance + referred_bonus)
-                )
-                self._add_bonus_transaction(
+                await self._grant_referral_bonus(
                     user_id=user.id,
                     amount=referred_bonus,
                     referrer_user_id=referrer.id,
@@ -179,9 +174,20 @@ class ReferralService:
             }
         )
         if referrer_bonus > 0:
-            self._log_bonus_granted(referrer.id, referrer_bonus, "referrer")
+            self._log_bonus_granted(
+                referrer_user_id=referrer.id,
+                referred_user_id=user.id,
+                credits=referrer_bonus,
+                referral_event_id=event.id,
+            )
         if referred_bonus > 0:
-            self._log_bonus_granted(user.id, referred_bonus, "referred")
+            self._log_bonus_granted(
+                referrer_user_id=referrer.id,
+                referred_user_id=user.id,
+                credits=referred_bonus,
+                referral_event_id=event.id,
+                credited_user_id=user.id,
+            )
 
         return ReferralApplyResult(
             status="accepted",
@@ -192,14 +198,52 @@ class ReferralService:
             referred_bonus_credits=referred_bonus,
         )
 
+    async def _grant_referral_bonus(
+        self,
+        *,
+        user_id: int,
+        amount: int,
+        referrer_user_id: int,
+        referred_user_id: int,
+        referral_event_id: UUID,
+    ) -> bool:
+        existing_transaction = await self.session.scalar(
+            select(CreditTransaction.id).where(
+                CreditTransaction.type == "referral_bonus",
+                CreditTransaction.user_id == user_id,
+                CreditTransaction.referral_event_id == referral_event_id,
+            )
+        )
+        if existing_transaction is not None:
+            return False
+
+        await self.session.execute(update(User).where(User.id == user_id).values(balance=User.balance + amount))
+        self._add_bonus_transaction(
+            user_id=user_id,
+            amount=amount,
+            referrer_user_id=referrer_user_id,
+            referred_user_id=referred_user_id,
+            referral_event_id=referral_event_id,
+        )
+        return True
+
     @staticmethod
-    def _log_bonus_granted(user_id: int, credits: int, role: str) -> None:
+    def _log_bonus_granted(
+        *,
+        referrer_user_id: int,
+        referred_user_id: int,
+        credits: int,
+        referral_event_id: UUID,
+        credited_user_id: int | None = None,
+    ) -> None:
         logger.info(
             {
                 "action": "referral_bonus_granted",
-                "user_id": user_id,
+                "referrer_user_id": referrer_user_id,
+                "referred_user_id": referred_user_id,
                 "credits": credits,
-                "role": role,
+                "referral_event_id": str(referral_event_id),
+                "credited_user_id": credited_user_id or referrer_user_id,
             }
         )
 

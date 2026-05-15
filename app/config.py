@@ -140,7 +140,7 @@ class Settings(BaseSettings):
         description="USD price for 100 credits used for generation cost conversion",
     )
     referral_referrer_bonus_credits: int = Field(
-        default=0,
+        default=5,
         alias="REFERRAL_REFERRER_BONUS_CREDITS",
         description="Credits granted to the referrer for an accepted referral",
     )

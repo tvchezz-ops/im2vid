@@ -67,3 +67,15 @@ def test_generation_pricing_defaults() -> None:
 
     assert settings.pricing_markup_multiplier == Decimal("1.5")
     assert settings.usd_per_100_credits == Decimal("1.30")
+
+
+def test_referral_bonus_defaults() -> None:
+    settings = Settings(
+        bot_token="test-bot-token",
+        wavespeed_api_key="test-api-key",
+        public_base_url="https://example.com",
+        _env_file=None,
+    )
+
+    assert settings.referral_referrer_bonus_credits == 5
+    assert settings.referral_referred_bonus_credits == 0

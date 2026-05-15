@@ -68,6 +68,8 @@ STORE_OUTPUT_URLS=false
 | `credit_usd_price` | `Decimal` | ❌ | `0.013` | USD цена одного кредита для crypto top-ups |
 | `pricing_markup_multiplier` | `Decimal` | ❌ | `1.5` | Множитель на цену провайдера для расчёта стоимости генерации |
 | `usd_per_100_credits` | `Decimal` | ❌ | `1.30` | USD цена 100 кредитов для пересчёта стоимости генерации |
+| `referral_referrer_bonus_credits` | `int` | ❌ | `5` | Кредиты пригласившему за нового реферала |
+| `referral_referred_bonus_credits` | `int` | ❌ | `0` | Кредиты новому пользователю за вход по реферальной ссылке |
 | `store_input_media` | `bool` | ❌ | `false` | Всегда `false`, поле совместимости |
 | `store_output_urls` | `bool` | ❌ | `false` | Всегда `false`, поле совместимости |
 
@@ -101,6 +103,8 @@ NOWPAYMENTS_CANCEL_URL=
 CREDIT_USD_PRICE=0.013
 PRICING_MARKUP_MULTIPLIER=1.5
 USD_PER_100_CREDITS=1.30
+REFERRAL_REFERRER_BONUS_CREDITS=5
+REFERRAL_REFERRED_BONUS_CREDITS=0
 STORE_INPUT_MEDIA=false
 STORE_OUTPUT_URLS=false
 ```
