@@ -79,11 +79,11 @@ class FakeMessage:
         self.answer_markups: list[object] = []
         self.edit_markups: list[object] = []
 
-    async def answer(self, text: str, reply_markup=None, parse_mode=None) -> None:
+    async def answer(self, text: str, reply_markup=None, parse_mode=None, **kwargs) -> None:
         self.answers.append(text)
         self.answer_markups.append(reply_markup)
 
-    async def edit_text(self, text: str, reply_markup=None, parse_mode=None) -> None:
+    async def edit_text(self, text: str, reply_markup=None, parse_mode=None, **kwargs) -> None:
         self.edits.append(text)
         self.edit_markups.append(reply_markup)
 

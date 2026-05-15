@@ -37,15 +37,17 @@ class FakeMessage:
         )
         self.edits: list[str] = []
         self.edit_markups: list[object] = []
+        self.edit_kwargs: list[dict[str, object]] = []
         self.answers: list[str] = []
         self.invoices: list[dict[str, object]] = []
         self.successful_payment = None
 
-    async def edit_text(self, text: str, reply_markup=None, parse_mode=None) -> None:
+    async def edit_text(self, text: str, reply_markup=None, parse_mode=None, **kwargs) -> None:
         self.edits.append(text)
         self.edit_markups.append(reply_markup)
+        self.edit_kwargs.append({"parse_mode": parse_mode, **kwargs})
 
-    async def answer(self, text: str, reply_markup=None, parse_mode=None) -> None:
+    async def answer(self, text: str, reply_markup=None, parse_mode=None, **kwargs) -> None:
         self.answers.append(text)
 
     async def answer_invoice(self, **kwargs) -> None:
@@ -53,10 +55,10 @@ class FakeMessage:
 
 
 class FakeNoModifiedMessage(FakeMessage):
-    async def edit_text(self, text: str, reply_markup=None, parse_mode=None) -> None:
+    async def edit_text(self, text: str, reply_markup=None, parse_mode=None, **kwargs) -> None:
         if self.edits and self.edits[-1] == text:
             raise TelegramBadRequest(method=None, message="Bad Request: message is not modified")
-        await super().edit_text(text, reply_markup=reply_markup, parse_mode=parse_mode)
+        await super().edit_text(text, reply_markup=reply_markup, parse_mode=parse_mode, **kwargs)
 
 
 class FakeCallback:
@@ -204,6 +206,8 @@ async def test_profile_topup_back_returns_profile(session_factory) -> None:
         )
 
         assert message.edits[-1].startswith("👤 <b>Профиль</b>")
+        assert message.edit_kwargs[-1]["parse_mode"] == "HTML"
+        assert message.edit_kwargs[-1]["link_preview_options"].is_disabled is True
         keyboard = message.edit_markups[-1]
         assert keyboard.inline_keyboard[0][0].callback_data == "profile:top_up_balance"
         assert (await state.get_data())["payment_screen"] == "profile"

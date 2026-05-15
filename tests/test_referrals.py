@@ -45,16 +45,20 @@ class FakeStartMessage:
         self.text = text
         self.answers: list[str] = []
         self.answer_markups: list[object] = []
+        self.answer_kwargs: list[dict[str, object]] = []
         self.edits: list[str] = []
         self.edit_markups: list[object] = []
+        self.edit_kwargs: list[dict[str, object]] = []
 
-    async def answer(self, text: str, reply_markup=None, parse_mode=None) -> None:
+    async def answer(self, text: str, reply_markup=None, parse_mode=None, **kwargs) -> None:
         self.answers.append(text)
         self.answer_markups.append(reply_markup)
+        self.answer_kwargs.append({"parse_mode": parse_mode, **kwargs})
 
-    async def edit_text(self, text: str, reply_markup=None, parse_mode=None) -> None:
+    async def edit_text(self, text: str, reply_markup=None, parse_mode=None, **kwargs) -> None:
         self.edits.append(text)
         self.edit_markups.append(reply_markup)
+        self.edit_kwargs.append({"parse_mode": parse_mode, **kwargs})
 
 
 class FakeCallback:

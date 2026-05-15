@@ -36,16 +36,20 @@ class FakeMessage:
         )
         self.answers: list[str] = []
         self.answer_markups: list[object] = []
+        self.answer_kwargs: list[dict[str, object]] = []
         self.edits: list[str] = []
         self.edit_markups: list[object] = []
+        self.edit_kwargs: list[dict[str, object]] = []
 
-    async def answer(self, text: str, reply_markup=None, parse_mode=None) -> None:
+    async def answer(self, text: str, reply_markup=None, parse_mode=None, **kwargs) -> None:
         self.answers.append(text)
         self.answer_markups.append(reply_markup)
+        self.answer_kwargs.append({"parse_mode": parse_mode, **kwargs})
 
-    async def edit_text(self, text: str, reply_markup=None, parse_mode=None) -> None:
+    async def edit_text(self, text: str, reply_markup=None, parse_mode=None, **kwargs) -> None:
         self.edits.append(text)
         self.edit_markups.append(reply_markup)
+        self.edit_kwargs.append({"parse_mode": parse_mode, **kwargs})
 
 
 class FakeCallback:
@@ -101,6 +105,8 @@ async def test_show_profile_displays_clean_summary_and_delivery_toggle(session_f
         await profile.show_profile(message, state, session)
 
         assert message.answers[-1].startswith("👤 <b>Профиль</b>")
+        assert message.answer_kwargs[-1]["parse_mode"] == "HTML"
+        assert message.answer_kwargs[-1]["link_preview_options"].is_disabled is True
         assert "Username" not in message.answers[-1]
         assert "Имя" not in message.answers[-1]
         assert "Язык" not in message.answers[-1]
@@ -137,6 +143,8 @@ async def test_toggle_delivery_mode_updates_profile_message(session_factory) -> 
 
         assert callback.answers[-1] == t("profile.setting_updated", "ru")
         assert "📦 Отправка: файлом" in message.edits[-1]
+        assert message.edit_kwargs[-1]["parse_mode"] == "HTML"
+        assert message.edit_kwargs[-1]["link_preview_options"].is_disabled is True
         assert '🛟 Поддержка: <a href="https://t.me/supbananify">@supbananify</a>' in message.edits[-1]
         assert "Потрачено" not in message.edits[-1]
         assert "Credits spent" not in message.edits[-1]
@@ -160,6 +168,7 @@ async def test_show_profile_falls_back_to_english_when_language_code_missing(ses
         await profile.show_profile(message, state, session)
 
         assert "💳 Balance: 5" in message.answers[-1]
+        assert message.answer_kwargs[-1]["link_preview_options"].is_disabled is True
         assert "🎨 Generations: 0" in message.answers[-1]
         assert '🛟 Support: <a href="https://t.me/supbananify">@supbananify</a>' in message.answers[-1]
         assert "🎁 Invited: 0" in message.answers[-1]
@@ -192,6 +201,7 @@ async def test_referral_invite_screen_shows_referral_link_and_generates_missing_
         assert "🎁 Приглашайте друзей и получайте 5 кредитов за каждого нового пользователя." in message.edits[-1]
         assert "🔗 Ваша ссылка:" in message.edits[-1]
         assert f"https://t.me/imai_test_bot?start={user.start_payload}" in message.edits[-1]
+        assert "link_preview_options" not in message.edit_kwargs[-1]
         assert f"ref_{user.referral_code}" not in message.edits[-1]
         assert message.edit_markups[-1].inline_keyboard[0][0].text == "⬅️ Назад"
         assert message.edit_markups[-1].inline_keyboard[0][0].callback_data == "profile:open"

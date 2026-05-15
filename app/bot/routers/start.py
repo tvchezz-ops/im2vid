@@ -14,7 +14,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.bot.error_messages import build_error_keyboard, build_user_error_message, log_error_code
 from app.bot.keyboards import get_main_menu_keyboard, is_localized_button_text
 from app.bot.routers.generations import is_generation_flow_state, reset_generation_flow
-from app.bot.routers.profile import build_profile_text
+from app.bot.routers.profile import build_profile_text, profile_message_options
 from app.config import settings
 from app.db import PaymentOrderStatus, PaymentProvider, UserRepository
 from app.i18n import get_user_language, t
@@ -50,7 +50,7 @@ async def show_profile_after_payment_return(message: Message, state: FSMContext,
     await message.answer(
         build_profile_text(profile_user, total_spent_credits, lang, accepted_referrals_count),
         reply_markup=get_main_menu_keyboard(lang),
-        parse_mode="HTML",
+        **profile_message_options(),
     )
 
 

@@ -65,7 +65,7 @@ class FakeMessage:
         self.answers: list[str] = []
         self.answer_markups: list[object] = []
 
-    async def answer(self, text: str, reply_markup=None, parse_mode=None) -> None:
+    async def answer(self, text: str, reply_markup=None, parse_mode=None, **kwargs) -> None:
         self.answers.append(text)
         self.answer_markups.append(reply_markup)
 

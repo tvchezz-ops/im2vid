@@ -5,7 +5,7 @@ from typing import Optional
 
 from aiogram import Router
 from aiogram.fsm.context import FSMContext
-from aiogram.types import CallbackQuery, Message
+from aiogram.types import CallbackQuery, LinkPreviewOptions, Message
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.bot.error_messages import build_error_keyboard, build_user_error_message
@@ -20,6 +20,13 @@ from app.utils import logger
 
 router = Router()
 SUPPORT_USERNAME = "supbananify"
+
+
+def profile_message_options() -> dict[str, object]:
+    return {
+        "parse_mode": "HTML",
+        "link_preview_options": LinkPreviewOptions(is_disabled=True),
+    }
 
 
 def format_delivery_mode(send_results_as_files: bool, lang: str = "en") -> str:
@@ -100,7 +107,7 @@ async def show_profile(message: Message, state: FSMContext, session: AsyncSessio
                 lang=lang,
                 referrals_enabled=settings.referral_enabled,
             ),
-            parse_mode="HTML",
+            **profile_message_options(),
         )
         
         logger.debug(f"Profile shown for user {message.from_user.id}")
@@ -139,7 +146,7 @@ async def open_profile_callback(callback: CallbackQuery, session: AsyncSession):
             lang=lang,
             referrals_enabled=settings.referral_enabled,
         ),
-        parse_mode="HTML",
+        **profile_message_options(),
     )
     await callback.answer()
 
@@ -189,6 +196,6 @@ async def toggle_delivery_mode(callback: CallbackQuery, session: AsyncSession):
             lang=lang,
             referrals_enabled=settings.referral_enabled,
         ),
-        parse_mode="HTML",
+        **profile_message_options(),
     )
     await callback.answer(t("profile.setting_updated", lang))

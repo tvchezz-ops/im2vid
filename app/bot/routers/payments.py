@@ -20,7 +20,7 @@ from app.bot.keyboards import (
     get_profile_keyboard,
 )
 from app.bot.language import get_event_lang
-from app.bot.routers.profile import build_profile_text
+from app.bot.routers.profile import build_profile_text, profile_message_options
 from app.config import is_nowpayments_configured, settings
 from app.db import UserRepository
 from app.i18n import t
@@ -130,7 +130,7 @@ async def back_to_profile(callback: CallbackQuery, session: AsyncSession, state:
             lang=lang,
             referrals_enabled=settings.referral_enabled,
         ),
-        parse_mode="HTML",
+        **profile_message_options(),
     )
     await _set_payment_screen(state, "profile")
     await callback.answer()
