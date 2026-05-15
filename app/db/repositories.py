@@ -25,7 +25,7 @@ from app.db.models import (
 from app.utils import logger
 from app.utils.referrals import generate_referral_code, generate_start_payload
 
-INITIAL_USER_BALANCE = 30
+INITIAL_USER_BALANCE = 10
 
 
 @dataclass(frozen=True)

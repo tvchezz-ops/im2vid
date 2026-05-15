@@ -80,7 +80,7 @@ class User(BaseModel):
     is_bot: Mapped[bool] = mapped_column(Boolean, default=False, server_default="0")
     is_premium: Mapped[Optional[bool]] = mapped_column(Boolean, nullable=True)
     photo_url: Mapped[Optional[str]] = mapped_column(String(1024), nullable=True)
-    balance: Mapped[int] = mapped_column(Integer, default=30, server_default="30")
+    balance: Mapped[int] = mapped_column(Integer, default=10, server_default="10")
     referral_code: Mapped[Optional[str]] = mapped_column(
         String(MAX_REFERRAL_CODE_LENGTH),
         unique=True,

@@ -401,8 +401,8 @@ async def test_flow_scenario_a_profile_link_creates_user_b_and_accepts_referral(
         assert user_b is not None
         await session.refresh(user_a)
         assert user_b.referred_by_user_id == user_a.id
-        assert user_a.balance == 35
-        assert user_b.balance == 30
+        assert user_a.balance == 15
+        assert user_b.balance == 10
         assert await UserRepository(session).count_accepted_referrals(user_a.id) == 1
         assert accepted_event.referrer_user_id == user_a.id
         transaction = (await session.execute(sa.select(CreditTransaction))).scalars().one()
@@ -451,7 +451,7 @@ async def test_flow_scenario_b_own_referral_link_rejects_self_without_ui_spam(se
         event = (await session.execute(sa.select(ReferralEvent))).scalars().one()
         assert user is not None
         assert user.referred_by_user_id is None
-        assert user.balance == 30
+        assert user.balance == 10
         assert event.status == ReferralEventStatus.REJECTED.value
         assert event.reject_reason == "self_referral"
         assert "Реферальная ссылка применена" not in message.answers[0]
@@ -482,7 +482,7 @@ async def test_flow_scenario_c_existing_user_rejected_already_registered(session
         event = (await session.execute(sa.select(ReferralEvent))).scalars().one()
         assert user_b is not None
         assert user_b.referred_by_user_id is None
-        assert user_b.balance == 30
+        assert user_b.balance == 10
         assert event.status == ReferralEventStatus.REJECTED.value
         assert event.reject_reason == "already_registered"
         assert "Реферальная ссылка применена" not in message.answers[0]
@@ -517,8 +517,8 @@ async def test_flow_scenario_d_already_referred_user_keeps_original_referrer(ses
         assert referrer_a is not None
         assert referrer_c is not None
         assert user_b.referred_by_user_id == 1406
-        assert referrer_a.balance == 30
-        assert referrer_c.balance == 30
+        assert referrer_a.balance == 10
+        assert referrer_c.balance == 10
         assert event.referrer_user_id == 1407
         assert event.status == ReferralEventStatus.REJECTED.value
         assert event.reject_reason == "already_referred"
