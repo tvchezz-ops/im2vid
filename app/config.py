@@ -5,7 +5,7 @@ from __future__ import annotations
 from decimal import Decimal
 from typing import Optional
 
-from pydantic import Field, field_validator
+from pydantic import Field, field_validator, model_validator
 from pydantic_settings import (
     BaseSettings,
     DotEnvSettingsSource,
@@ -13,6 +13,8 @@ from pydantic_settings import (
     PydanticBaseSettingsSource,
     SettingsConfigDict,
 )
+
+from app.database_url import is_production_env, is_public_database_endpoint, resolve_database_url
 
 
 def _parse_admin_ids(value: str | list[int] | None) -> list[int]:
@@ -56,7 +58,10 @@ class Settings(BaseSettings):
         env_file_encoding="utf-8",
         case_sensitive=False,
         extra="ignore",
+        populate_by_name=True,
     )
+
+    env: str = Field(default="development", description="Deployment environment name")
 
     # Bot
     bot_token: str = Field(..., description="Telegram Bot Token от @BotFather")
@@ -177,8 +182,24 @@ class Settings(BaseSettings):
     
     # Database
     database_url: str = Field(
-        default="sqlite+aiosqlite:///./bot.db",
+        default="",
         description="URL подключения к БД (SQLite для разработки, PostgreSQL для production)",
+    )
+    database_private_url: str = Field(
+        default="",
+        description="Private database URL, preferred when DATABASE_URL is not set",
+    )
+    database_public_url: str = Field(
+        default="",
+        description="Public database URL, used only when DATABASE_PUBLIC_FALLBACK_ENABLED=true",
+    )
+    database_public_fallback_enabled: bool = Field(
+        default=False,
+        description="Allow DATABASE_PUBLIC_URL fallback when private URL is unavailable",
+    )
+    strict_private_network: bool = Field(
+        default=False,
+        description="Fail startup in production when the selected database URL is public",
     )
     
     # Admin IDs
@@ -194,6 +215,23 @@ class Settings(BaseSettings):
             return None
         username = str(value).strip().lstrip("@")
         return username or None
+
+    @model_validator(mode="after")
+    def resolve_database_connection_url(self) -> "Settings":
+        selection = resolve_database_url(
+            database_url=self.database_url,
+            database_private_url=self.database_private_url,
+            database_public_url=self.database_public_url,
+            public_fallback_enabled=self.database_public_fallback_enabled,
+        )
+        self.database_url = selection.url
+        if (
+            is_production_env(self.env)
+            and self.strict_private_network
+            and is_public_database_endpoint(self.database_url)
+        ):
+            raise ValueError("STRICT_PRIVATE_NETWORK=true rejects public Railway database endpoints in production")
+        return self
 
     @classmethod
     def settings_customise_sources(
@@ -273,12 +311,15 @@ except Exception as e:
         f"- CREDIT_USD_PRICE (опционально, по умолчанию 0.013)\n"
         f"- PRICING_MARKUP_MULTIPLIER (опционально, по умолчанию 1.5)\n"
         f"- USD_PER_100_CREDITS (опционально, по умолчанию 1.30)\n"
+        f"- DATABASE_URL (опционально, главный override строки подключения к БД)\n"
+        f"- DATABASE_PRIVATE_URL (опционально, preferred private Railway Postgres URL)\n"
+        f"- DATABASE_PUBLIC_FALLBACK_ENABLED (опционально, по умолчанию false)\n"
+        f"- STRICT_PRIVATE_NETWORK (опционально, по умолчанию false)\n"
         f"- R2_ENDPOINT_URL (опционально, для Cloudflare R2)\n"
         f"- R2_ACCESS_KEY_ID (опционально, для Cloudflare R2)\n"
         f"- R2_SECRET_ACCESS_KEY (опционально, для Cloudflare R2)\n"
         f"- R2_BUCKET_NAME (опционально, для Cloudflare R2)\n"
         f"- R2_SIGNED_URL_TTL_SECONDS (опционально, по умолчанию 1800)\n"
-        f"- DATABASE_URL (опционально, есть значение по умолчанию)\n"
         f"- ADMIN_IDS (опционально, список чисел через запятую)"
     ) from e
 

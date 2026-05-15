@@ -165,6 +165,36 @@ REFERRAL_REFERRER_BONUS_CREDITS=5
 REFERRAL_REFERRED_BONUS_CREDITS=0
 ```
 
+## Railway Postgres Private Networking
+
+In production on Railway, connect to Postgres through private networking to avoid public TCP proxy egress fees. The app resolves database URLs in this order:
+
+1. `DATABASE_URL`
+2. `DATABASE_PRIVATE_URL`
+3. `DATABASE_PUBLIC_URL`, only when `DATABASE_PUBLIC_FALLBACK_ENABLED=true`
+4. local SQLite fallback
+
+Recommended Railway production env:
+
+```env
+ENV=production
+DATABASE_PRIVATE_URL=postgresql+asyncpg://postgres:password@${{Postgres.RAILWAY_PRIVATE_DOMAIN}}:5432/railway
+STRICT_PRIVATE_NETWORK=true
+DATABASE_PUBLIC_FALLBACK_ENABLED=false
+```
+
+You can also paste the resolved private hostname directly:
+
+```env
+DATABASE_PRIVATE_URL=postgresql+asyncpg://postgres:password@postgres.railway.internal:5432/railway
+```
+
+Do not configure Railway TCP proxy domains for production database traffic. If `ENV=production` and the selected URL points to a public Railway endpoint, startup logs a `database_public_endpoint_warning`; with `STRICT_PRIVATE_NETWORK=true`, startup fails instead. Startup also emits a diagnostic log like:
+
+```python
+{"action": "database_connection_mode", "mode": "private", "host": "postgres.railway.internal"}
+```
+
 ## Crypto Payments With NOWPayments
 
 Crypto top-ups use only NOWPayments hosted checkout. The balance top-up screen shows a `₿ Crypto` option, lets the user select a credit package, creates a NOWPayments invoice, and shows only the checkout button. The user chooses currency and network on the NOWPayments page; the bot never displays wallet addresses, networks, or transaction hashes.

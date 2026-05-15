@@ -9,8 +9,8 @@ import sqlalchemy as sa
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 
 from app.config import settings
+from app.database_url import normalize_database_url
 from app.db.models import ReferralEvent, ReferralEventStatus, User
-from app.db.session import normalize_database_url
 from app.utils import logger
 
 

@@ -16,6 +16,12 @@ from pydantic import Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 
+from app.database_url import (
+    database_connection_mode,
+    database_url_host,
+    normalize_database_url as normalize_app_database_url,
+    resolve_database_url,
+)
 from app.db.models import PaymentOrder, PaymentOrderStatus, PaymentProvider
 from app.db.repositories import PaymentRepository
 from app.i18n import DEFAULT_LANGUAGE, get_user_language, t
@@ -31,7 +37,10 @@ class WalletSettings(BaseSettings):
 
     wallet_bot_token: str = Field(..., alias="WALLET_BOT_TOKEN")
     main_bot_username: str = Field(..., alias="MAIN_BOT_USERNAME")
-    database_url: str = Field(..., alias="DATABASE_URL")
+    database_url: str = Field(default="", alias="DATABASE_URL")
+    database_private_url: str = Field(default="", alias="DATABASE_PRIVATE_URL")
+    database_public_url: str = Field(default="", alias="DATABASE_PUBLIC_URL")
+    database_public_fallback_enabled: bool = Field(default=False, alias="DATABASE_PUBLIC_FALLBACK_ENABLED")
     wallet_allowed_amounts: str = Field(
         default="100,300,500,1000,3000,5000",
         alias="WALLET_ALLOWED_AMOUNTS",
@@ -42,6 +51,15 @@ class WalletSettings(BaseSettings):
     @property
     def normalized_main_bot_username(self) -> str:
         return self.main_bot_username.strip().lstrip("@")
+
+    @property
+    def resolved_database_url(self) -> str:
+        return resolve_database_url(
+            database_url=self.database_url,
+            database_private_url=self.database_private_url,
+            database_public_url=self.database_public_url,
+            public_fallback_enabled=self.database_public_fallback_enabled,
+        ).url
 
     @property
     def allowed_amounts(self) -> tuple[int, ...]:
@@ -117,12 +135,7 @@ def detect_database_backend(database_url: str) -> str:
 
 
 def normalize_database_url(database_url: str) -> str:
-    normalized_url = database_url.strip()
-    if normalized_url.startswith("postgres://"):
-        return normalized_url.replace("postgres://", "postgresql+asyncpg://", 1)
-    if normalized_url.startswith("postgresql://"):
-        return normalized_url.replace("postgresql://", "postgresql+asyncpg://", 1)
-    return normalized_url
+    return normalize_app_database_url(database_url)
 
 
 def create_session_factory(database_url: str) -> async_sessionmaker[AsyncSession]:
@@ -325,10 +338,18 @@ async def process_successful_payment(
 async def main() -> None:
     logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(name)s - %(levelname)s - %(message)s")
     settings = WalletSettings()
-    logger.info({"action": "wallet_bot_starting", "database_backend": detect_database_backend(settings.database_url)})
+    database_url = settings.resolved_database_url
+    logger.info({"action": "wallet_bot_starting", "database_backend": detect_database_backend(database_url)})
+    logger.info(
+        {
+            "action": "database_connection_mode",
+            "mode": database_connection_mode(database_url),
+            "host": database_url_host(database_url),
+        }
+    )
 
     bot = Bot(token=settings.wallet_bot_token)
-    session_factory = create_session_factory(settings.database_url)
+    session_factory = create_session_factory(database_url)
     dispatcher = Dispatcher()
     dispatcher.include_router(router)
     await dispatcher.start_polling(bot, settings=settings, session_factory=session_factory)

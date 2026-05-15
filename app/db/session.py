@@ -8,17 +8,14 @@ from sqlalchemy.ext.asyncio import (
 )
 
 from app.config import settings
+from app.database_url import (
+    database_connection_mode,
+    database_url_host,
+    is_production_env,
+    is_public_database_endpoint,
+    normalize_database_url,
+)
 from app.utils import logger
-
-
-def normalize_database_url(database_url: str) -> str:
-    """Нормализовать DATABASE_URL для async SQLAlchemy engine."""
-    normalized_url = database_url.strip()
-    if normalized_url.startswith("postgres://"):
-        return normalized_url.replace("postgres://", "postgresql+asyncpg://", 1)
-    if normalized_url.startswith("postgresql://"):
-        return normalized_url.replace("postgresql://", "postgresql+asyncpg://", 1)
-    return normalized_url
 
 
 def detect_database_backend(database_url: str) -> str:
@@ -33,9 +30,29 @@ def detect_database_backend(database_url: str) -> str:
 class DatabaseManager:
     """Менеджер для управления БД."""
 
-    def __init__(self, database_url: str):
+    def __init__(self, database_url: str, *, env: str = "", strict_private_network: bool = False):
         """Инициализация."""
         normalized_database_url = normalize_database_url(database_url)
+        connection_mode = database_connection_mode(normalized_database_url)
+        connection_host = database_url_host(normalized_database_url)
+        logger.info(
+            {
+                "action": "database_connection_mode",
+                "mode": connection_mode,
+                "host": connection_host,
+            }
+        )
+        if is_production_env(env) and is_public_database_endpoint(normalized_database_url):
+            logger.warning(
+                {
+                    "action": "database_public_endpoint_warning",
+                    "mode": connection_mode,
+                    "host": connection_host,
+                    "reason": "public_database_endpoint_in_production",
+                }
+            )
+            if strict_private_network:
+                raise RuntimeError("STRICT_PRIVATE_NETWORK=true rejects public Railway database endpoints in production")
         logger.info("Using database backend: %s", detect_database_backend(normalized_database_url))
         self.engine = create_async_engine(
             normalized_database_url,
@@ -59,7 +76,11 @@ class DatabaseManager:
 
 
 # Глобальный менеджер
-db_manager = DatabaseManager(settings.database_url)
+db_manager = DatabaseManager(
+    settings.database_url,
+    env=settings.env,
+    strict_private_network=settings.strict_private_network,
+)
 
 
 async def get_session() -> AsyncGenerator[AsyncSession, None]:

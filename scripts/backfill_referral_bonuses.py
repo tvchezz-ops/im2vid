@@ -16,6 +16,7 @@ ROOT_DIR = Path(__file__).resolve().parents[1]
 if str(ROOT_DIR) not in sys.path:
     sys.path.insert(0, str(ROOT_DIR))
 
+from app.database_url import is_production_env, is_public_database_endpoint, normalize_database_url, resolve_database_url
 from app.db.models import CreditTransaction, ReferralEvent, ReferralEventStatus, User
 from app.utils import logger
 
@@ -28,8 +29,25 @@ class ReferralBackfillSettings(BaseSettings):
         extra="ignore",
     )
 
-    database_url: str = Field(default="sqlite+aiosqlite:///./bot.db", alias="DATABASE_URL")
+    database_url: str = Field(default="", alias="DATABASE_URL")
+    database_private_url: str = Field(default="", alias="DATABASE_PRIVATE_URL")
+    database_public_url: str = Field(default="", alias="DATABASE_PUBLIC_URL")
+    database_public_fallback_enabled: bool = Field(default=False, alias="DATABASE_PUBLIC_FALLBACK_ENABLED")
+    env: str = Field(default="development", alias="ENV")
+    strict_private_network: bool = Field(default=False, alias="STRICT_PRIVATE_NETWORK")
     referral_referrer_bonus_credits: int = Field(default=5, alias="REFERRAL_REFERRER_BONUS_CREDITS")
+
+    @property
+    def resolved_database_url(self) -> str:
+        database_url = resolve_database_url(
+            database_url=self.database_url,
+            database_private_url=self.database_private_url,
+            database_public_url=self.database_public_url,
+            public_fallback_enabled=self.database_public_fallback_enabled,
+        ).url
+        if is_production_env(self.env) and self.strict_private_network and is_public_database_endpoint(database_url):
+            raise RuntimeError("STRICT_PRIVATE_NETWORK=true rejects public Railway database endpoints in production")
+        return database_url
 
 
 backfill_settings = ReferralBackfillSettings()
@@ -57,15 +75,6 @@ async def _has_referrer_bonus_transaction(
         )
     )
     return transaction_id is not None
-
-
-def normalize_database_url(database_url: str) -> str:
-    normalized_url = database_url.strip()
-    if normalized_url.startswith("postgres://"):
-        return normalized_url.replace("postgres://", "postgresql+asyncpg://", 1)
-    if normalized_url.startswith("postgresql://"):
-        return normalized_url.replace("postgresql://", "postgresql+asyncpg://", 1)
-    return normalized_url
 
 
 async def backfill_referral_bonuses(
@@ -143,7 +152,7 @@ async def backfill_referral_bonuses(
 
 
 async def _run() -> int:
-    engine = create_async_engine(normalize_database_url(backfill_settings.database_url))
+    engine = create_async_engine(normalize_database_url(backfill_settings.resolved_database_url))
     session_factory = async_sessionmaker(engine, expire_on_commit=False)
     try:
         async with session_factory() as session:

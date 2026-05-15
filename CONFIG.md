@@ -15,7 +15,11 @@ PUBLIC_BASE_URL=https://your-public-host.example.com
 ### Опциональные переменные с значениями по умолчанию
 
 ```env
+ENV=development
 DATABASE_URL=sqlite+aiosqlite:///./bot.db
+DATABASE_PRIVATE_URL=
+DATABASE_PUBLIC_FALLBACK_ENABLED=false
+STRICT_PRIVATE_NETWORK=false
 ADMIN_IDS=123456789,987654321    # Список ID админов через запятую
 INSTANCE_NAME=local-dev
 TEMP_MEDIA_DIR=tmp/media
@@ -45,9 +49,13 @@ STORE_OUTPUT_URLS=false
 | Поле | Тип | Обязательная | Значение по умолчанию | Описание |
 |------|-----|-------------|----------------------|---------|
 | `bot_token` | `str` | ✅ | — | Токен Telegram бота от @BotFather |
+| `env` | `str` | ❌ | `development` | Окружение запуска: `development`, `production` |
 | `instance_name` | `str` | ❌ | `""` | Имя deployment/instance для startup-логов и диагностики конфликтов polling |
 | `wavespeed_api_key` | `str` | ✅ | — | API ключ для сервиса генерации |
-| `database_url` | `str` | ❌ | `sqlite+aiosqlite:///./bot.db` | Строка подключения к БД |
+| `database_url` | `str` | ❌ | `sqlite+aiosqlite:///./bot.db` | Главный override строки подключения к БД |
+| `database_private_url` | `str` | ❌ | `""` | Private Railway Postgres URL, используется если `DATABASE_URL` не задан |
+| `database_public_fallback_enabled` | `bool` | ❌ | `false` | Разрешить fallback на public endpoint только явно |
+| `strict_private_network` | `bool` | ❌ | `false` | В production запрещать public Railway DB endpoints |
 | `public_base_url` | `str` | ✅ | — | Публичный URL для временно опубликованных media-файлов |
 | `admin_ids` | `list[int]` | ❌ | `[]` | Список админ ID через запятую |
 | `temp_media_dir` | `str` | ❌ | `tmp/media` | Временная директория для входных изображений |
@@ -82,7 +90,11 @@ WAVESPEED_API_KEY=your_api_key_here
 PUBLIC_BASE_URL=https://your-public-host.example.com
 
 # Опциональные переменные
+ENV=development
 DATABASE_URL=sqlite+aiosqlite:///./bot.db
+DATABASE_PRIVATE_URL=
+DATABASE_PUBLIC_FALLBACK_ENABLED=false
+STRICT_PRIVATE_NETWORK=false
 ADMIN_IDS=123456789,987654321,111111111
 INSTANCE_NAME=local-dev
 TEMP_MEDIA_DIR=tmp/media
@@ -195,6 +207,38 @@ WAVESPEED_API_KEY=...
 PUBLIC_BASE_URL=https://your-public-host.example.com
 ```
 
+### Railway Postgres через private networking
+
+На Railway production backend должен подключаться к Postgres через private networking, а не через TCP proxy/public endpoint. Это убирает warning Railway `Connecting to a public endpoint will incur egress fees` и не гонит трафик через публичный egress.
+
+Порядок выбора URL БД:
+
+1. `DATABASE_URL`
+2. `DATABASE_PRIVATE_URL`
+3. `DATABASE_PUBLIC_URL`, только если явно включить `DATABASE_PUBLIC_FALLBACK_ENABLED=true`
+4. `sqlite+aiosqlite:///./bot.db` для локальной разработки
+
+Production env для Railway:
+
+```env
+ENV=production
+DATABASE_PRIVATE_URL=postgresql+asyncpg://postgres:password@${{Postgres.RAILWAY_PRIVATE_DOMAIN}}:5432/railway
+DATABASE_PUBLIC_FALLBACK_ENABLED=false
+STRICT_PRIVATE_NETWORK=true
+```
+
+Можно использовать уже раскрытый private hostname:
+
+```env
+DATABASE_PRIVATE_URL=postgresql+asyncpg://postgres:password@postgres.railway.internal:5432/railway
+```
+
+В production не задавайте public Railway TCP proxy URL как основной database config. Если выбранный URL всё же указывает на public Railway endpoint, backend пишет warning log `database_public_endpoint_warning`; при `STRICT_PRIVATE_NETWORK=true` startup падает. При старте также пишется diagnostic log:
+
+```python
+{"action": "database_connection_mode", "mode": "private", "host": "postgres.railway.internal"}
+```
+
 3. Запустить бота:
 ```bash
 python -m app.main
@@ -241,7 +285,9 @@ wavespeed_api_key
 - BOT_TOKEN
 - WAVESPEED_API_KEY
 - PUBLIC_BASE_URL
-- DATABASE_URL (опционально, есть значение по умолчанию)
+- DATABASE_URL (опционально, главный override строки подключения к БД)
+- DATABASE_PRIVATE_URL (опционально, preferred Railway private networking URL)
+- STRICT_PRIVATE_NETWORK (опционально, по умолчанию false)
 - ADMIN_IDS (опционально)
 ```
 
