@@ -5,6 +5,7 @@ from types import SimpleNamespace
 
 import pytest
 import pytest_asyncio
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 
 
@@ -17,6 +18,7 @@ from app.bot.routers import profile
 from app.bot.keyboards import get_button_text
 from app.bot.states import GenerationStates
 from app.db.base import Base
+from app.db.models import ReferralEvent, ReferralEventStatus, User
 from app.i18n import t
 
 
@@ -47,7 +49,7 @@ class FakeMessage:
 
 
 class FakeCallback:
-    def __init__(self, user_id: int = 1, message: FakeMessage | None = None):
+    def __init__(self, user_id: int = 1, message: FakeMessage | None = None, data: str = "profile:toggle_delivery_mode"):
         self.from_user = SimpleNamespace(
             id=user_id,
             username="tester",
@@ -58,7 +60,7 @@ class FakeCallback:
             is_premium=False,
         )
         self.message = message or FakeMessage(user_id)
-        self.data = "profile:toggle_delivery_mode"
+        self.data = data
         self.answers: list[str | None] = []
 
     async def answer(self, text: str | None = None, show_alert: bool = False) -> None:
@@ -108,14 +110,17 @@ async def test_show_profile_displays_clean_summary_and_delivery_toggle(session_f
         assert "История" not in message.answers[-1]
         assert f"💳 {t('profile.balance', 'ru')}: 5" in message.answers[-1]
         assert f"🎨 {t('profile.total_generations', 'ru')}: 0" in message.answers[-1]
+        assert "🎁 Приглашено: 0" in message.answers[-1]
         assert "📦 Отправка: обычный формат" in message.answers[-1]
         assert "Потрачено" not in message.answers[-1]
         assert "Credits spent" not in message.answers[-1]
         keyboard = message.answer_markups[-1]
         assert keyboard.inline_keyboard[0][0].text == f"💳 {t('profile.top_up', 'ru')}"
-        assert keyboard.inline_keyboard[1][0].text == "📎 Отправлять файлом"
+        assert keyboard.inline_keyboard[1][0].text == "🎁 Пригласить друзей"
+        assert keyboard.inline_keyboard[1][0].callback_data == "profile:invite_friends"
+        assert keyboard.inline_keyboard[2][0].text == "📎 Отправлять файлом"
         assert "Настройки" not in "\n".join(button.text for row in keyboard.inline_keyboard for button in row)
-        assert len(keyboard.inline_keyboard) == 2
+        assert len(keyboard.inline_keyboard) == 3
         assert all(row[0].text != "📜 История генераций" for row in keyboard.inline_keyboard)
         assert all("Назад" not in row[0].text for row in keyboard.inline_keyboard)
 
@@ -133,8 +138,8 @@ async def test_toggle_delivery_mode_updates_profile_message(session_factory) -> 
         assert "Потрачено" not in message.edits[-1]
         assert "Credits spent" not in message.edits[-1]
         keyboard = message.edit_markups[-1]
-        assert keyboard.inline_keyboard[1][0].text == "🖼 Обычный формат"
-        assert len(keyboard.inline_keyboard) == 2
+        assert keyboard.inline_keyboard[2][0].text == "🖼 Обычный формат"
+        assert len(keyboard.inline_keyboard) == 3
         assert all("Назад" not in row[0].text for row in keyboard.inline_keyboard)
 
         from app.db import UserRepository
@@ -153,9 +158,64 @@ async def test_show_profile_falls_back_to_english_when_language_code_missing(ses
 
         assert "💳 Balance: 5" in message.answers[-1]
         assert "🎨 Generations: 0" in message.answers[-1]
+        assert "🎁 Invited: 0" in message.answers[-1]
         assert "📦 Delivery: normal" in message.answers[-1]
         assert "Credits spent" not in message.answers[-1]
         assert "Потрачено" not in message.answers[-1]
         keyboard = message.answer_markups[-1]
         assert keyboard.inline_keyboard[0][0].text == get_button_text("profile.top_up", "en")
-        assert keyboard.inline_keyboard[1][0].text == "📎 Send as file"
+        assert keyboard.inline_keyboard[1][0].text == get_button_text("profile.invite_friends", "en")
+        assert keyboard.inline_keyboard[2][0].text == "📎 Send as file"
+
+
+@pytest.mark.asyncio
+async def test_referral_invite_screen_shows_referral_link_and_generates_missing_code(session_factory, monkeypatch) -> None:
+    monkeypatch.setattr(profile.settings, "main_bot_username", "imai_test_bot")
+    async with session_factory() as session:
+        session.add(User(id=604, balance=5, referral_code=None))
+        await session.commit()
+        message = FakeMessage(user_id=604)
+        callback = FakeCallback(user_id=604, message=message, data="profile:invite_friends")
+
+        await profile.show_referral_invite(callback, session)
+
+        user = await session.get(User, 604)
+        assert user is not None
+        assert user.referral_code is not None
+        assert "🎁 Пригласите друзей" in message.edits[-1]
+        assert "Ваша ссылка:" in message.edits[-1]
+        assert f"https://t.me/imai_test_bot?start=ref_{user.referral_code}" in message.edits[-1]
+        assert "ref_" in message.edits[-1]
+        assert message.edit_markups[-1].inline_keyboard[0][0].text == "⬅️ Назад"
+        assert message.edit_markups[-1].inline_keyboard[0][0].callback_data == "profile:open"
+
+
+@pytest.mark.asyncio
+async def test_profile_invited_count_uses_accepted_referrals(session_factory) -> None:
+    async with session_factory() as session:
+        session.add_all(
+            [
+                User(id=605, balance=5, referral_code="ref605"),
+                User(id=606, balance=5, referral_code="ref606", referred_by_user_id=605),
+                User(id=607, balance=5, referral_code="ref607", referred_by_user_id=605),
+                User(id=608, balance=5, referral_code="ref608"),
+            ]
+        )
+        await session.commit()
+        session.add_all(
+            [
+                ReferralEvent(referrer_user_id=605, referred_user_id=606, referral_code="ref605", status=ReferralEventStatus.ACCEPTED.value),
+                ReferralEvent(referrer_user_id=605, referred_user_id=607, referral_code="ref605", status=ReferralEventStatus.ACCEPTED.value),
+                ReferralEvent(referrer_user_id=605, referred_user_id=608, referral_code="bad", status=ReferralEventStatus.REJECTED.value),
+            ]
+        )
+        await session.commit()
+        state = FakeState()
+        message = FakeMessage(user_id=605)
+
+        await profile.show_profile(message, state, session)
+
+        assert "🎁 Приглашено: 2" in message.answers[-1]
+
+        result = await session.execute(select(ReferralEvent).where(ReferralEvent.referrer_user_id == 605))
+        assert len(result.scalars().all()) == 3

@@ -73,6 +73,7 @@ BUTTON_ICONS = {
     "common.download_file": "🔗",
     "common.change_settings": "⚙️",
     "profile.top_up": "💳",
+    "profile.invite_friends": "🎁",
     "payments.back_to_profile": "⬅️",
     "payments.pay_here": "⭐",
     "generation.text_to_image": "🖼",
@@ -844,7 +845,17 @@ def get_profile_keyboard(*, send_results_as_files: bool, lang: str = DEFAULT_LAN
     return InlineKeyboardMarkup(
         inline_keyboard=[
             [InlineKeyboardButton(text=get_button_text("profile.top_up", lang), callback_data="profile:top_up_balance")],
+            [InlineKeyboardButton(text=get_button_text("profile.invite_friends", lang), callback_data="profile:invite_friends")],
             [InlineKeyboardButton(text=delivery_toggle_text, callback_data="profile:toggle_delivery_mode")],
+        ]
+    )
+
+
+def get_referral_keyboard(lang: str = DEFAULT_LANGUAGE) -> InlineKeyboardMarkup:
+    """Inline keyboard for the referral information screen."""
+    return InlineKeyboardMarkup(
+        inline_keyboard=[
+            [InlineKeyboardButton(text=get_button_text("common.back", lang), callback_data="profile:open")],
         ]
     )
 

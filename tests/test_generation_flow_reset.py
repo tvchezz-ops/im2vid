@@ -7,7 +7,7 @@ from types import SimpleNamespace
 
 import pytest
 import pytest_asyncio
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 
 
@@ -19,8 +19,9 @@ os.environ.setdefault("PUBLIC_BASE_URL", "https://example.com")
 from app.bot.routers import generations, profile, start
 from app.bot.keyboards import build_main_menu_keyboard, get_button_text
 from app.bot.states import GenerationStates
+from app.config import settings
 from app.db.base import Base
-from app.db.models import PaymentOrderStatus, User
+from app.db.models import PaymentOrderStatus, ReferralEvent, User
 from app.i18n import t
 from app.services.payments import PaymentService
 
@@ -287,6 +288,107 @@ async def test_start_paid_payload_does_not_trust_unknown_payload(session_factory
         assert len(message.answers) == 1
         assert "Привет" in message.answers[0]
         assert "Проверяем оплату" not in message.answers[0]
+        _assert_main_menu_keyboard(message.answer_markups[0])
+
+
+@pytest.mark.asyncio
+async def test_start_ref_payload_for_new_user_applies_referral(session_factory, monkeypatch) -> None:
+    monkeypatch.setattr(settings, "referral_referrer_bonus_credits", 0)
+    monkeypatch.setattr(settings, "referral_referred_bonus_credits", 2)
+    async with session_factory() as session:
+        session.add(User(id=730, balance=5, referral_code="valid730"))
+        await session.commit()
+        state = FakeState()
+        message = FakeMessage(user_id=731, text="/start ref_valid730")
+
+        await start.start_payment_return_command(message, state, session, command=SimpleNamespace(args="ref_valid730"))
+
+        referred_user = await session.get(User, 731)
+        assert referred_user is not None
+        assert referred_user.referred_by_user_id == 730
+        assert referred_user.referred_at is not None
+        assert len(message.answers) == 1
+        assert "Реферальная ссылка применена" in message.answers[0]
+        assert "🎁 Бонус начислен: +2 кредитов" in message.answers[0]
+        assert "Привет" in message.answers[0]
+        _assert_main_menu_keyboard(message.answer_markups[0])
+
+
+@pytest.mark.asyncio
+async def test_start_ref_payload_for_existing_user_does_not_apply_referral(session_factory) -> None:
+    async with session_factory() as session:
+        session.add_all(
+            [
+                User(id=732, balance=5, referral_code="valid732"),
+                User(id=733, balance=5, referral_code="user733"),
+            ]
+        )
+        await session.commit()
+        state = FakeState()
+        message = FakeMessage(user_id=733, text="/start ref_valid732")
+
+        await start.start_payment_return_command(message, state, session, command=SimpleNamespace(args="ref_valid732"))
+
+        referred_user = await session.get(User, 733)
+        rejected_event = (await session.execute(select(ReferralEvent))).scalars().one()
+        assert referred_user is not None
+        assert referred_user.referred_by_user_id is None
+        assert rejected_event.status == "rejected"
+        assert rejected_event.reject_reason == "already_registered"
+        assert len(message.answers) == 1
+        assert "Реферальная ссылка применена" not in message.answers[0]
+        assert "Привет" in message.answers[0]
+        _assert_main_menu_keyboard(message.answer_markups[0])
+
+
+@pytest.mark.asyncio
+async def test_start_ref_payload_rejects_own_code(session_factory) -> None:
+    async with session_factory() as session:
+        session.add(User(id=734, balance=5, referral_code="own734"))
+        await session.commit()
+        state = FakeState()
+        message = FakeMessage(user_id=734, text="/start ref_own734")
+
+        await start.start_payment_return_command(message, state, session, command=SimpleNamespace(args="ref_own734"))
+
+        referred_user = await session.get(User, 734)
+        rejected_event = (await session.execute(select(ReferralEvent))).scalars().one()
+        assert referred_user is not None
+        assert referred_user.referred_by_user_id is None
+        assert rejected_event.status == "rejected"
+        assert rejected_event.reject_reason == "self_referral"
+        assert len(message.answers) == 1
+        assert "Реферальная ссылка применена" not in message.answers[0]
+        assert "Привет" in message.answers[0]
+
+
+@pytest.mark.asyncio
+async def test_start_payment_payload_still_uses_payment_return_priority(session_factory) -> None:
+    async with session_factory() as session:
+        session.add(User(id=735, balance=5, referral_code="ref735"))
+        await session.commit()
+        order = await PaymentService(session).create_stars_order(user_id=735, stars_amount=100)
+        state = FakeState()
+        message = FakeMessage(user_id=735, text=f"/start paid_{order.payload}")
+
+        await start.start_payment_return_command(message, state, session, command=SimpleNamespace(args=f"paid_{order.payload}"))
+
+        referral_event_count = (await session.execute(select(func.count()).select_from(ReferralEvent))).scalar_one()
+        assert referral_event_count == 0
+        assert len(message.answers) == 1
+        assert message.answers[0].startswith("👤 <b>Профиль</b>")
+
+
+@pytest.mark.asyncio
+async def test_ordinary_start_still_shows_welcome(session_factory) -> None:
+    async with session_factory() as session:
+        state = FakeState()
+        message = FakeMessage(user_id=736, text="/start")
+
+        await start.start_command(message, state, session)
+
+        assert len(message.answers) == 1
+        assert "Привет" in message.answers[0]
         _assert_main_menu_keyboard(message.answer_markups[0])
 
 

@@ -41,6 +41,7 @@ from app.services.download_links import DownloadLinkService
 from app.services.nowpayments import NowPaymentsOrderLink, NowPaymentsService
 from app.services.payments import ALLOWED_STARS_AMOUNTS, PaymentOrderNotFoundError, PaymentService
 from app.services.r2_storage import R2StorageService
+from app.services.referrals import ReferralApplyResult, ReferralService, apply_referral
 from app.services.wavespeed import (
     WavespeedResult,
     WavespeedService,
@@ -67,6 +68,9 @@ __all__ = [
     "PaymentOrderNotFoundError",
     "ALLOWED_STARS_AMOUNTS",
     "R2StorageService",
+    "ReferralApplyResult",
+    "ReferralService",
+    "apply_referral",
     "SettingOption",
     "GenerationSetting",
     "GenerationModel",

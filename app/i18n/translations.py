@@ -4598,6 +4598,92 @@ for language_code, catalog_updates in _PROMPT_REQUEST_COPY_UPDATE.items():
     globals()[f"{language_code.upper()}_TRANSLATIONS"].update(catalog_updates)
     FLOW_I18N_TRANSLATIONS[language_code].update(catalog_updates)
 
+REFERRAL_PROFILE_TRANSLATIONS = {
+    "en": {
+        "profile.invite_friends": "Invite friends",
+        "referral.title": "🎁 Invite friends",
+        "referral.your_link": "Your link:",
+        "referral.description": "Share the link. When a new user starts the bot with it, they will be linked to you.",
+        "referral.invited_count": "Invited: {count}",
+        "referral.bonus_added": "🎁 Bonus added: +{credits} credits",
+    },
+    "ru": {
+        "profile.invite_friends": "Пригласить друзей",
+        "referral.title": "🎁 Пригласите друзей",
+        "referral.your_link": "Ваша ссылка:",
+        "referral.description": "Поделитесь ссылкой. Когда новый пользователь впервые запустит бота по ней, он будет привязан к вам.",
+        "referral.invited_count": "Приглашено: {count}",
+        "referral.bonus_added": "🎁 Бонус начислен: +{credits} кредитов",
+    },
+    "es": {
+        "profile.invite_friends": "Invitar amigos",
+        "referral.title": "🎁 Invita amigos",
+        "referral.your_link": "Tu enlace:",
+        "referral.description": "Comparte el enlace. Cuando un usuario nuevo inicie el bot con el, quedara vinculado a ti.",
+        "referral.invited_count": "Invitados: {count}",
+        "referral.bonus_added": "🎁 Bono agregado: +{credits} créditos",
+    },
+    "pt": {
+        "profile.invite_friends": "Convidar amigos",
+        "referral.title": "🎁 Convide amigos",
+        "referral.your_link": "Seu link:",
+        "referral.description": "Compartilhe o link. Quando um novo usuario iniciar o bot com ele, ficara vinculado a voce.",
+        "referral.invited_count": "Convidados: {count}",
+        "referral.bonus_added": "🎁 Bônus adicionado: +{credits} créditos",
+    },
+    "fr": {
+        "profile.invite_friends": "Inviter des amis",
+        "referral.title": "🎁 Invitez des amis",
+        "referral.your_link": "Votre lien :",
+        "referral.description": "Partagez le lien. Quand un nouvel utilisateur lance le bot avec ce lien, il vous sera lie.",
+        "referral.invited_count": "Invites : {count}",
+        "referral.bonus_added": "🎁 Bonus ajoute : +{credits} crédits",
+    },
+    "de": {
+        "profile.invite_friends": "Freunde einladen",
+        "referral.title": "🎁 Freunde einladen",
+        "referral.your_link": "Dein Link:",
+        "referral.description": "Teile den Link. Wenn ein neuer Nutzer den Bot damit startet, wird er dir zugeordnet.",
+        "referral.invited_count": "Eingeladen: {count}",
+        "referral.bonus_added": "🎁 Bonus hinzugefugt: +{credits} Credits",
+    },
+    "ar": {
+        "profile.invite_friends": "دعوة أصدقاء",
+        "referral.title": "🎁 ادع أصدقاءك",
+        "referral.your_link": "رابطك:",
+        "referral.description": "شارك الرابط. عندما يبدأ مستخدم جديد البوت من خلاله، سيتم ربطه بك.",
+        "referral.invited_count": "المدعوون: {count}",
+        "referral.bonus_added": "🎁 تمت إضافة مكافأة: +{credits} رصيد",
+    },
+    "hi": {
+        "profile.invite_friends": "दोस्तों को आमंत्रित करें",
+        "referral.title": "🎁 दोस्तों को आमंत्रित करें",
+        "referral.your_link": "आपका लिंक:",
+        "referral.description": "लिंक साझा करें। जब कोई नया उपयोगकर्ता इससे बॉट शुरू करेगा, वह आपसे जुड़ जाएगा।",
+        "referral.invited_count": "आमंत्रित: {count}",
+        "referral.bonus_added": "🎁 बोनस जोड़ा गया: +{credits} क्रेडिट",
+    },
+    "zh": {
+        "profile.invite_friends": "邀请好友",
+        "referral.title": "🎁 邀请好友",
+        "referral.your_link": "你的链接：",
+        "referral.description": "分享链接。新用户通过它首次启动机器人时，会关联到你。",
+        "referral.invited_count": "已邀请：{count}",
+        "referral.bonus_added": "🎁 奖励已添加：+{credits} 点数",
+    },
+    "id": {
+        "profile.invite_friends": "Undang teman",
+        "referral.title": "🎁 Undang teman",
+        "referral.your_link": "Link Anda:",
+        "referral.description": "Bagikan link ini. Saat pengguna baru memulai bot dengan link tersebut, mereka akan terhubung ke Anda.",
+        "referral.invited_count": "Diundang: {count}",
+        "referral.bonus_added": "🎁 Bonus ditambahkan: +{credits} kredit",
+    },
+}
+
+for language_code, catalog_updates in REFERRAL_PROFILE_TRANSLATIONS.items():
+    globals()[f"{language_code.upper()}_TRANSLATIONS"].update(catalog_updates)
+
 TRANSLATIONS = {
     "en": EN_TRANSLATIONS,
     "ru": RU_TRANSLATIONS,

@@ -3,6 +3,7 @@ from importlib import import_module
 
 from app.db.base import Base, BaseModel
 from app.db.models import (
+    CreditTransaction,
     DownloadLink,
     GenerationRequest,
     GenerationRequestStatus,
@@ -10,6 +11,9 @@ from app.db.models import (
     PaymentOrder,
     PaymentOrderStatus,
     PaymentProvider,
+    ReferralEvent,
+    ReferralEventStatus,
+    ReferralRejectReason,
     User,
     UserEvent,
 )
@@ -19,12 +23,14 @@ from app.db.repositories import (
     GenerationRepository,
     PaymentCompletionResult,
     PaymentRepository,
+    UserCreateResult,
     UserRepository,
 )
 
 __all__ = [
     "Base",
     "BaseModel",
+    "CreditTransaction",
     "User",
     "GenerationRequest",
     "GenerationRequestStatus",
@@ -33,12 +39,16 @@ __all__ = [
     "PaymentOrder",
     "PaymentOrderStatus",
     "PaymentProvider",
+    "ReferralEvent",
+    "ReferralEventStatus",
+    "ReferralRejectReason",
     "DownloadLink",
     "UserRepository",
     "GenerationRepository",
     "EventRepository",
     "PaymentRepository",
     "PaymentCompletionResult",
+    "UserCreateResult",
     "DownloadLinkRepository",
     "DatabaseManager",
     "db_manager",

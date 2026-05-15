@@ -139,6 +139,16 @@ class Settings(BaseSettings):
         default=Decimal("1.30"),
         description="USD price for 100 credits used for generation cost conversion",
     )
+    referral_referrer_bonus_credits: int = Field(
+        default=0,
+        alias="REFERRAL_REFERRER_BONUS_CREDITS",
+        description="Credits granted to the referrer for an accepted referral",
+    )
+    referral_referred_bonus_credits: int = Field(
+        default=0,
+        alias="REFERRAL_REFERRED_BONUS_CREDITS",
+        description="Credits granted to the referred user for an accepted referral",
+    )
     r2_endpoint_url: str = Field(
         default="",
         description="Endpoint URL для Cloudflare R2",

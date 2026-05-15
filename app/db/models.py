@@ -6,10 +6,11 @@ import uuid
 from datetime import datetime, timezone
 from typing import Any, Optional
 
-from sqlalchemy import BigInteger, Boolean, DateTime, Enum, ForeignKey, Integer, JSON, String, Text, Uuid, func
+from sqlalchemy import BigInteger, Boolean, CheckConstraint, DateTime, Enum, ForeignKey, Index, Integer, JSON, String, Text, Uuid, func, text
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.db.base import Base, BaseModel
+from app.utils.referrals import generate_referral_code
 
 
 class GenerationRequestStatus(str, enum.Enum):
@@ -43,10 +44,33 @@ class PaymentOrderStatus(str, enum.Enum):
     EXPIRED = "expired"
 
 
+class ReferralEventStatus(str, enum.Enum):
+    """Referral processing result status."""
+
+    ACCEPTED = "accepted"
+    REJECTED = "rejected"
+
+
+class ReferralRejectReason(str, enum.Enum):
+    """Reasons why a referral payload was rejected."""
+
+    SELF_REFERRAL = "self_referral"
+    ALREADY_REFERRED = "already_referred"
+    ALREADY_REGISTERED = "already_registered"
+    INVALID_CODE = "invalid_code"
+    REFERRER_NOT_FOUND = "referrer_not_found"
+
+
 class User(BaseModel):
     """Модель пользователя."""
     
     __tablename__ = "users"
+    __table_args__ = (
+        CheckConstraint(
+            "referred_by_user_id IS NULL OR referred_by_user_id != id",
+            name="ck_users_not_self_referred",
+        ),
+    )
     
     id: Mapped[int] = mapped_column(BigInteger, primary_key=True)
     username: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
@@ -57,11 +81,81 @@ class User(BaseModel):
     is_premium: Mapped[Optional[bool]] = mapped_column(Boolean, nullable=True)
     photo_url: Mapped[Optional[str]] = mapped_column(String(1024), nullable=True)
     balance: Mapped[int] = mapped_column(Integer, default=5, server_default="5")
+    referral_code: Mapped[Optional[str]] = mapped_column(
+        String(10),
+        unique=True,
+        index=True,
+        nullable=True,
+        default=generate_referral_code,
+    )
+    referred_by_user_id: Mapped[Optional[int]] = mapped_column(
+        BigInteger,
+        ForeignKey("users.id"),
+        nullable=True,
+        index=True,
+    )
+    referred_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
     send_results_as_files: Mapped[bool] = mapped_column(Boolean, default=False, server_default="0")
     total_generations: Mapped[int] = mapped_column(Integer, default=0, server_default="0")
     successful_generations: Mapped[int] = mapped_column(Integer, default=0, server_default="0")
     failed_generations: Mapped[int] = mapped_column(Integer, default=0, server_default="0")
     last_seen_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        default=lambda: datetime.now(timezone.utc),
+        server_default=func.now(),
+    )
+
+
+class ReferralEvent(Base):
+    """Immutable audit log for accepted and rejected referral attempts."""
+
+    __tablename__ = "referral_events"
+    __table_args__ = (
+        # The database enforces one accepted referral forever, which keeps retries idempotent.
+        Index(
+            "uq_referral_events_accepted_referred_user_id",
+            "referred_user_id",
+            unique=True,
+            sqlite_where=text("status = 'accepted'"),
+            postgresql_where=text("status = 'accepted'"),
+        ),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(Uuid, primary_key=True, default=uuid.uuid4)
+    referrer_user_id: Mapped[Optional[int]] = mapped_column(BigInteger, ForeignKey("users.id"), nullable=True, index=True)
+    referred_user_id: Mapped[int] = mapped_column(BigInteger, ForeignKey("users.id"), nullable=False, index=True)
+    referral_code: Mapped[Optional[str]] = mapped_column(String(10), nullable=True)
+    status: Mapped[str] = mapped_column(String(20), nullable=False, index=True)
+    reject_reason: Mapped[Optional[str]] = mapped_column(String(50), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        default=lambda: datetime.now(timezone.utc),
+        server_default=func.now(),
+    )
+
+
+class CreditTransaction(Base):
+    """Ledger record for credit balance changes."""
+
+    __tablename__ = "credit_transactions"
+    __table_args__ = (
+        Index(
+            "uq_credit_transactions_referral_bonus_event_user",
+            "user_id",
+            "referral_event_id",
+            unique=True,
+            sqlite_where=text("type = 'referral_bonus'"),
+            postgresql_where=text("type = 'referral_bonus'"),
+        ),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(Uuid, primary_key=True, default=uuid.uuid4)
+    type: Mapped[str] = mapped_column(String(50), nullable=False, index=True)
+    user_id: Mapped[int] = mapped_column(BigInteger, ForeignKey("users.id"), nullable=False, index=True)
+    amount: Mapped[int] = mapped_column(Integer, nullable=False)
+    referral_event_id: Mapped[Optional[uuid.UUID]] = mapped_column(Uuid, ForeignKey("referral_events.id"), nullable=True, index=True)
+    metadata_: Mapped[dict[str, Any]] = mapped_column("metadata", JSON, nullable=False, default=dict, server_default="{}")
+    created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True),
         default=lambda: datetime.now(timezone.utc),
         server_default=func.now(),

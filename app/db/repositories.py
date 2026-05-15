@@ -6,6 +6,7 @@ from datetime import datetime, timezone
 from typing import Any, Optional
 
 from sqlalchemy import delete, func, select, update
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.db.models import (
@@ -15,10 +16,14 @@ from app.db.models import (
     Payment,
     PaymentOrder,
     PaymentOrderStatus,
+    ReferralEvent,
+    ReferralEventStatus,
+    ReferralRejectReason,
     User,
     UserEvent,
 )
 from app.utils import logger
+from app.utils.referrals import generate_referral_code
 
 
 @dataclass(frozen=True)
@@ -27,6 +32,14 @@ class PaymentCompletionResult:
 
     order: Optional[PaymentOrder]
     already_paid: bool = False
+
+
+@dataclass(frozen=True)
+class UserCreateResult:
+    """Result of ensuring a Telegram user exists."""
+
+    user: User
+    created: bool
 
 
 class UserRepository:
@@ -38,10 +51,18 @@ class UserRepository:
 
     async def get_or_create_user_from_telegram(self, telegram_user: Any) -> User:
         """Получить или создать пользователя из объекта Telegram."""
+        result = await self.ensure_user_from_telegram(telegram_user)
+        return result.user
+
+    async def ensure_user_from_telegram(self, telegram_user: Any) -> UserCreateResult:
+        """Ensure a Telegram user exists and report whether this call created it."""
         user = await self.get_by_telegram_id(telegram_user.id)
+        newly_created_user = user is None
         if user is None:
-            user = User(id=telegram_user.id, balance=5)
+            user = User(id=telegram_user.id, balance=5, referral_code=generate_referral_code())
             self.session.add(user)
+        elif not user.referral_code:
+            user.referral_code = generate_referral_code()
 
         user.username = telegram_user.username
         user.first_name = telegram_user.first_name
@@ -54,8 +75,9 @@ class UserRepository:
 
         await self.session.commit()
         await self.session.refresh(user)
+        user.newly_created_user = newly_created_user
         logger.debug(f"User {telegram_user.id} fetched or created")
-        return user
+        return UserCreateResult(user=user, created=newly_created_user)
 
     async def update_user_seen(self, user_id: int) -> Optional[User]:
         """Обновить время последней активности пользователя."""
@@ -137,10 +159,13 @@ class UserRepository:
     ) -> User:
         """Создать или обновить пользователя."""
         existing = await self.get_by_telegram_id(telegram_id)
+        newly_created_user = existing is None
 
         if existing is None:
-            existing = User(id=telegram_id, balance=5)
+            existing = User(id=telegram_id, balance=5, referral_code=generate_referral_code())
             self.session.add(existing)
+        elif not existing.referral_code:
+            existing.referral_code = generate_referral_code()
 
         existing.username = username
         existing.first_name = first_name
@@ -150,6 +175,7 @@ class UserRepository:
 
         await self.session.commit()
         await self.session.refresh(existing)
+        existing.newly_created_user = newly_created_user
         logger.debug(f"User {telegram_id} created or updated")
         return existing
 
@@ -166,6 +192,89 @@ class UserRepository:
             select(User).where(User.id == user_id)
         )
         return result.scalars().first()
+
+    async def get_user_by_referral_code(self, code: str) -> Optional[User]:
+        """Find a user by referral code."""
+        normalized_code = code.strip()
+        if not normalized_code:
+            return None
+        result = await self.session.execute(select(User).where(User.referral_code == normalized_code))
+        return result.scalars().first()
+
+    async def ensure_referral_code(self, user_id: int) -> Optional[str]:
+        """Ensure the user has a unique referral code and return it."""
+        user = await self.get_by_id(user_id)
+        if user is None:
+            return None
+        if user.referral_code:
+            return user.referral_code
+
+        # Collisions are unlikely, but the unique constraint is the source of truth.
+        for _ in range(5):
+            user.referral_code = generate_referral_code()
+            try:
+                await self.session.commit()
+                await self.session.refresh(user)
+                return user.referral_code
+            except IntegrityError:
+                await self.session.rollback()
+                user = await self.get_by_id(user_id)
+                if user is None:
+                    return None
+                if user.referral_code:
+                    return user.referral_code
+
+        raise RuntimeError("Could not generate a unique referral code")
+
+    async def create_referral_event(
+        self,
+        *,
+        referred_user_id: int,
+        referral_code: str | None,
+        status: ReferralEventStatus,
+        referrer_user_id: int | None = None,
+        reject_reason: ReferralRejectReason | None = None,
+    ) -> ReferralEvent:
+        """Persist a referral processing audit event."""
+        event = ReferralEvent(
+            referrer_user_id=referrer_user_id,
+            referred_user_id=referred_user_id,
+            referral_code=referral_code,
+            status=status.value,
+            reject_reason=reject_reason.value if reject_reason is not None else None,
+        )
+        self.session.add(event)
+        await self.session.commit()
+        await self.session.refresh(event)
+        return event
+
+    async def set_user_referrer(self, referred_user_id: int, referrer_user_id: int, code: str) -> bool:
+        """Assign a referrer once; the caller records the matching accepted event."""
+        if referred_user_id == referrer_user_id:
+            return False
+
+        result = await self.session.execute(
+            update(User)
+            .where(User.id == referred_user_id, User.referred_by_user_id.is_(None))
+            .values(
+                referred_by_user_id=referrer_user_id,
+                referred_at=datetime.now(timezone.utc),
+            )
+        )
+        await self.session.commit()
+        return result.rowcount > 0
+
+    async def count_accepted_referrals(self, user_id: int) -> int:
+        """Count users accepted as referrals for the given referrer."""
+        result = await self.session.execute(
+            select(func.count())
+            .select_from(ReferralEvent)
+            .where(
+                ReferralEvent.referrer_user_id == user_id,
+                ReferralEvent.status == ReferralEventStatus.ACCEPTED.value,
+            )
+        )
+        return int(result.scalar_one() or 0)
 
     async def update_balance(self, telegram_id: int, amount: float) -> Optional[User]:
         """Обновить баланс пользователя."""

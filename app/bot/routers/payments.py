@@ -121,9 +121,10 @@ async def back_to_profile(callback: CallbackQuery, session: AsyncSession, state:
     lang = await get_event_lang(callback, session)
     user = await user_repo.get_or_create_user_from_telegram(callback.from_user)
     total_spent_credits = await user_repo.get_total_spent_credits(user.id)
+    accepted_referrals_count = await user_repo.count_accepted_referrals(user.id)
     await safe_edit_message(
         callback.message,
-        build_profile_text(user, total_spent_credits, lang),
+        build_profile_text(user, total_spent_credits, lang, accepted_referrals_count),
         reply_markup=get_profile_keyboard(send_results_as_files=user.send_results_as_files, lang=lang),
         parse_mode="HTML",
     )

@@ -17,6 +17,7 @@ from app.bot.routers.profile import build_profile_text
 from app.db import PaymentOrderStatus, PaymentProvider, UserRepository
 from app.i18n import get_user_language, t
 from app.services.payments import PaymentService
+from app.services.referrals import ReferralService
 from app.utils import logger
 
 
@@ -38,8 +39,9 @@ async def show_profile_after_payment_return(message: Message, state: FSMContext,
     profile_user = fresh_user or user
     lang = get_user_language(profile_user.language_code)
     total_spent_credits = await user_repo.get_total_spent_credits(profile_user.id)
+    accepted_referrals_count = await user_repo.count_accepted_referrals(profile_user.id)
     await message.answer(
-        build_profile_text(profile_user, total_spent_credits, lang),
+        build_profile_text(profile_user, total_spent_credits, lang, accepted_referrals_count),
         reply_markup=get_main_menu_keyboard(lang),
         parse_mode="HTML",
     )
@@ -99,6 +101,14 @@ def _payment_payload_candidates(start_payload: str) -> list[str]:
     return unique_candidates
 
 
+def _extract_referral_code(start_payload: str) -> str | None:
+    payload = start_payload.strip()
+    if not payload.startswith("ref_"):
+        return None
+    referral_code = payload.removeprefix("ref_").strip()
+    return referral_code or None
+
+
 async def _get_stars_wallet_return_order(session: AsyncSession, user_id: int, start_payload: str):
     payment_repo = PaymentService(session).payment_repo
     for payment_payload in _payment_payload_candidates(start_payload):
@@ -129,6 +139,18 @@ async def _send_start_welcome(message: Message, user, lang: str) -> None:
     logger.info(f"User {message.from_user.id} started the bot")
 
 
+async def _send_referral_start_welcome(message: Message, user, lang: str, *, accepted: bool, bonus_credits: int = 0) -> None:
+    welcome_text = build_welcome_text(user.first_name, lang)
+    if accepted:
+        referral_lines = ["🎁 Реферальная ссылка применена."]
+        if bonus_credits > 0:
+            referral_lines.append(t("referral.bonus_added", lang, credits=bonus_credits))
+        referral_text = "\n".join(referral_lines)
+        welcome_text = f"{referral_text}\n\n{welcome_text}"
+    await message.answer(welcome_text, reply_markup=get_main_menu_keyboard(lang))
+    logger.info(f"User {message.from_user.id} started the bot")
+
+
 @router.message(Command("start"), _has_start_payload)
 async def start_payment_return_command(
     message: Message,
@@ -141,7 +163,8 @@ async def start_payment_return_command(
         await _clear_start_state_without_user_notice(message, state, reason="payment_return_start")
 
         user_repo = UserRepository(session)
-        user = await user_repo.get_or_create_user_from_telegram(message.from_user)
+        user_result = await user_repo.ensure_user_from_telegram(message.from_user)
+        user = user_result.user
         lang = get_user_language(user.language_code)
 
         start_payload = _get_start_payload(command, message)
@@ -151,7 +174,23 @@ async def start_payment_return_command(
 
         order = await _get_stars_wallet_return_order(session, user.id, start_payload)
         if order is None:
-            await _send_start_welcome(message, user, lang)
+            referral_code = _extract_referral_code(start_payload)
+            if referral_code is None:
+                await _send_start_welcome(message, user, lang)
+                return
+
+            referral_result = await ReferralService(session).apply_referral(
+                user,
+                referral_code,
+                created=user_result.created,
+            )
+            await _send_referral_start_welcome(
+                message,
+                user,
+                lang,
+                accepted=referral_result.status == "accepted",
+                bonus_credits=referral_result.referred_bonus_credits,
+            )
             return
 
         await show_profile_after_payment_return(message, state, session)
