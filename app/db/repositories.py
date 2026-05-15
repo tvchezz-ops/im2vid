@@ -23,7 +23,7 @@ from app.db.models import (
     UserEvent,
 )
 from app.utils import logger
-from app.utils.referrals import generate_referral_code
+from app.utils.referrals import generate_referral_code, generate_start_payload
 
 
 @dataclass(frozen=True)
@@ -59,10 +59,17 @@ class UserRepository:
         user = await self.get_by_telegram_id(telegram_user.id)
         newly_created_user = user is None
         if user is None:
-            user = User(id=telegram_user.id, balance=5, referral_code=generate_referral_code())
+            user = User(
+                id=telegram_user.id,
+                balance=5,
+                referral_code=generate_referral_code(),
+                start_payload=generate_start_payload(),
+            )
             self.session.add(user)
         elif not user.referral_code:
             user.referral_code = generate_referral_code()
+        if user is not None and not user.start_payload:
+            user.start_payload = generate_start_payload()
 
         user.username = telegram_user.username
         user.first_name = telegram_user.first_name
@@ -162,10 +169,17 @@ class UserRepository:
         newly_created_user = existing is None
 
         if existing is None:
-            existing = User(id=telegram_id, balance=5, referral_code=generate_referral_code())
+            existing = User(
+                id=telegram_id,
+                balance=5,
+                referral_code=generate_referral_code(),
+                start_payload=generate_start_payload(),
+            )
             self.session.add(existing)
         elif not existing.referral_code:
             existing.referral_code = generate_referral_code()
+        if existing is not None and not existing.start_payload:
+            existing.start_payload = generate_start_payload()
 
         existing.username = username
         existing.first_name = first_name
@@ -201,6 +215,14 @@ class UserRepository:
         result = await self.session.execute(select(User).where(User.referral_code == normalized_code))
         return result.scalars().first()
 
+    async def get_user_by_start_payload(self, payload: str) -> Optional[User]:
+        """Find a user by public referral /start payload."""
+        normalized_payload = payload.strip()
+        if not normalized_payload or len(normalized_payload) > 64:
+            return None
+        result = await self.session.execute(select(User).where(User.start_payload == normalized_payload))
+        return result.scalars().first()
+
     async def ensure_referral_code(self, user_id: int) -> Optional[str]:
         """Ensure the user has a unique referral code and return it."""
         user = await self.get_by_id(user_id)
@@ -225,6 +247,30 @@ class UserRepository:
                     return user.referral_code
 
         raise RuntimeError("Could not generate a unique referral code")
+
+    async def ensure_start_payload(self, user_id: int) -> Optional[str]:
+        """Ensure the user has a unique public start payload and return it."""
+        user = await self.get_by_id(user_id)
+        if user is None:
+            return None
+        if user.start_payload:
+            return user.start_payload
+
+        for _ in range(5):
+            user.start_payload = generate_start_payload()
+            try:
+                await self.session.commit()
+                await self.session.refresh(user)
+                return user.start_payload
+            except IntegrityError:
+                await self.session.rollback()
+                user = await self.get_by_id(user_id)
+                if user is None:
+                    return None
+                if user.start_payload:
+                    return user.start_payload
+
+        raise RuntimeError("Could not generate a unique start payload")
 
     async def create_referral_event(
         self,

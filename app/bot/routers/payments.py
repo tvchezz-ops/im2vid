@@ -125,7 +125,11 @@ async def back_to_profile(callback: CallbackQuery, session: AsyncSession, state:
     await safe_edit_message(
         callback.message,
         build_profile_text(user, total_spent_credits, lang, accepted_referrals_count),
-        reply_markup=get_profile_keyboard(send_results_as_files=user.send_results_as_files, lang=lang),
+        reply_markup=get_profile_keyboard(
+            send_results_as_files=user.send_results_as_files,
+            lang=lang,
+            referrals_enabled=settings.referral_enabled,
+        ),
         parse_mode="HTML",
     )
     await _set_payment_screen(state, "profile")

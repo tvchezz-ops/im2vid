@@ -19,7 +19,7 @@ from app.bot.keyboards import get_button_text
 from app.bot.states import GenerationStates
 from app.db.base import Base
 from app.db.models import ReferralEvent, ReferralEventStatus, User
-from app.i18n import t
+from app.i18n import SUPPORTED_LANGUAGES, t
 
 
 class FakeMessage:
@@ -171,6 +171,7 @@ async def test_show_profile_falls_back_to_english_when_language_code_missing(ses
 @pytest.mark.asyncio
 async def test_referral_invite_screen_shows_referral_link_and_generates_missing_code(session_factory, monkeypatch) -> None:
     monkeypatch.setattr(profile.settings, "main_bot_username", "imai_test_bot")
+    monkeypatch.setattr(profile.settings, "referral_enabled", True)
     async with session_factory() as session:
         session.add(User(id=604, balance=5, referral_code=None))
         await session.commit()
@@ -182,12 +183,64 @@ async def test_referral_invite_screen_shows_referral_link_and_generates_missing_
         user = await session.get(User, 604)
         assert user is not None
         assert user.referral_code is not None
-        assert "🎁 Пригласите друзей" in message.edits[-1]
-        assert "Ваша ссылка:" in message.edits[-1]
-        assert f"https://t.me/imai_test_bot?start=ref_{user.referral_code}" in message.edits[-1]
-        assert "ref_" in message.edits[-1]
+        assert user.start_payload is not None
+        assert "👥 Реферальная программа" in message.edits[-1]
+        assert "🎁 Приглашайте друзей и получайте 5 кредитов за каждого нового пользователя." in message.edits[-1]
+        assert "🔗 Ваша ссылка:" in message.edits[-1]
+        assert f"https://t.me/imai_test_bot?start={user.start_payload}" in message.edits[-1]
+        assert f"ref_{user.referral_code}" not in message.edits[-1]
         assert message.edit_markups[-1].inline_keyboard[0][0].text == "⬅️ Назад"
         assert message.edit_markups[-1].inline_keyboard[0][0].callback_data == "profile:open"
+
+
+def test_referral_text_is_localized_for_all_supported_locales() -> None:
+    expected_descriptions = {
+        "en": "🎁 Invite friends and get 5 credits for every new user.",
+        "ru": "🎁 Приглашайте друзей и получайте 5 кредитов за каждого нового пользователя.",
+        "es": "🎁 Invita amigos y recibe 5 créditos por cada nuevo usuario.",
+        "pt": "🎁 Convide amigos e ganhe 5 créditos por cada novo usuário.",
+        "fr": "🎁 Invitez des amis et recevez 5 crédits pour chaque nouvel utilisateur.",
+        "de": "🎁 Lade Freunde ein und erhalte 5 Credits für jeden neuen Nutzer.",
+        "ar": "🎁 ادعُ أصدقاءك واحصل على 5 أرصدة لكل مستخدم جديد.",
+        "hi": "🎁 दोस्तों को आमंत्रित करें और हर नए उपयोगकर्ता पर 5 क्रेडिट पाएं।",
+        "zh": "🎁 邀请好友，每位新用户可获得 5 积分。",
+        "id": "🎁 Undang teman dan dapatkan 5 kredit untuk setiap pengguna baru.",
+    }
+    for lang in SUPPORTED_LANGUAGES:
+        text = profile.build_referral_text("https://t.me/imai_test_bot?start=X7pQ2Lm9Ka", lang)
+
+        assert t("profile.referral.title", lang) in text
+        assert expected_descriptions[lang] in text
+        assert t("profile.referral.link", lang) in text
+        assert "https://t.me/imai_test_bot?start=X7pQ2Lm9Ka" in text
+        assert "ref_" not in text
+
+
+@pytest.mark.asyncio
+async def test_referral_invite_button_hidden_when_referrals_disabled(session_factory, monkeypatch) -> None:
+    monkeypatch.setattr(profile.settings, "referral_enabled", False)
+    async with session_factory() as session:
+        state = FakeState()
+        message = FakeMessage(user_id=609)
+
+        await profile.show_profile(message, state, session)
+
+        button_texts = [button.text for row in message.answer_markups[-1].inline_keyboard for button in row]
+        assert "🎁 Пригласить друзей" not in button_texts
+        assert len(message.answer_markups[-1].inline_keyboard) == 2
+
+
+@pytest.mark.asyncio
+async def test_referral_invite_screen_hidden_when_referrals_disabled(session_factory, monkeypatch) -> None:
+    monkeypatch.setattr(profile.settings, "referral_enabled", False)
+    async with session_factory() as session:
+        message = FakeMessage(user_id=610)
+        callback = FakeCallback(user_id=610, message=message, data="profile:invite_friends")
+
+        await profile.show_referral_invite(callback, session)
+
+        assert message.edits == []
+        assert callback.answers == [None]
 
 
 @pytest.mark.asyncio

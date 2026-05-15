@@ -25,7 +25,7 @@ from app.bot.routers.profile import build_referral_link
 from app.db.models import CreditTransaction, ReferralEvent, ReferralEventStatus, User
 from app.db.repositories import UserRepository
 from app.services.referrals import ReferralService
-from app.utils.referrals import generate_referral_code
+from app.utils.referrals import generate_referral_code, generate_start_payload
 from scripts.audit_referrals import audit_referrals
 
 
@@ -109,8 +109,16 @@ def test_generate_referral_code_is_short_and_url_safe() -> None:
     assert code.isalnum()
 
 
+def test_generate_start_payload_is_random_url_safe_and_has_no_prefix() -> None:
+    payload = generate_start_payload()
+
+    assert 10 <= len(payload) <= 24
+    assert payload.isalnum()
+    assert not payload.startswith(("ref_", "referral_", "paid_", "stars_", "pay_"))
+
+
 def test_referral_link_generation_works() -> None:
-    assert build_referral_link("@example_bot", "Abc123xy") == "https://t.me/example_bot?start=ref_Abc123xy"
+    assert build_referral_link("@example_bot", "X7pQ2Lm9Ka") == "https://t.me/example_bot?start=X7pQ2Lm9Ka"
 
 
 def test_payment_payload_is_not_treated_as_referral() -> None:
@@ -134,6 +142,20 @@ async def test_referral_code_is_unique(session_factory) -> None:
 
 
 @pytest.mark.asyncio
+async def test_start_payload_is_unique(session_factory) -> None:
+    async with session_factory() as session:
+        session.add_all(
+            [
+                User(id=1005, referral_code="code1005", start_payload="X7pQ2Lm9Ka"),
+                User(id=1006, referral_code="code1006", start_payload="X7pQ2Lm9Ka"),
+            ]
+        )
+
+        with pytest.raises(IntegrityError):
+            await session.commit()
+
+
+@pytest.mark.asyncio
 async def test_ensure_referral_code_assigns_missing_code(session_factory) -> None:
     async with session_factory() as session:
         session.add(User(id=1003, referral_code=None))
@@ -143,6 +165,20 @@ async def test_ensure_referral_code_assigns_missing_code(session_factory) -> Non
 
         assert code is not None
         assert len(code) == 8
+
+
+@pytest.mark.asyncio
+async def test_ensure_start_payload_assigns_missing_payload(session_factory) -> None:
+    async with session_factory() as session:
+        session.add(User(id=1007, referral_code="code1007", start_payload=None))
+        await session.commit()
+
+        payload = await UserRepository(session).ensure_start_payload(1007)
+
+        assert payload is not None
+        assert 10 <= len(payload) <= 24
+        assert payload.isalnum()
+        assert not payload.startswith(("ref_", "referral_"))
 
 
 @pytest.mark.asyncio
@@ -325,15 +361,17 @@ async def test_flow_scenario_a_profile_link_creates_user_b_and_accepts_referral(
         user_a = await session.get(User, 1401)
         assert user_a is not None
         assert user_a.referral_code is not None
+        assert user_a.start_payload is not None
         assert "👤 <b>Профиль</b>" in profile_message.answers[-1]
-        assert f"https://t.me/imai_test_bot?start=ref_{user_a.referral_code}" in invite_message.edits[-1]
+        assert f"https://t.me/imai_test_bot?start={user_a.start_payload}" in invite_message.edits[-1]
+        assert f"ref_{user_a.referral_code}" not in invite_message.edits[-1]
 
-        start_message = FakeStartMessage(user_id=1402, text=f"/start ref_{user_a.referral_code}")
+        start_message = FakeStartMessage(user_id=1402, text=f"/start {user_a.start_payload}")
         await start.start_payment_return_command(
             start_message,
             state,
             session,
-            command=SimpleNamespace(args=f"ref_{user_a.referral_code}"),
+            command=SimpleNamespace(args=user_a.start_payload),
         )
 
         user_b = await session.get(User, 1402)
@@ -354,15 +392,15 @@ async def test_flow_scenario_a_profile_link_creates_user_b_and_accepts_referral(
 @pytest.mark.asyncio
 async def test_flow_scenario_b_own_referral_link_rejects_self_without_ui_spam(session_factory) -> None:
     async with session_factory() as session:
-        session.add(User(id=1403, referral_code="self1403"))
+        session.add(User(id=1403, referral_code="self1403", start_payload="X7pQ2Lm9Ka"))
         await session.commit()
-        message = FakeStartMessage(user_id=1403, text="/start ref_self1403")
+        message = FakeStartMessage(user_id=1403, text="/start X7pQ2Lm9Ka")
 
         await start.start_payment_return_command(
             message,
             FakeState(),
             session,
-            command=SimpleNamespace(args="ref_self1403"),
+            command=SimpleNamespace(args="X7pQ2Lm9Ka"),
         )
 
         user = await session.get(User, 1403)
@@ -379,15 +417,20 @@ async def test_flow_scenario_b_own_referral_link_rejects_self_without_ui_spam(se
 @pytest.mark.asyncio
 async def test_flow_scenario_c_existing_user_rejected_already_registered(session_factory) -> None:
     async with session_factory() as session:
-        session.add_all([User(id=1404, referral_code="ref1404"), User(id=1405, referral_code="user1405")])
+        session.add_all(
+            [
+                User(id=1404, referral_code="ref1404", start_payload="p9QaLm2Xv81"),
+                User(id=1405, referral_code="user1405"),
+            ]
+        )
         await session.commit()
-        message = FakeStartMessage(user_id=1405, text="/start ref_ref1404")
+        message = FakeStartMessage(user_id=1405, text="/start p9QaLm2Xv81")
 
         await start.start_payment_return_command(
             message,
             FakeState(),
             session,
-            command=SimpleNamespace(args="ref_ref1404"),
+            command=SimpleNamespace(args="p9QaLm2Xv81"),
         )
 
         user_b = await session.get(User, 1405)
@@ -406,18 +449,18 @@ async def test_flow_scenario_d_already_referred_user_keeps_original_referrer(ses
         session.add_all(
             [
                 User(id=1406, referral_code="ref1406"),
-                User(id=1407, referral_code="ref1407"),
+                User(id=1407, referral_code="ref1407", start_payload="aK82PqLmN0sD"),
                 User(id=1408, referral_code="user1408", referred_by_user_id=1406),
             ]
         )
         await session.commit()
-        message = FakeStartMessage(user_id=1408, text="/start ref_ref1407")
+        message = FakeStartMessage(user_id=1408, text="/start aK82PqLmN0sD")
 
         await start.start_payment_return_command(
             message,
             FakeState(),
             session,
-            command=SimpleNamespace(args="ref_ref1407"),
+            command=SimpleNamespace(args="aK82PqLmN0sD"),
         )
 
         user_b = await session.get(User, 1408)
@@ -434,13 +477,13 @@ async def test_flow_scenario_d_already_referred_user_keeps_original_referrer(ses
 @pytest.mark.asyncio
 async def test_flow_scenario_e_invalid_code_rejected_with_normal_welcome(session_factory) -> None:
     async with session_factory() as session:
-        message = FakeStartMessage(user_id=1409, text="/start ref_missing")
+        message = FakeStartMessage(user_id=1409, text="/start MissingToken9")
 
         await start.start_payment_return_command(
             message,
             FakeState(),
             session,
-            command=SimpleNamespace(args="ref_missing"),
+            command=SimpleNamespace(args="MissingToken9"),
         )
 
         user = await session.get(User, 1409)
@@ -452,6 +495,33 @@ async def test_flow_scenario_e_invalid_code_rejected_with_normal_welcome(session
         assert "Реферальная ссылка применена" not in message.answers[0]
         assert "invalid_code" not in message.answers[0]
         assert "Привет" in message.answers[0]
+
+
+@pytest.mark.asyncio
+async def test_oversized_start_payload_is_rejected_before_lookup(session_factory, caplog) -> None:
+    async with session_factory() as session:
+        oversized_payload = "A" * 65
+        message = FakeStartMessage(user_id=1410, text=f"/start {oversized_payload}")
+
+        with caplog.at_level(logging.INFO):
+            await start.start_payment_return_command(
+                message,
+                FakeState(),
+                session,
+                command=SimpleNamespace(args=oversized_payload),
+            )
+
+        event_count = (await session.execute(sa.select(sa.func.count()).select_from(ReferralEvent))).scalar_one()
+        assert event_count == 0
+        assert "Привет" in message.answers[0]
+        assert any(
+            isinstance(record.msg, dict)
+            and record.msg.get("action") == "referral_payload_rejected"
+            and record.msg.get("reason") == "oversized_payload"
+            and record.msg.get("payload_prefix") == "AAA***"
+            for record in caplog.records
+        )
+        assert all(oversized_payload not in str(record.msg) for record in caplog.records)
 
 
 @pytest.mark.asyncio
@@ -694,3 +764,39 @@ def test_referral_migration_applies_cleanly(tmp_path) -> None:
         "referred_by_user_id",
         "referred_at",
     }
+
+
+def test_start_payload_migration_applies_cleanly(tmp_path) -> None:
+    db_path = tmp_path / "start-payload-migration.sqlite3"
+    engine = sa.create_engine(f"sqlite:///{db_path}")
+    metadata = sa.MetaData()
+    sa.Table(
+        "users",
+        metadata,
+        sa.Column("id", sa.BigInteger(), primary_key=True),
+        sa.Column("created_at", sa.DateTime(timezone=True), nullable=False),
+        sa.Column("updated_at", sa.DateTime(timezone=True), nullable=False),
+        sa.Column("referral_code", sa.String(length=10), nullable=True),
+    )
+    metadata.create_all(engine)
+    with engine.begin() as connection:
+        connection.execute(sa.text("INSERT INTO users (id, created_at, updated_at) VALUES (1, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)"))
+
+    migration_path = Path("alembic/versions/20260515_130000_add_user_start_payload.py")
+    spec = importlib.util.spec_from_file_location("start_payload_migration", migration_path)
+    assert spec is not None
+    assert spec.loader is not None
+    migration = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(migration)
+    with engine.begin() as connection:
+        context = MigrationContext.configure(connection)
+        migration.op = Operations(context)
+        migration.upgrade()
+
+    inspector = sa.inspect(engine)
+    assert "start_payload" in {column["name"] for column in inspector.get_columns("users")}
+    assert "ix_users_start_payload" in {index["name"] for index in inspector.get_indexes("users")}
+    with engine.connect() as connection:
+        payload = connection.execute(sa.text("SELECT start_payload FROM users WHERE id = 1")).scalar_one()
+    assert payload is not None
+    assert 10 <= len(payload) <= 24

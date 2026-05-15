@@ -144,6 +144,11 @@ class Settings(BaseSettings):
         alias="REFERRAL_REFERRER_BONUS_CREDITS",
         description="Credits granted to the referrer for an accepted referral",
     )
+    referral_enabled: bool = Field(
+        default=True,
+        alias="REFERRAL_ENABLED",
+        description="Show referral UI and process referral start payloads",
+    )
     referral_referred_bonus_credits: int = Field(
         default=0,
         alias="REFERRAL_REFERRED_BONUS_CREDITS",

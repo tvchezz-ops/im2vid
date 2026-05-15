@@ -10,7 +10,7 @@ from sqlalchemy import BigInteger, Boolean, CheckConstraint, DateTime, Enum, For
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.db.base import Base, BaseModel
-from app.utils.referrals import generate_referral_code
+from app.utils.referrals import generate_referral_code, generate_start_payload
 
 
 class GenerationRequestStatus(str, enum.Enum):
@@ -87,6 +87,13 @@ class User(BaseModel):
         index=True,
         nullable=True,
         default=generate_referral_code,
+    )
+    start_payload: Mapped[Optional[str]] = mapped_column(
+        String(24),
+        unique=True,
+        index=True,
+        nullable=True,
+        default=generate_start_payload,
     )
     referred_by_user_id: Mapped[Optional[int]] = mapped_column(
         BigInteger,

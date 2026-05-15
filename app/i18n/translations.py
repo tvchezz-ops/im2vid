@@ -4601,6 +4601,9 @@ for language_code, catalog_updates in _PROMPT_REQUEST_COPY_UPDATE.items():
 REFERRAL_PROFILE_TRANSLATIONS = {
     "en": {
         "profile.invite_friends": "Invite friends",
+        "profile.referral.title": "👥 Referral program",
+        "profile.referral.description": "🎁 Invite friends and get 5 credits for every new user.",
+        "profile.referral.link": "🔗 Your link:",
         "referral.title": "🎁 Invite friends",
         "referral.your_link": "Your link:",
         "referral.description": "Share the link. When a new user starts the bot with it, they will be linked to you.",
@@ -4609,6 +4612,9 @@ REFERRAL_PROFILE_TRANSLATIONS = {
     },
     "ru": {
         "profile.invite_friends": "Пригласить друзей",
+        "profile.referral.title": "👥 Реферальная программа",
+        "profile.referral.description": "🎁 Приглашайте друзей и получайте 5 кредитов за каждого нового пользователя.",
+        "profile.referral.link": "🔗 Ваша ссылка:",
         "referral.title": "🎁 Пригласите друзей",
         "referral.your_link": "Ваша ссылка:",
         "referral.description": "Поделитесь ссылкой. Когда новый пользователь впервые запустит бота по ней, он будет привязан к вам.",
@@ -4617,6 +4623,9 @@ REFERRAL_PROFILE_TRANSLATIONS = {
     },
     "es": {
         "profile.invite_friends": "Invitar amigos",
+        "profile.referral.title": "👥 Programa de referidos",
+        "profile.referral.description": "🎁 Invita amigos y recibe 5 créditos por cada nuevo usuario.",
+        "profile.referral.link": "🔗 Tu enlace:",
         "referral.title": "🎁 Invita amigos",
         "referral.your_link": "Tu enlace:",
         "referral.description": "Comparte el enlace. Cuando un usuario nuevo inicie el bot con el, quedara vinculado a ti.",
@@ -4625,6 +4634,9 @@ REFERRAL_PROFILE_TRANSLATIONS = {
     },
     "pt": {
         "profile.invite_friends": "Convidar amigos",
+        "profile.referral.title": "👥 Programa de indicação",
+        "profile.referral.description": "🎁 Convide amigos e ganhe 5 créditos por cada novo usuário.",
+        "profile.referral.link": "🔗 Seu link:",
         "referral.title": "🎁 Convide amigos",
         "referral.your_link": "Seu link:",
         "referral.description": "Compartilhe o link. Quando um novo usuario iniciar o bot com ele, ficara vinculado a voce.",
@@ -4633,6 +4645,9 @@ REFERRAL_PROFILE_TRANSLATIONS = {
     },
     "fr": {
         "profile.invite_friends": "Inviter des amis",
+        "profile.referral.title": "👥 Programme de parrainage",
+        "profile.referral.description": "🎁 Invitez des amis et recevez 5 crédits pour chaque nouvel utilisateur.",
+        "profile.referral.link": "🔗 Votre lien :",
         "referral.title": "🎁 Invitez des amis",
         "referral.your_link": "Votre lien :",
         "referral.description": "Partagez le lien. Quand un nouvel utilisateur lance le bot avec ce lien, il vous sera lie.",
@@ -4641,6 +4656,9 @@ REFERRAL_PROFILE_TRANSLATIONS = {
     },
     "de": {
         "profile.invite_friends": "Freunde einladen",
+        "profile.referral.title": "👥 Empfehlungsprogramm",
+        "profile.referral.description": "🎁 Lade Freunde ein und erhalte 5 Credits für jeden neuen Nutzer.",
+        "profile.referral.link": "🔗 Dein Link:",
         "referral.title": "🎁 Freunde einladen",
         "referral.your_link": "Dein Link:",
         "referral.description": "Teile den Link. Wenn ein neuer Nutzer den Bot damit startet, wird er dir zugeordnet.",
@@ -4649,6 +4667,9 @@ REFERRAL_PROFILE_TRANSLATIONS = {
     },
     "ar": {
         "profile.invite_friends": "دعوة أصدقاء",
+        "profile.referral.title": "👥 برنامج الإحالة",
+        "profile.referral.description": "🎁 ادعُ أصدقاءك واحصل على 5 أرصدة لكل مستخدم جديد.",
+        "profile.referral.link": "🔗 رابطك:",
         "referral.title": "🎁 ادع أصدقاءك",
         "referral.your_link": "رابطك:",
         "referral.description": "شارك الرابط. عندما يبدأ مستخدم جديد البوت من خلاله، سيتم ربطه بك.",
@@ -4657,6 +4678,9 @@ REFERRAL_PROFILE_TRANSLATIONS = {
     },
     "hi": {
         "profile.invite_friends": "दोस्तों को आमंत्रित करें",
+        "profile.referral.title": "👥 रेफरल प्रोग्राम",
+        "profile.referral.description": "🎁 दोस्तों को आमंत्रित करें और हर नए उपयोगकर्ता पर 5 क्रेडिट पाएं।",
+        "profile.referral.link": "🔗 आपका लिंक:",
         "referral.title": "🎁 दोस्तों को आमंत्रित करें",
         "referral.your_link": "आपका लिंक:",
         "referral.description": "लिंक साझा करें। जब कोई नया उपयोगकर्ता इससे बॉट शुरू करेगा, वह आपसे जुड़ जाएगा।",
@@ -4665,6 +4689,9 @@ REFERRAL_PROFILE_TRANSLATIONS = {
     },
     "zh": {
         "profile.invite_friends": "邀请好友",
+        "profile.referral.title": "👥 推荐计划",
+        "profile.referral.description": "🎁 邀请好友，每位新用户可获得 5 积分。",
+        "profile.referral.link": "🔗 你的链接：",
         "referral.title": "🎁 邀请好友",
         "referral.your_link": "你的链接：",
         "referral.description": "分享链接。新用户通过它首次启动机器人时，会关联到你。",
@@ -4673,6 +4700,9 @@ REFERRAL_PROFILE_TRANSLATIONS = {
     },
     "id": {
         "profile.invite_friends": "Undang teman",
+        "profile.referral.title": "👥 Program referral",
+        "profile.referral.description": "🎁 Undang teman dan dapatkan 5 kredit untuk setiap pengguna baru.",
+        "profile.referral.link": "🔗 Link Anda:",
         "referral.title": "🎁 Undang teman",
         "referral.your_link": "Link Anda:",
         "referral.description": "Bagikan link ini. Saat pengguna baru memulai bot dengan link tersebut, mereka akan terhubung ke Anda.",

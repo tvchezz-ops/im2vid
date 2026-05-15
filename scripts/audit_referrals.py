@@ -134,6 +134,26 @@ async def audit_referrals(session: AsyncSession) -> list[ReferralAuditIssue]:
         if issue is not None
     )
 
+    duplicate_payloads_subquery = (
+        sa.select(User.start_payload)
+        .where(User.start_payload.is_not(None))
+        .group_by(User.start_payload)
+        .having(sa.func.count() > 1)
+        .subquery()
+    )
+    duplicate_payload_count = await session.scalar(sa.select(sa.func.count()).select_from(duplicate_payloads_subquery))
+    issues.extend(
+        issue
+        for issue in [
+            _issue(
+                "duplicate_start_payloads",
+                "public start payloads must be unique across users",
+                int(duplicate_payload_count or 0),
+            )
+        ]
+        if issue is not None
+    )
+
     return issues
 
 

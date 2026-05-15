@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 from typing import Optional
+import re
 from urllib.parse import unquote
 
 from aiogram import Router
@@ -14,14 +15,20 @@ from app.bot.error_messages import build_error_keyboard, build_user_error_messag
 from app.bot.keyboards import get_main_menu_keyboard, is_localized_button_text
 from app.bot.routers.generations import is_generation_flow_state, reset_generation_flow
 from app.bot.routers.profile import build_profile_text
+from app.config import settings
 from app.db import PaymentOrderStatus, PaymentProvider, UserRepository
 from app.i18n import get_user_language, t
 from app.services.payments import PaymentService
 from app.services.referrals import ReferralService
 from app.utils import logger
+from app.utils.referrals import mask_start_payload
 
 
 router = Router()
+
+_START_PAYLOAD_RE = re.compile(r"^[A-Za-z0-9_-]+$")
+_RESERVED_START_PAYLOADS = {"payment_success"}
+_RESERVED_START_PREFIXES = ("paid_", "stars_", "pay_")
 
 
 def build_welcome_text(first_name: Optional[str], lang: str = "en") -> str:
@@ -101,12 +108,67 @@ def _payment_payload_candidates(start_payload: str) -> list[str]:
     return unique_candidates
 
 
-def _extract_referral_code(start_payload: str) -> str | None:
+def _extract_legacy_referral_code(start_payload: str) -> str | None:
     payload = start_payload.strip()
     if not payload.startswith("ref_"):
         return None
     referral_code = payload.removeprefix("ref_").strip()
     return referral_code or None
+
+
+def _is_reserved_start_payload(start_payload: str) -> bool:
+    payload = start_payload.strip()
+    return payload in _RESERVED_START_PAYLOADS or payload.startswith(_RESERVED_START_PREFIXES)
+
+
+def _is_valid_referral_start_payload(start_payload: str) -> bool:
+    payload = start_payload.strip()
+    return bool(payload) and len(payload) <= 64 and bool(_START_PAYLOAD_RE.fullmatch(payload))
+
+
+async def _resolve_referral_start_payload(session: AsyncSession, start_payload: str):
+    payload = start_payload.strip()
+    legacy_referral_code = _extract_legacy_referral_code(payload)
+    if legacy_referral_code is not None:
+        if len(legacy_referral_code) > 64:
+            logger.info(
+                {
+                    "action": "referral_payload_rejected",
+                    "reason": "oversized_payload",
+                    "payload_prefix": mask_start_payload(payload),
+                }
+            )
+            return None, None
+        return legacy_referral_code, None
+
+    if _is_reserved_start_payload(payload):
+        return None, None
+
+    if len(payload) > 64:
+        logger.info(
+            {
+                "action": "referral_payload_rejected",
+                "reason": "oversized_payload",
+                "payload_prefix": mask_start_payload(payload),
+            }
+        )
+        return None, None
+
+    if not _is_valid_referral_start_payload(payload):
+        logger.info(
+            {
+                "action": "referral_payload_rejected",
+                "reason": "malformed_payload",
+                "payload_prefix": mask_start_payload(payload),
+            }
+        )
+        return None, None
+
+    referrer = await UserRepository(session).get_user_by_start_payload(payload)
+    return payload, referrer
+
+
+_extract_referral_code = _extract_legacy_referral_code
 
 
 async def _get_stars_wallet_return_order(session: AsyncSession, user_id: int, start_payload: str):
@@ -174,7 +236,11 @@ async def start_payment_return_command(
 
         order = await _get_stars_wallet_return_order(session, user.id, start_payload)
         if order is None:
-            referral_code = _extract_referral_code(start_payload)
+            if not settings.referral_enabled:
+                await _send_start_welcome(message, user, lang)
+                return
+
+            referral_code, referrer = await _resolve_referral_start_payload(session, start_payload)
             if referral_code is None:
                 await _send_start_welcome(message, user, lang)
                 return
@@ -183,6 +249,7 @@ async def start_payment_return_command(
                 user,
                 referral_code,
                 created=user_result.created,
+                referrer=referrer,
             )
             await _send_referral_start_welcome(
                 message,

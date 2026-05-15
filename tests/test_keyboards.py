@@ -789,6 +789,16 @@ def test_build_profile_keyboard_shows_delivery_toggle_for_current_mode() -> None
     assert normal_keyboard.inline_keyboard[2][0].callback_data == "profile:toggle_delivery_mode"
 
 
+def test_build_profile_keyboard_hides_invite_when_referrals_disabled() -> None:
+    from app.bot.keyboards import get_profile_keyboard
+
+    keyboard = get_profile_keyboard(send_results_as_files=False, lang="en", referrals_enabled=False)
+    button_texts = [button.text for row in keyboard.inline_keyboard for button in row]
+
+    assert button_texts == [f"💳 {t('profile.top_up', 'en')}", "📎 Send as file"]
+    assert all(button.callback_data != "profile:invite_friends" for row in keyboard.inline_keyboard for button in row)
+
+
 def test_build_profile_keyboard_has_no_back_button_in_ru_or_en() -> None:
     from app.bot.keyboards import get_profile_keyboard
 

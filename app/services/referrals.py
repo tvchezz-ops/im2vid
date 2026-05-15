@@ -12,6 +12,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.config import settings
 from app.db.models import CreditTransaction, ReferralEvent, ReferralEventStatus, ReferralRejectReason, User
 from app.utils import logger
+from app.utils.referrals import mask_start_payload
 
 ReferralApplyStatus = Literal["none", "accepted", "rejected"]
 
@@ -41,6 +42,7 @@ class ReferralService:
         referral_code: str | None,
         *,
         created: bool | None = None,
+        referrer: User | None = None,
     ) -> ReferralApplyResult:
         """Apply a referral code exactly once during a user's first start."""
         code = (referral_code or "").strip()
@@ -49,13 +51,14 @@ class ReferralService:
                 "action": "referral_apply_started",
                 "user_id": new_user.id,
                 "referral_code_present": bool(code),
+                "payload_prefix": mask_start_payload(code),
             }
         )
 
         if not code:
             return ReferralApplyResult(status="none", referred_user_id=new_user.id)
 
-        referrer = await self._get_referrer(code)
+        referrer = referrer or await self._get_referrer(code)
         if referrer is None:
             return await self._reject(new_user, code, ReferralRejectReason.INVALID_CODE)
 
@@ -103,7 +106,7 @@ class ReferralService:
                 "action": "referral_rejected",
                 "user_id": user.id,
                 "referrer_user_id": referrer_user_id,
-                "referral_code": code,
+                "payload_prefix": mask_start_payload(code),
                 "reason": reason.value,
             }
         )
@@ -172,7 +175,7 @@ class ReferralService:
                 "action": "referral_accepted",
                 "user_id": user.id,
                 "referrer_user_id": referrer.id,
-                "referral_code": code,
+                "payload_prefix": mask_start_payload(code),
             }
         )
         if referrer_bonus > 0:
@@ -230,6 +233,7 @@ async def apply_referral(
     referral_code: str | None,
     *,
     created: bool | None = None,
+    referrer: User | None = None,
 ) -> ReferralApplyResult:
     """Convenience wrapper matching the /start integration signature."""
-    return await ReferralService(session).apply_referral(new_user, referral_code, created=created)
+    return await ReferralService(session).apply_referral(new_user, referral_code, created=created, referrer=referrer)

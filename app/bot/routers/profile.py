@@ -40,8 +40,8 @@ def _normalize_bot_username(username: str | None) -> str:
     return (username or "").strip().lstrip("@")
 
 
-def build_referral_link(bot_username: str, referral_code: str) -> str:
-    return f"https://t.me/{_normalize_bot_username(bot_username)}?start=ref_{referral_code}"
+def build_referral_link(bot_username: str, start_payload: str) -> str:
+    return f"https://t.me/{_normalize_bot_username(bot_username)}?start={start_payload}"
 
 
 def _get_referral_bot_username() -> str:
@@ -50,10 +50,10 @@ def _get_referral_bot_username() -> str:
 
 def build_referral_text(referral_link: str, lang: str = "en") -> str:
     return (
-        f"{t('referral.title', lang)}\n\n"
-        f"{t('referral.your_link', lang)}\n"
-        f"{referral_link}\n\n"
-        f"{t('referral.description', lang)}"
+        f"{t('profile.referral.title', lang)}\n\n"
+        f"{t('profile.referral.description', lang)}\n\n"
+        f"{t('profile.referral.link', lang)}\n"
+        f"{referral_link}"
     )
 
 
@@ -84,7 +84,11 @@ async def show_profile(message: Message, state: FSMContext, session: AsyncSessio
         
         await message.answer(
             profile_text,
-            reply_markup=get_profile_keyboard(send_results_as_files=user.send_results_as_files, lang=lang),
+            reply_markup=get_profile_keyboard(
+                send_results_as_files=user.send_results_as_files,
+                lang=lang,
+                referrals_enabled=settings.referral_enabled,
+            ),
             parse_mode="HTML",
         )
         
@@ -119,7 +123,11 @@ async def open_profile_callback(callback: CallbackQuery, session: AsyncSession):
     accepted_referrals_count = await user_repo.count_accepted_referrals(user.id)
     await callback.message.edit_text(
         build_profile_text(user, total_spent_credits, lang, accepted_referrals_count),
-        reply_markup=get_profile_keyboard(send_results_as_files=user.send_results_as_files, lang=lang),
+        reply_markup=get_profile_keyboard(
+            send_results_as_files=user.send_results_as_files,
+            lang=lang,
+            referrals_enabled=settings.referral_enabled,
+        ),
         parse_mode="HTML",
     )
     await callback.answer()
@@ -128,15 +136,20 @@ async def open_profile_callback(callback: CallbackQuery, session: AsyncSession):
 @router.callback_query(lambda cb: cb.data == "profile:invite_friends")
 async def show_referral_invite(callback: CallbackQuery, session: AsyncSession):
     """Show the user's personal referral link."""
+    if not settings.referral_enabled:
+        await callback.answer()
+        return
+
     user_repo = UserRepository(session)
     lang = await get_event_lang(callback, session)
     user = await user_repo.get_or_create_user_from_telegram(callback.from_user)
-    referral_code = await user_repo.ensure_referral_code(user.id)
-    if not referral_code:
+    await user_repo.ensure_referral_code(user.id)
+    start_payload = await user_repo.ensure_start_payload(user.id)
+    if not start_payload:
         await callback.answer(build_user_error_message("profile.user_not_found", lang), show_alert=True)
         return
 
-    referral_link = build_referral_link(_get_referral_bot_username(), referral_code)
+    referral_link = build_referral_link(_get_referral_bot_username(), start_payload)
     await callback.message.edit_text(
         build_referral_text(referral_link, lang),
         reply_markup=get_referral_keyboard(lang),
@@ -160,7 +173,11 @@ async def toggle_delivery_mode(callback: CallbackQuery, session: AsyncSession):
     accepted_referrals_count = await user_repo.count_accepted_referrals(callback.from_user.id)
     await callback.message.edit_text(
         build_profile_text(user, total_spent_credits, lang, accepted_referrals_count),
-        reply_markup=get_profile_keyboard(send_results_as_files=new_value, lang=lang),
+        reply_markup=get_profile_keyboard(
+            send_results_as_files=new_value,
+            lang=lang,
+            referrals_enabled=settings.referral_enabled,
+        ),
         parse_mode="HTML",
     )
     await callback.answer(t("profile.setting_updated", lang))

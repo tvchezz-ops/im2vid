@@ -835,19 +835,24 @@ def get_back_to_menu_inline_keyboard(lang: str = DEFAULT_LANGUAGE) -> InlineKeyb
     )
 
 
-def get_profile_keyboard(*, send_results_as_files: bool, lang: str = DEFAULT_LANGUAGE) -> InlineKeyboardMarkup:
+def get_profile_keyboard(
+    *,
+    send_results_as_files: bool,
+    lang: str = DEFAULT_LANGUAGE,
+    referrals_enabled: bool = True,
+) -> InlineKeyboardMarkup:
     """Инлайн-кнопки профиля пользователя."""
     delivery_toggle_text = (
         f"🖼 {t('profile.toggle_delivery_normal', lang)}"
         if send_results_as_files
         else f"📎 {t('profile.toggle_delivery_file', lang)}"
     )
+    rows = [[InlineKeyboardButton(text=get_button_text("profile.top_up", lang), callback_data="profile:top_up_balance")]]
+    if referrals_enabled:
+        rows.append([InlineKeyboardButton(text=get_button_text("profile.invite_friends", lang), callback_data="profile:invite_friends")])
+    rows.append([InlineKeyboardButton(text=delivery_toggle_text, callback_data="profile:toggle_delivery_mode")])
     return InlineKeyboardMarkup(
-        inline_keyboard=[
-            [InlineKeyboardButton(text=get_button_text("profile.top_up", lang), callback_data="profile:top_up_balance")],
-            [InlineKeyboardButton(text=get_button_text("profile.invite_friends", lang), callback_data="profile:invite_friends")],
-            [InlineKeyboardButton(text=delivery_toggle_text, callback_data="profile:toggle_delivery_mode")],
-        ]
+        inline_keyboard=rows
     )
 
 
