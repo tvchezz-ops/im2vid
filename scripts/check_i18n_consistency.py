@@ -69,6 +69,7 @@ ALLOWED_IDENTICAL_VALUES = {
     "Standard",
     "normal",
     "{message}",
+    "🛟 Support: {support_link}",
 }
 ALLOWED_EN_WORDS_IN_RU = {
     "ai",

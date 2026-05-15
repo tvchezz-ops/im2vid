@@ -4601,6 +4601,7 @@ for language_code, catalog_updates in _PROMPT_REQUEST_COPY_UPDATE.items():
 REFERRAL_PROFILE_TRANSLATIONS = {
     "en": {
         "profile.invite_friends": "Invite friends",
+        "profile.support_contact": "🛟 Support: {support_link}",
         "profile.referral.title": "👥 Referral program",
         "profile.referral.description": "🎁 Invite friends and get 5 credits for every new user.",
         "profile.referral.link": "🔗 Your link:",
@@ -4612,6 +4613,7 @@ REFERRAL_PROFILE_TRANSLATIONS = {
     },
     "ru": {
         "profile.invite_friends": "Пригласить друзей",
+        "profile.support_contact": "🛟 Поддержка: {support_link}",
         "profile.referral.title": "👥 Реферальная программа",
         "profile.referral.description": "🎁 Приглашайте друзей и получайте 5 кредитов за каждого нового пользователя.",
         "profile.referral.link": "🔗 Ваша ссылка:",
@@ -4623,6 +4625,7 @@ REFERRAL_PROFILE_TRANSLATIONS = {
     },
     "es": {
         "profile.invite_friends": "Invitar amigos",
+        "profile.support_contact": "🛟 Soporte: {support_link}",
         "profile.referral.title": "👥 Programa de referidos",
         "profile.referral.description": "🎁 Invita amigos y recibe 5 créditos por cada nuevo usuario.",
         "profile.referral.link": "🔗 Tu enlace:",
@@ -4634,6 +4637,7 @@ REFERRAL_PROFILE_TRANSLATIONS = {
     },
     "pt": {
         "profile.invite_friends": "Convidar amigos",
+        "profile.support_contact": "🛟 Suporte: {support_link}",
         "profile.referral.title": "👥 Programa de indicação",
         "profile.referral.description": "🎁 Convide amigos e ganhe 5 créditos por cada novo usuário.",
         "profile.referral.link": "🔗 Seu link:",
@@ -4645,6 +4649,7 @@ REFERRAL_PROFILE_TRANSLATIONS = {
     },
     "fr": {
         "profile.invite_friends": "Inviter des amis",
+        "profile.support_contact": "🛟 Support: {support_link}",
         "profile.referral.title": "👥 Programme de parrainage",
         "profile.referral.description": "🎁 Invitez des amis et recevez 5 crédits pour chaque nouvel utilisateur.",
         "profile.referral.link": "🔗 Votre lien :",
@@ -4656,6 +4661,7 @@ REFERRAL_PROFILE_TRANSLATIONS = {
     },
     "de": {
         "profile.invite_friends": "Freunde einladen",
+        "profile.support_contact": "🛟 Support: {support_link}",
         "profile.referral.title": "👥 Empfehlungsprogramm",
         "profile.referral.description": "🎁 Lade Freunde ein und erhalte 5 Credits für jeden neuen Nutzer.",
         "profile.referral.link": "🔗 Dein Link:",
@@ -4667,6 +4673,7 @@ REFERRAL_PROFILE_TRANSLATIONS = {
     },
     "ar": {
         "profile.invite_friends": "دعوة أصدقاء",
+        "profile.support_contact": "🛟 الدعم: {support_link}",
         "profile.referral.title": "👥 برنامج الإحالة",
         "profile.referral.description": "🎁 ادعُ أصدقاءك واحصل على 5 أرصدة لكل مستخدم جديد.",
         "profile.referral.link": "🔗 رابطك:",
@@ -4678,6 +4685,7 @@ REFERRAL_PROFILE_TRANSLATIONS = {
     },
     "hi": {
         "profile.invite_friends": "दोस्तों को आमंत्रित करें",
+        "profile.support_contact": "🛟 समर्थन: {support_link}",
         "profile.referral.title": "👥 रेफरल प्रोग्राम",
         "profile.referral.description": "🎁 दोस्तों को आमंत्रित करें और हर नए उपयोगकर्ता पर 5 क्रेडिट पाएं।",
         "profile.referral.link": "🔗 आपका लिंक:",
@@ -4689,6 +4697,7 @@ REFERRAL_PROFILE_TRANSLATIONS = {
     },
     "zh": {
         "profile.invite_friends": "邀请好友",
+        "profile.support_contact": "🛟 支持: {support_link}",
         "profile.referral.title": "👥 推荐计划",
         "profile.referral.description": "🎁 邀请好友，每位新用户可获得 5 积分。",
         "profile.referral.link": "🔗 你的链接：",
@@ -4700,6 +4709,7 @@ REFERRAL_PROFILE_TRANSLATIONS = {
     },
     "id": {
         "profile.invite_friends": "Undang teman",
+        "profile.support_contact": "🛟 Dukungan: {support_link}",
         "profile.referral.title": "👥 Program referral",
         "profile.referral.description": "🎁 Undang teman dan dapatkan 5 kredit untuk setiap pengguna baru.",
         "profile.referral.link": "🔗 Link Anda:",

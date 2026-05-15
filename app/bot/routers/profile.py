@@ -19,10 +19,20 @@ from app.utils import logger
 
 
 router = Router()
+SUPPORT_USERNAME = "supbananify"
 
 
 def format_delivery_mode(send_results_as_files: bool, lang: str = "en") -> str:
     return t("profile.delivery_status_file", lang) if send_results_as_files else t("profile.delivery_status_normal", lang)
+
+
+def build_support_link(username: str = SUPPORT_USERNAME) -> str:
+    normalized_username = username.strip().lstrip("@")
+    return f'<a href="https://t.me/{normalized_username}">@{normalized_username}</a>'
+
+
+def build_support_contact_text(lang: str = "en") -> str:
+    return t("profile.support_contact", lang, support_link=build_support_link())
 
 
 def build_profile_text(user, total_spent_credits: int, lang: str = "en", accepted_referrals_count: int = 0) -> str:
@@ -31,6 +41,7 @@ def build_profile_text(user, total_spent_credits: int, lang: str = "en", accepte
         "\n"
         f"💳 {t('profile.balance', lang)}: {user.balance}\n"
         f"🎨 {t('profile.total_generations', lang)}: {user.total_generations}\n"
+        f"{build_support_contact_text(lang)}\n"
         f"🎁 {t('referral.invited_count', lang, count=accepted_referrals_count)}\n"
         f"📦 {t('profile.delivery_mode', lang)}: {format_delivery_mode(user.send_results_as_files, lang)}"
     )

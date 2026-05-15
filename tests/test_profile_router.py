@@ -110,8 +110,10 @@ async def test_show_profile_displays_clean_summary_and_delivery_toggle(session_f
         assert "История" not in message.answers[-1]
         assert f"💳 {t('profile.balance', 'ru')}: 5" in message.answers[-1]
         assert f"🎨 {t('profile.total_generations', 'ru')}: 0" in message.answers[-1]
+        assert '🛟 Поддержка: <a href="https://t.me/supbananify">@supbananify</a>' in message.answers[-1]
         assert "🎁 Приглашено: 0" in message.answers[-1]
         assert "📦 Отправка: обычный формат" in message.answers[-1]
+        assert message.answers[-1].index("🎨") < message.answers[-1].index("🛟") < message.answers[-1].index("🎁")
         assert "Потрачено" not in message.answers[-1]
         assert "Credits spent" not in message.answers[-1]
         keyboard = message.answer_markups[-1]
@@ -135,6 +137,7 @@ async def test_toggle_delivery_mode_updates_profile_message(session_factory) -> 
 
         assert callback.answers[-1] == t("profile.setting_updated", "ru")
         assert "📦 Отправка: файлом" in message.edits[-1]
+        assert '🛟 Поддержка: <a href="https://t.me/supbananify">@supbananify</a>' in message.edits[-1]
         assert "Потрачено" not in message.edits[-1]
         assert "Credits spent" not in message.edits[-1]
         keyboard = message.edit_markups[-1]
@@ -158,6 +161,7 @@ async def test_show_profile_falls_back_to_english_when_language_code_missing(ses
 
         assert "💳 Balance: 5" in message.answers[-1]
         assert "🎨 Generations: 0" in message.answers[-1]
+        assert '🛟 Support: <a href="https://t.me/supbananify">@supbananify</a>' in message.answers[-1]
         assert "🎁 Invited: 0" in message.answers[-1]
         assert "📦 Delivery: normal" in message.answers[-1]
         assert "Credits spent" not in message.answers[-1]
@@ -214,6 +218,30 @@ def test_referral_text_is_localized_for_all_supported_locales() -> None:
         assert t("profile.referral.link", lang) in text
         assert "https://t.me/imai_test_bot?start=X7pQ2Lm9Ka" in text
         assert "ref_" not in text
+
+
+def test_support_contact_is_localized_for_all_supported_locales() -> None:
+    expected_labels = {
+        "en": "🛟 Support:",
+        "ru": "🛟 Поддержка:",
+        "es": "🛟 Soporte:",
+        "pt": "🛟 Suporte:",
+        "fr": "🛟 Support:",
+        "de": "🛟 Support:",
+        "ar": "🛟 الدعم:",
+        "hi": "🛟 समर्थन:",
+        "zh": "🛟 支持:",
+        "id": "🛟 Dukungan:",
+    }
+    support_link = profile.build_support_link()
+
+    assert support_link == '<a href="https://t.me/supbananify">@supbananify</a>'
+    for lang in SUPPORTED_LANGUAGES:
+        text = profile.build_support_contact_text(lang)
+
+        assert expected_labels[lang] in text
+        assert support_link in text
+        assert "https://t.me/supbananify" in text
 
 
 @pytest.mark.asyncio
